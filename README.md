@@ -244,3 +244,23 @@ What adapts automatically:
 
 Nothing in the tool shells out or calls a POSIX-only API, so there is no
 platform-specific behaviour beyond those paths.
+
+## Notifications
+
+The window normally sits behind the game, so it tells you when something
+changes rather than waiting to be looked at:
+
+- **the best target changed** — a different station is now top, usually
+  because the previous one drained or fresher data arrived
+- **your reward bracket moved** — up, or *down* when other commanders
+  overtake you, which is the one you would otherwise never see coming
+
+Delivered through `notify-send` on Linux, a toast on Windows 10+, and
+`osascript` on macOS. Whatever the platform, the window title is also marked
+and the bell rung, so there is a visible sign even with no notification
+daemon; the mark clears when you next focus the window. Turn it off with
+**Desktop notifications** in Settings.
+
+The status bar also shows how long ago the shown data was fetched, ticking
+live and turning amber once it passes the auto-refresh threshold — so you can
+tell at a glance whether docking at the destination actually refreshed it.

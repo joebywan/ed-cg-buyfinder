@@ -37,6 +37,10 @@ try:
     import cg as cgstanding
 except ImportError:
     cgstanding = None
+try:
+    import notify
+except ImportError:
+    notify = None
 
 # Where you sell, and what that place pays well for. Defaults to the goal
 # this tool was written for so an existing install keeps working, but nothing
@@ -664,6 +668,8 @@ class App:
         # interpreter shutdown and can take the process down on quit.
         self.closing = False
         self.last_fetch = None      # when the shown data was actually fetched
+        self.last_best = None       # (station, system) of the last top plan
+        self.last_band = None       # last CG percentile band seen
         self.workers = []
         self.pad = self.cfg.get("pad_override") or "L"
         self.dest = dict(DEFAULT_DEST)
@@ -1308,6 +1314,16 @@ class App:
         row[0] += 1
 
         section("INTEGRATIONS")
+        self.v_notify = tk.BooleanVar(
+            value=bool(self.cfg.get("notifications", True)))
+        cb_n = ttk.Checkbutton(win, text="Desktop notifications",
+                               variable=self.v_notify)
+        cb_n.grid(row=row[0], column=1, sticky="w", **pad)
+        Tip(cb_n, "Tells you when the best target changes, or when your CG\n"
+                  "reward bracket moves up or down - the window usually sits\n"
+                  "behind the game.", self)
+        row[0] += 1
+
         ttk.Checkbutton(win, text="Stream Deck button (cgbuy-next)",
                         variable=self.v_deck).grid(row=row[0], column=1,
                                                    sticky="w", **pad)
@@ -1360,6 +1376,7 @@ class App:
                                                           self.dest["system"]))
             self.cfg["journal_dir"] = v_journal.get().strip() or None
             self.cfg["deck_enabled"] = bool(self.v_deck.get())
+            self.cfg["notifications"] = bool(self.v_notify.get())
             self.cfg["verify_edsm"] = bool(self.v_verify.get())
             try:
                 self.cfg["cache_fresh_minutes"] = max(0, int(v_fresh.get().strip()))
@@ -1478,6 +1495,56 @@ class App:
         except Exception as e:
             self.cal_lbl.configure(text="journal error: %s" % e)
 
+    def _notify(self, title, body, urgency="normal"):
+        if notify is None or not self.cfg.get("notifications", True):
+            return
+        notify.send(title, body, urgency, root=self.root)
+
+    def _check_new_best(self, plans):
+        """Tell the user when the top target changes.
+
+        The window normally sits behind the game, so a silently better option
+        is one they will not act on until they arrive somewhere drained.
+        """
+        if not plans:
+            return
+        top = plans[0]
+        key = (top["station"], top["system"])
+        if self.last_best is None:          # first search of the session
+            self.last_best = key
+            return
+        if key == self.last_best:
+            return
+        self.last_best = key
+        mix = " + ".join("%dt %s" % (m["tonnes"], m["commodity"])
+                         for m in top.get("mix", [])[:3])
+        self._notify(
+            "New best: %s" % top["station"],
+            "%s  -  %.1f ly, %s Ls\n%s\n%s cr per ~%d min"
+            % (top["system"], top["ly"], f"{top['ls']:,}", mix,
+               f"{top['total']:,}", round(top["trip_minutes"])))
+
+    def _check_band_change(self, st):
+        """Reward bands move both ways - others delivering can push you down."""
+        band = st.get("band")
+        if band is None:
+            return
+        if self.last_band is None:
+            self.last_band = band
+            return
+        if band == self.last_band:
+            return
+        was, self.last_band = self.last_band, band
+        if band < was:                      # smaller number = better band
+            self._notify("Moved up to the top %s%%" % band,
+                         "Was top %s%%. %st delivered."
+                         % (was, f"{st['contribution']:,}"), "normal")
+        else:
+            self._notify("Dropped to the top %s%%" % band,
+                         "Was top %s%%. Others have overtaken you - "
+                         "%st delivered so far."
+                         % (was, f"{st['contribution']:,}"), "high")
+
     def _tick_age(self):
         """Keep 'updated N ago' honest without waiting for the next search.
 
@@ -1524,6 +1591,7 @@ class App:
         if not st:
             return
         self.standing = st
+        self._check_band_change(st)
         bits = ["%st delivered" % f"{st['contribution']:,}",
                 "top %s%%" % st["band"]]
         if st["next_known"] and st["to_next"] is not None:
@@ -1747,6 +1815,8 @@ class App:
                     if from_cache else "") + extra, foreground=DIM)
         self._fill_mixed()
         self._fill_single()
+        if not from_cache:
+            self._check_new_best(d.get("mixed") or [])
         write_state(d["mixed"], keep_index=0)
         if not from_cache:
             save_cache(d)
