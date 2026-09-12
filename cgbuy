@@ -1779,7 +1779,29 @@ class App:
             self._remember(t, iid, r["system"])
 
 
+VERSION = "2.1"
+
+USAGE = """cgbuy - where to buy for a community goal, ranked by credits/minute
+
+  cgbuy                  open the window and search
+  cgbuy --no-autosearch  open without searching
+  cgbuy --version        print the version and exit
+  cgbuy --help           this text
+
+Destination, ship and data settings live in the window (SETTINGS).
+Config: %s
+Cache:  %s
+""" % (CONFIG_PATH, CACHE_PATH)
+
+
 def main():
+    # Handled before any Tk work so the binary can be smoke-tested headless.
+    if "--help" in sys.argv or "-h" in sys.argv:
+        print(USAGE)
+        return
+    if "--version" in sys.argv:
+        print("cgbuy %s" % VERSION)
+        return
     autosearch = "--no-autosearch" not in sys.argv
     try:
         root = tk.Tk()

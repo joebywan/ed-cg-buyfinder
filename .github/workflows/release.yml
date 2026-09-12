@@ -1,0 +1,91 @@
+name: build
+
+on:
+  push:
+    branches: [main, master]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Run the suite
+        # tkinter needs a display even to construct widgets
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq python3-tk xvfb
+          xvfb-run -a python test_cgbuy.py
+
+  build:
+    needs: test
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            artifact: cgbuy-linux
+            built: dist/cgbuy
+          - os: windows-latest
+            artifact: cgbuy-windows.exe
+            built: dist/cgbuy.exe
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Linux tkinter
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq python3-tk
+
+      - name: Install PyInstaller
+        run: python -m pip install --quiet --upgrade pip pyinstaller
+
+      # PyInstaller cannot cross-compile: each binary is built on its own OS,
+      # which is the whole reason for the matrix.
+      - name: Build
+        run: |
+          python -c "import shutil; shutil.copy('cgbuy', 'build_src.py')"
+          pyinstaller --onefile --name cgbuy --clean --noconfirm --distpath dist --workpath .build --specpath .build build_src.py
+        shell: bash
+
+      - name: Smoke test the binary
+        shell: bash
+        run: |
+          test -f "${{ matrix.built }}" || { echo "binary missing"; exit 1; }
+          "${{ matrix.built }}" --version
+
+      - name: Rename for release
+        shell: bash
+        run: mv "${{ matrix.built }}" "${{ matrix.artifact }}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ matrix.artifact }}
+
+  release:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            cgbuy-linux
+            cgbuy-windows.exe
+          generate_release_notes: true
