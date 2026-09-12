@@ -15,6 +15,7 @@ Standalone check:  python3 plot.py --check
 
 import os
 import subprocess
+import time
 import xml.etree.ElementTree as ET
 
 ELITE_PATTERNS = ["Elite - Dangerous (CLIENT)", "Elite - Dangerous"]
@@ -102,28 +103,69 @@ DEFAULT_MACRO = [
 ]
 
 
-def send_key(win, spec, timeout=10):
-    """Press a key so that Elite actually sees it.
+# Elite samples input per frame, so a press has to last long enough to be
+# seen. `xdotool key` releases almost instantly and is missed entirely.
+KEY_HOLD_SECONDS = 0.09
 
-    `xdotool key --window <id>` delivers via XSendEvent, which Wine/Proton
-    games ignore - they read raw input, not synthesised X events. Omitting
-    --window uses XTEST instead, which is indistinguishable from hardware.
-    The cost is that it goes to whatever is focused, so the caller must
-    activate the window first and we re-check focus before every press.
+
+def send_key(win, spec, timeout=10, hold=KEY_HOLD_SECONDS):
+    """Press a key so that Elite actually registers it.
+
+    Two things are required, and both were wrong before:
+
+    1. Delivery. `xdotool key --window <id>` uses XSendEvent, which Wine
+       ignores. Omitting --window uses XTEST, which behaves like hardware.
+    2. Duration. `xdotool key` presses and releases in the same instant;
+       Elite never sees it. keydown / hold / keyup is what works.
+
+    XTEST goes to whatever is focused, so the caller activates the window
+    first and focus is re-checked here before every press.
     """
     if not window_is_active(win):
         return False, "Elite lost focus"
-    rc, _o, _e = run(["xdotool", "key", "--clearmodifiers", spec], timeout)
+    parts = spec.split("+")
+    mods, key = parts[:-1], parts[-1]
+    for m in mods:
+        run(["xdotool", "keydown", m], timeout)
+    rc, _o, _e = run(["xdotool", "keydown", key], timeout)
+    time.sleep(hold)
+    run(["xdotool", "keyup", key], timeout)
+    for m in reversed(mods):
+        run(["xdotool", "keyup", m], timeout)
     return rc == 0, ("sent %s" % spec if rc == 0 else "xdotool rejected %r" % spec)
 
 
-def send_text(win, text, delay=30, timeout=30):
-    """Type text via XTEST, for the same reason as send_key."""
+def send_text(win, text, delay=60, timeout=60):
+    """Type text via XTEST.
+
+    `xdotool type` has no hold control and its keystrokes are as instantaneous
+    as `key`, so characters get dropped. A longer inter-key delay is tried
+    first; the caller can verify and fall back to per-character presses.
+    """
     if not window_is_active(win):
         return False, "Elite lost focus"
     rc, _o, _e = run(["xdotool", "type", "--clearmodifiers",
                       "--delay", str(delay), text], timeout)
     return rc == 0, "typed"
+
+
+def send_text_held(win, text, hold=0.05, gap=0.03):
+    """Type character by character with a real hold on each key.
+
+    Slower (~0.1s/char) but it is the only reliable way in if the game drops
+    instantaneous keystrokes.
+    """
+    named = {" ": "space", "-": "minus", "_": "underscore", ".": "period",
+             ",": "comma", "'": "apostrophe", "/": "slash", ":": "colon"}
+    for ch in text:
+        if not window_is_active(win):
+            return False, "Elite lost focus"
+        spec = named.get(ch)
+        if spec is None:
+            spec = ch if ch.islower() or not ch.isalpha() else "shift+" + ch.lower()
+        send_key(win, spec, hold=hold)
+        time.sleep(gap)
+    return True, "typed %d chars" % len(text)
 
 
 def window_is_active(win):
@@ -277,7 +319,6 @@ def plot_route(system, journal_dir, gm_key=None, dry_run=False,
     never type a system name into the cockpit. If the map does not open, we
     stop rather than pressing on.
     """
-    import time
     log = []
     if not have_xdotool():
         return False, "xdotool is not installed", log
@@ -332,7 +373,6 @@ def plot_route(system, journal_dir, gm_key=None, dry_run=False,
 
 def run_macro(system, macro=None, gm_key=None, dry_run=False):
     """Execute a user-defined key macro (the manual fallback)."""
-    import time
     log = []
     if not have_xdotool():
         return False, "xdotool is not installed", log
