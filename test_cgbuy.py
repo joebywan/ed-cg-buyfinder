@@ -667,18 +667,24 @@ class TestTripMinutes(unittest.TestCase):
                     + cgbuy.EST_DOCK_MIN * 2)
         self.assertAlmostEqual(self.trip(), expected)
 
-    def test_calibrated_values_are_used_when_supplied(self):
-        cal = journal.Calibration({
-            "jump_secs": [120.0] * 3,          # 2.0 min/jump vs 0.85 estimate
-            "dock_secs": [360.0] * 3,          # 6.0 min/dock vs 3.0 estimate
-        })
+    def test_calibrated_jump_time_is_used_when_supplied(self):
+        cal = journal.Calibration({"jump_secs": [120.0] * 3})   # 2.0 min/jump
         self.assertAlmostEqual(cal.jump_minutes, 2.0)
-        self.assertAlmostEqual(cal.dock_minutes, 6.0)
         expected = (5 * 2.0
                     + (cgbuy.sc_minutes(1000) + cgbuy.sc_minutes(500))
-                    + 6.0 * 2)
+                    + cgbuy.EST_DOCK_MIN * 2)
         self.assertAlmostEqual(self.trip(cal=cal), expected)
         self.assertGreater(self.trip(cal=cal), self.trip())
+
+    def test_station_time_is_fixed_and_never_calibrated(self):
+        """Docked -> Undocked cannot separate trading from being AFK, so the
+        measured figure is collected but deliberately not used: a 40-minute
+        tea break must not inflate every estimate."""
+        cal = journal.Calibration({"dock_secs": [3600.0] * 3})   # an hour a stop
+        self.assertAlmostEqual(cal.dock_minutes, 60.0)
+        self.assertAlmostEqual(self.trip(cal=cal), self.trip(),
+                               msg="dock samples must not move the estimate")
+        self.assertAlmostEqual(cgbuy.EST_DOCK_MIN, 2.0)
 
     def test_calibrated_sc_scale_is_applied(self):
         ls = 1000

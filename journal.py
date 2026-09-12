@@ -107,6 +107,13 @@ class Calibration:
 
     @property
     def dock_minutes(self):
+        """Deliberately not used for estimates.
+
+        Docked -> Undocked cannot tell trading apart from being away from the
+        keyboard, and the window that keeps an overnight AFK out of the median
+        also throws away genuine long stops. Samples are still collected so
+        the figure can be shown, but the trip model uses a fixed turnaround.
+        """
         if len(self.dock_secs) < self.MIN_SAMPLES:
             return None
         return statistics.median(self.dock_secs) / 60.0
@@ -137,8 +144,8 @@ class Calibration:
         j, d, s = self.jump_minutes, self.dock_minutes, self.sc_scale
         bits.append("jump %s" % ("%.2f min (n=%d)" % (j, len(self.jump_secs))
                                  if j else "estimate (n=%d)" % len(self.jump_secs)))
-        bits.append("dock %s" % ("%.1f min (n=%d)" % (d, len(self.dock_secs))
-                                 if d else "estimate (n=%d)" % len(self.dock_secs)))
+        bits.append("station stop %s (not used: fixed 2 min turnaround)"
+                    % ("%.1f min median" % d if d else "no samples"))
         n_sc = len(self.approach_samples)
         bits.append("supercruise %s" % ("x%.2f (n=%d)" % (s, n_sc)
                                         if s else "estimate (n=%d)" % n_sc))

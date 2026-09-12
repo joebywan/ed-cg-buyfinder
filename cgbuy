@@ -240,7 +240,11 @@ def station_fits(st, pad):
     return bool(large or medium or small)
 
 EST_JUMP_MIN = 0.85        # align + charge + jump + scoop
-EST_DOCK_MIN = 3.0         # docked -> undocked, per stop
+# Fixed, deliberately. Docked -> Undocked cannot distinguish "buying cargo"
+# from "went to make tea", and the sanity window that keeps an overnight AFK
+# out of the median also discards genuine 40-minute stops. Two minutes is a
+# clean turnaround: dock, trade, undock.
+EST_DOCK_MIN = 2.0
 EST_SC_SCALE = 1.0         # multiplier on the sc_minutes curve
 
 
@@ -252,7 +256,7 @@ def trip_minutes(dist_ly, src_ls, cg_ls, jump_empty, jump_laden, cal=None):
     undocked) is counted separately, so nothing is double-counted.
     """
     jump_min = (cal.jump_minutes if cal and cal.jump_minutes else EST_JUMP_MIN)
-    dock_min = (cal.dock_minutes if cal and cal.dock_minutes else EST_DOCK_MIN)
+    dock_min = EST_DOCK_MIN        # never calibrated; see the constant
     sc_scale = (cal.sc_scale if cal and cal.sc_scale else EST_SC_SCALE)
 
     out_j = math.ceil(dist_ly / jump_empty) if dist_ly > 0 else 0
@@ -1858,7 +1862,7 @@ class App:
             return "you're there"
 
         top = (self.data or {}).get("mixed") or []
-        mins = self.real_cycle or (top[0]["trip_minutes"] if top else None)
+        mins = top[0]["trip_minutes"] if top else None
         if not mins:
             return "%d run%s" % (runs, "" if runs == 1 else "s")
 
@@ -1903,18 +1907,14 @@ class App:
                    self._effort(gap)))
             top = (self.data or {}).get("mixed") or []
             plan = top[0]["trip_minutes"] if top else None
-            if self.real_cycle:
+            if plan:
+                extra = ""
+                if self.real_cycle and self.real_cycle > plan * 1.15:
+                    extra = ("\nYou have actually been averaging %.0f min a run."
+                             % self.real_cycle)
                 detail.append(
-                    "Based on %.0f min per run, which is your measured\n"
-                    "dock-to-dock median - distractions included.%s"
-                    % (self.real_cycle,
-                       "\nThe route itself is ~%.0f min of flying." % plan
-                       if plan else ""))
-            elif plan:
-                detail.append(
-                    "Based on %.0f min of flying per run. Your real pace will\n"
-                    "be slower - this counts travel, not time spent at the\n"
-                    "station." % plan)
+                    "Based on %.0f min a run: the route plus a two-minute\n"
+                    "turnaround at each end.%s" % (plan, extra))
             detail.append("You are %.0f%% of the way from top %s%% to top %s%%."
                           % (pct, st["band"], st["next_band"]))
             if approx:
