@@ -13,6 +13,7 @@ import os
 import queue
 import sys
 import threading
+import time
 import tkinter as tk
 import urllib.error
 import urllib.parse
@@ -109,7 +110,9 @@ def fetch_sources(commodity, max_ly, min_supply, page_size=500, max_pages=10):
         }
         try:
             res = post_json(SPANSH_SEARCH, payload).get("results", [])
-        except (urllib.error.URLError, json.JSONDecodeError, TimeoutError):
+        except Exception as e:
+            # A dropped connection must not abort every other commodity.
+            print("  ! %s page %d: %s" % (commodity, page, e), file=sys.stderr)
             break
         out.extend(res)
         if len(res) < page_size or res[-1].get("distance", 0) > max_ly:
@@ -279,8 +282,58 @@ STATE_PATH = os.path.join(
     "cgbuy-state.json")
 
 
-def write_state(plans, keep_index=None):
-    """Publish the ranked plan list for the deck button."""
+CACHE_PATH = os.path.join(
+    os.environ.get("XDG_CACHE_HOME", os.path.expanduser("~/.cache")),
+    "cgbuy-results.json")
+
+
+def save_cache(payload):
+    """Keep the last search so the app opens with data instead of a blank grid."""
+    try:
+        os.makedirs(os.path.dirname(CACHE_PATH), exist_ok=True)
+        tmp = CACHE_PATH + ".tmp"
+        with open(tmp, "w") as fh:
+            json.dump(payload, fh)
+        os.replace(tmp, CACHE_PATH)     # atomic: never leave a torn file
+    except OSError:
+        pass
+
+
+def load_cache():
+    try:
+        with open(CACHE_PATH) as fh:
+            d = json.load(fh)
+        if isinstance(d, dict) and d.get("rows"):
+            return d
+    except (OSError, ValueError):
+        pass
+    return None
+
+
+def age_phrase(stamp):
+    """'3 minutes', '2 hours' - for the refresh prompt."""
+    try:
+        secs = max(0, int(time.time() - float(stamp)))
+    except (TypeError, ValueError):
+        return "an unknown time"
+    if secs < 90:
+        return "%d seconds" % secs
+    if secs < 5400:
+        m = round(secs / 60.0)
+        return "%d minute%s" % (m, "" if m == 1 else "s")
+    if secs < 172800:
+        h = round(secs / 3600.0)
+        return "%d hour%s" % (h, "" if h == 1 else "s")
+    d = round(secs / 86400.0)
+    return "%d day%s" % (d, "" if d == 1 else "s")
+
+
+def write_state(plans, keep_index=None, advance=False):
+    """Publish the ranked plan list for the deck button.
+
+    keep_index pins the index; advance moves to the next target (what the
+    PLOT NEXT button wants, so pressing it twice does not replot rank 1).
+    """
     slim = [{"station": p["station"], "system": p["system"], "ly": p["ly"],
              "ls": p["ls"], "total": p["total"], "cr_per_min": p["cr_per_min"],
              "updated": p["updated"],
@@ -294,11 +347,15 @@ def write_state(plans, keep_index=None):
     except Exception:
         pass
     idx = keep_index if keep_index is not None else prev.get("index", 0)
+    if advance and slim:
+        idx = (idx + 1) % len(slim)
     try:
         os.makedirs(os.path.dirname(STATE_PATH), exist_ok=True)
-        with open(STATE_PATH, "w") as fh:
+        tmp = STATE_PATH + ".tmp"
+        with open(tmp, "w") as fh:
             json.dump({"plans": slim, "index": min(idx, max(0, len(slim) - 1))},
                       fh, indent=2)
+        os.replace(tmp, STATE_PATH)     # readers never see a partial file
     except OSError:
         pass
 
@@ -390,7 +447,7 @@ class App:
         root.rowconfigure(3, weight=1)
         root.after(80, self._drain)
         if autosearch:
-            root.after(250, self.search)
+            root.after(200, self._start_with_cache)
         root.bind("<Return>", lambda e: self.search())
         root.bind("<Control-q>", lambda e: self._quit())
         root.protocol("WM_DELETE_WINDOW", self._quit)
@@ -657,6 +714,60 @@ class App:
         self.root.geometry("%dx%d" % (w, h))
 
 
+    def _start_with_cache(self):
+        """Render the last results, then offer a refresh rather than forcing one."""
+        cached = load_cache()
+        if not cached:
+            self.search()
+            return
+        self._finish(cached, from_cache=True)
+        self.ask_refresh(cached.get("fetched_at"))
+
+    def ask_refresh(self, stamp):
+        age = age_phrase(stamp)
+        win = tk.Toplevel(self.root)
+        win.title("Refresh data?")
+        win.configure(bg=BG)
+        win.transient(self.root)
+        win.resizable(False, False)
+        f = self._fonts()
+
+        ttk.Label(win, text="This data was last updated %s ago." % age,
+                  style="PanelTxt.TLabel", font=f["bold"]).pack(
+            padx=24, pady=(20, 4))
+        ttk.Label(win, text="Do you want to update it?",
+                  style="Dim.TLabel").pack(padx=24, pady=(0, 16))
+
+        bar = ttk.Frame(win)
+        bar.pack(padx=24, pady=(0, 18))
+
+        def yes(_e=None):
+            win.destroy()
+            self.search()
+
+        def no(_e=None):
+            win.destroy()
+            self.set_status("Showing cached data from %s ago - "
+                            "press SEARCH to refresh" % age)
+
+        # Yes is the default: it has focus and takes the Return key.
+        y = ttk.Button(bar, text="YES", style="Go.TButton", command=yes)
+        y.pack(side="left", padx=(0, 8))
+        ttk.Button(bar, text="NO", style="Plot.TButton", command=no).pack(side="left")
+
+        win.bind("<Return>", yes)
+        win.bind("<KP_Enter>", yes)
+        win.bind("<Escape>", no)
+        win.protocol("WM_DELETE_WINDOW", no)
+        y.focus_set()
+
+        win.update_idletasks()
+        px, py = self.root.winfo_rootx(), self.root.winfo_rooty()
+        pw, ph = self.root.winfo_width(), self.root.winfo_height()
+        win.geometry("+%d+%d" % (px + (pw - win.winfo_width()) // 2,
+                                 py + (ph - win.winfo_height()) // 3))
+        win.grab_set()
+
     # -- settings --------------------------------------------------------
     def open_settings(self):
         win = tk.Toplevel(self.root)
@@ -799,8 +910,15 @@ class App:
 
         ttk.Button(bar, text="SAVE", style="Go.TButton",
                    command=save).pack(side="right")
+        was_eddn, was_deck = bool(self.v_eddn.get()), bool(self.v_deck.get())
+
+        def cancel():
+            self.v_eddn.set(was_eddn)   # the checkbuttons edit the live vars
+            self.v_deck.set(was_deck)
+            win.destroy()
+
         ttk.Button(bar, text="CANCEL", style="Plot.TButton",
-                   command=win.destroy).pack(side="right", padx=6)
+                   command=cancel).pack(side="right", padx=6)
         win.columnconfigure(1, weight=1)
 
     def _toggle_eddn(self):
@@ -819,7 +937,8 @@ class App:
     def current_target(self):
         if self.data and self.data.get("mixed"):
             try:
-                st = json.load(open(STATE_PATH))
+                with open(STATE_PATH) as fh:
+                    st = json.load(fh)
                 idx = min(st.get("index", 0), len(self.data["mixed"]) - 1)
             except Exception:
                 idx = 0
@@ -849,7 +968,7 @@ class App:
                               else "journal dir unknown")
         self.set_status("%s  ->  %s" % (msg, t["system"]), None if ok else BAD)
         if ok:
-            write_state(self.data["mixed"])   # advance for the next press
+            write_state(self.data["mixed"], advance=True)
 
     def edit_macro(self):
         """Let the plot sequence be tuned without hand-editing JSON."""
@@ -881,7 +1000,14 @@ class App:
         def parse():
             try:
                 m = json.loads(txt.get("1.0", "end"))
-                assert isinstance(m, list)
+                if not isinstance(m, list):
+                    raise ValueError("macro must be a list of steps")
+                for i, st in enumerate(m):
+                    if not isinstance(st, dict):
+                        raise ValueError("step %d is not an object" % (i + 1))
+                    if "key" not in st and "type" not in st:
+                        raise ValueError("step %d needs 'key' or 'type'" % (i + 1))
+                    float(st.get("wait", 0.4))
                 return m
             except Exception as e:
                 note.configure(text="invalid: %s" % e, foreground=BAD)
@@ -940,6 +1066,8 @@ class App:
 
     # -- journal ---------------------------------------------------------
     def _init_journal(self):
+        self._save_cal()                # keep samples learned since last save
+        self._poll_token = getattr(self, "_poll_token", 0) + 1
         self.watcher = None
         self.cal = None
         self.sender = None
@@ -959,7 +1087,7 @@ class App:
                 self.sender = eddn.Sender(self.cfg.get("eddn_seen"))
             self.watcher, self.cal = w, w.cal
             self._show_cal()
-            self.root.after(3000, self._poll_journal)
+            self.root.after(3000, self._poll_journal, self._poll_token)
         except Exception as e:
             self.cal_lbl.configure(text="journal error: %s" % e)
 
@@ -970,14 +1098,16 @@ class App:
         if self.cal:
             self.cal_lbl.configure(text="TIMINGS  " + self.cal.summary())
 
-    def _poll_journal(self):
+    def _poll_journal(self, token=None):
+        if token is not None and token != self._poll_token:
+            return                      # superseded by a newer poll chain
         if self.watcher:
             try:
                 self.watcher.poll()
                 self._show_cal()
             except Exception:
                 pass
-            self.root.after(3000, self._poll_journal)
+            self.root.after(3000, self._poll_journal, self._poll_token)
 
     def _on_journal_event(self, e):
         """A Market event means the game just rewrote Market.json."""
@@ -986,14 +1116,16 @@ class App:
         if not (eddn and self.sender and self.watcher):
             return
         path = os.path.join(self.watcher.dir, "Market.json")
-        ok, msg = self.sender.maybe_send(
-            path, self.watcher.commander, self.watcher.horizons,
-            self.watcher.odyssey, self.watcher.gameversion,
-            self.watcher.gamebuild)
-        if msg != "already sent":
-            self.set_status("EDDN: %s" % msg, None if ok else BAD)
-            self.cfg["eddn_seen"] = self.sender.to_list()
-            save_config(self.cfg)
+        args = (path, self.watcher.commander, self.watcher.horizons,
+                self.watcher.odyssey, self.watcher.gameversion,
+                self.watcher.gamebuild)
+
+        def worker():
+            ok, msg = self.sender.maybe_send(*args)
+            self.q.put(("eddn", (ok, msg)))
+
+        # The upload can block for 20s; never run it on the UI thread.
+        threading.Thread(target=worker, daemon=True).start()
 
     def _on_docked(self, station, system):
         """Docking at the CG station means a run just ended - refresh."""
@@ -1005,7 +1137,7 @@ class App:
             self.search()          # _finish() republishes state at rank 1
 
     def _save_cal(self):
-        if self.cal:
+        if getattr(self, "cal", None):
             self.cfg["calibration"] = self.cal.to_dict()
             if self.watcher and self.watcher.dir:
                 self.cfg["journal_dir"] = self.watcher.dir
@@ -1045,11 +1177,20 @@ class App:
             rows.sort(key=lambda r: -r["cr_per_min"])
             self.q.put(("done", {
                 "rows": rows, "mixed": build_mixed(rows, params["hold"]),
-                "cg": cg, "cg_ls": cg_ls, "params": params}))
+                "cg": cg, "cg_ls": cg_ls, "params": params,
+                "fetched_at": time.time()}))
         except Exception as e:
             self.q.put(("err", "%s: %s" % (type(e).__name__, e)))
 
     def _drain(self):
+        try:
+            self._drain_once()
+        finally:
+            # Must always reschedule: an error inside _finish used to leave the
+            # UI frozen with SEARCH disabled for the rest of the session.
+            self.root.after(80, self._drain)
+
+    def _drain_once(self):
         try:
             while True:
                 kind, payload = self.q.get_nowait()
@@ -1061,15 +1202,27 @@ class App:
                         foreground=DIM)
                 elif kind == "done":
                     self._finish(payload)
+                elif kind == "eddn":
+                    ok, msg = payload
+                    if msg != "already sent":
+                        self.set_status("EDDN: %s" % msg, None if ok else BAD)
+                        self.cfg["eddn_seen"] = self.sender.to_list()
+                        save_config(self.cfg)
                 elif kind == "err":
                     self.busy = False
                     self.go.state(["!disabled"])
                     self.status.configure(text=payload, foreground=BAD)
         except queue.Empty:
             pass
-        self.root.after(80, self._drain)
+        except Exception as e:
+            self.busy = False
+            try:
+                self.go.state(["!disabled"])
+                self.set_status("display error: %s" % e, BAD)
+            except Exception:
+                pass
 
-    def _finish(self, d):
+    def _finish(self, d, from_cache=False):
         self.data = d
         self.busy = False
         self.go.state(["!disabled"])
@@ -1081,11 +1234,15 @@ class App:
             text="CG PAYS   " + "    ".join(
                 "%s %s" % (k, f"{d['cg'][k]['sell']:,}") for k in order))
         self.status.configure(
-            text="%s sources across %d commodities"
-                 % (f"{len(d['rows']):,}", len(d["cg"])), foreground=DIM)
+            text="%s sources across %d commodities%s"
+                 % (f"{len(d['rows']):,}", len(d["cg"]),
+                    "  (cached, %s old)" % age_phrase(d.get("fetched_at"))
+                    if from_cache else ""), foreground=DIM)
         self._fill_mixed()
         self._fill_single()
         write_state(d["mixed"], keep_index=0)
+        if not from_cache:
+            save_cache(d)
 
     def _fill_mixed(self):
         t = self.t_mixed

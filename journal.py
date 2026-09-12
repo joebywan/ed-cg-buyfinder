@@ -59,19 +59,27 @@ class Calibration:
     """
 
     MIN_SAMPLES = 3        # below this, one weird run would skew everything
+    MAX_SAMPLES = 200      # keep the medians cheap and the config small
+
+    def _add(self, lst, value):
+        lst.append(value)
+        if len(lst) > self.MAX_SAMPLES:
+            del lst[:-self.MAX_SAMPLES]
 
     def __init__(self, data=None):
         d = data or {}
         self.jump_secs = list(d.get("jump_secs", []))[-200:]
         self.dock_secs = list(d.get("dock_secs", []))[-200:]
-        self.sc_samples = [tuple(x) for x in d.get("sc_samples", [])][-200:]
+        # Deliberately NOT loaded from config: earlier versions paired each
+        # supercruise duration with the arrival distance of the previously
+        # docked station, which is unrelated. Those samples are unusable.
+        self.sc_samples = []
         # FSDJump -> Docked: the whole arrival leg (supercruise + approach +
         # docking). SupercruiseEntry is not always journalled, but this is.
         self.approach_samples = [tuple(x) for x in d.get("approach_samples", [])][-200:]
 
     def to_dict(self):
         return {"jump_secs": self.jump_secs, "dock_secs": self.dock_secs,
-                "sc_samples": self.sc_samples,
                 "approach_samples": self.approach_samples}
 
     # -- learned values, or None when we don't have the evidence -----------
@@ -97,8 +105,7 @@ class Calibration:
         cannot dominate. Falls back to arrival-leg samples, which are logged
         far more reliably than SupercruiseEntry.
         """
-        pool = self.sc_samples if len(self.sc_samples) >= self.MIN_SAMPLES \
-            else self.approach_samples
+        pool = self.approach_samples
         if len(pool) < self.MIN_SAMPLES:
             return None
         ratios = []
@@ -117,7 +124,7 @@ class Calibration:
                                  if j else "estimate (n=%d)" % len(self.jump_secs)))
         bits.append("dock %s" % ("%.1f min (n=%d)" % (d, len(self.dock_secs))
                                  if d else "estimate (n=%d)" % len(self.dock_secs)))
-        n_sc = max(len(self.sc_samples), len(self.approach_samples))
+        n_sc = len(self.approach_samples)
         bits.append("supercruise %s" % ("x%.2f (n=%d)" % (s, n_sc)
                                         if s else "estimate (n=%d)" % n_sc))
         return "  |  ".join(bits)
@@ -202,11 +209,15 @@ class JournalWatcher:
             with open(self.path, encoding="utf-8", errors="replace") as fh:
                 fh.seek(self.pos)
                 for line in fh:
+                    if not line.endswith("\n"):
+                        # The game is mid-write; leave the partial line for the
+                        # next poll rather than consuming it half-formed.
+                        break
                     try:
                         self._handle(line, live=True)
                     except Exception:
-                        continue        # never let one line stop the tail
-                self.pos = fh.tell()
+                        pass            # never let one line stop the tail
+                    self.pos += len(line.encode("utf-8", "replace"))
         except OSError:
             pass
 
@@ -236,7 +247,7 @@ class JournalWatcher:
                 # Only count back-to-back jumps on a route. A long gap means
                 # you stopped to do something, which is not jump cost.
                 if 15 <= dt <= 300:
-                    self.cal.jump_secs.append(dt)
+                    self.cal._add(self.cal.jump_secs, dt)
                     learned = True
             self._last_fsdjump = ts
             self._arrived_at = ts
@@ -244,11 +255,9 @@ class JournalWatcher:
         elif ev in ("SupercruiseEntry",):
             self._sc_entry = ts
         elif ev in ("SupercruiseExit", "SupercruiseDestinationDrop"):
-            if self._sc_entry and ts and ts > self._sc_entry:
-                dt = ts - self._sc_entry
-                if 10 <= dt <= 3600 and self._last_ls:
-                    self.cal.sc_samples.append((self._last_ls, dt))
-                    learned = True
+            # No usable distance for this leg: the journal does not say how far
+            # the supercruise actually was. FSDJump -> Docked is measured
+            # instead, where DistFromStarLS genuinely describes the same trip.
             self._sc_entry = None
         elif ev == "Docked":
             self.station = e.get("StationName")
@@ -260,7 +269,7 @@ class JournalWatcher:
                 if self._arrived_at and ts and ts > self._arrived_at:
                     dt = ts - self._arrived_at
                     if 20 <= dt <= 3600:
-                        self.cal.approach_samples.append((self._last_ls, dt))
+                        self.cal._add(self.cal.approach_samples, (self._last_ls, dt))
                         learned = True
             self._arrived_at = None
             if live and self.on_docked:
@@ -269,7 +278,7 @@ class JournalWatcher:
             if self._dock_at and ts and ts > self._dock_at:
                 dt = ts - self._dock_at
                 if 20 <= dt <= 1800:
-                    self.cal.dock_secs.append(dt)
+                    self.cal._add(self.cal.dock_secs, dt)
                     learned = True
             self._dock_at, self.docked = None, False
         elif ev in ("LoadGame", "Fileheader"):

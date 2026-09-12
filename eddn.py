@@ -85,6 +85,9 @@ def build_message(market, commander, horizons, odyssey):
             entry["statusFlags"] = ["Rare"]
         commodities.append(entry)
 
+    for required in ("StarSystem", "StationName", "MarketID", "timestamp"):
+        if market.get(required) in (None, ""):
+            raise ValueError("Market.json missing %s" % required)
     msg = {
         "systemName": market["StarSystem"],
         "stationName": market["StationName"],
@@ -170,14 +173,17 @@ def upload(envelope, timeout=20):
 class Sender:
     """Tracks what has already been sent so we never duplicate a snapshot."""
 
+    MAX_SEEN = 400
+
     def __init__(self, seen=None):
-        self.seen = set(tuple(x) for x in (seen or []))
+        self.order = [tuple(x) for x in (seen or [])][-self.MAX_SEEN:]
+        self.seen = set(self.order)
         self.sent = 0
         self.failed = 0
         self.last = ""
 
     def to_list(self):
-        return [list(x) for x in list(self.seen)[-400:]]
+        return [list(x) for x in self.order[-self.MAX_SEEN:]]
 
     def maybe_send(self, market_path, commander, horizons, odyssey,
                    gameversion=None, gamebuild=None, dry_run=False):
@@ -193,9 +199,14 @@ class Sender:
         if key in self.seen:
             return False, "already sent"
 
-        env = add_gameversion(
-            build_message(market, commander, horizons, odyssey),
-            gameversion, gamebuild)
+        try:
+            env = add_gameversion(
+                build_message(market, commander, horizons, odyssey),
+                gameversion, gamebuild)
+        except (ValueError, TypeError, KeyError) as e:
+            self.failed += 1
+            self.last = "bad market data: %s" % e
+            return False, self.last
         problems = validate(env)
         if problems:
             self.failed += 1
@@ -210,6 +221,11 @@ class Sender:
         ok, detail = upload(env)
         if ok:
             self.seen.add(key)
+            self.order.append(key)
+            if len(self.order) > self.MAX_SEEN:
+                drop = self.order[:-self.MAX_SEEN]
+                del self.order[:-self.MAX_SEEN]
+                self.seen.difference_update(drop)
             self.sent += 1
             self.last = "sent %s (%d items)" % (market["StationName"], n)
         else:

@@ -64,6 +64,10 @@ KEYMAP = {
     "LeftShift": "shift", "RightShift": "shift",
     "LeftControl": "ctrl", "RightControl": "ctrl",
     "LeftAlt": "alt", "RightAlt": "alt",
+    # xdotool uses X keysyms, which differ from Elite's names for these.
+    "PageUp": "Prior", "PageDown": "Next", "Insert": "Insert",
+    "Home": "Home", "End": "End", "Delete": "Delete",
+    "Comma": "comma", "Period": "period", "Minus": "minus",
 }
 
 # Route A - through the cockpit panel, using your existing binds. Needs no

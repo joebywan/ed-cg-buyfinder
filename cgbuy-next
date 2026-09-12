@@ -55,11 +55,21 @@ def load_state():
         return None
 
 
-def save_state(st):
+def save_index(idx):
+    """Update only the index.
+
+    Rewriting the whole document would clobber a fresher plan list that the
+    app may have published while we were driving the galaxy map (which takes
+    several seconds).
+    """
     try:
+        st = load_state() or {}
+        st["index"] = idx
         os.makedirs(os.path.dirname(STATE_PATH), exist_ok=True)
-        with open(STATE_PATH, "w") as fh:
+        tmp = STATE_PATH + ".tmp"
+        with open(tmp, "w") as fh:
             json.dump(st, fh, indent=2)
+        os.replace(tmp, STATE_PATH)
     except OSError:
         pass
 
@@ -137,8 +147,8 @@ def main():
 
     plans = st["plans"]
     if a.reset:
+        save_index(0)
         st["index"] = 0
-        save_state(st)
 
     idx = min(st.get("index", 0), len(plans) - 1)
     plan = plans[idx]
@@ -152,8 +162,7 @@ def main():
         ok, msg = type_into_elite(plan["system"])
         note = "" if ok else "  [%s]" % msg
 
-    st["index"] = (idx + 1) % len(plans)
-    save_state(st)
+    save_index((idx + 1) % len(plans))
 
     print(describe(plan, idx, len(plans)) + note)
     return 0

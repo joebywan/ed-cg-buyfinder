@@ -292,29 +292,34 @@ class TestCalibration(unittest.TestCase):
         cal = journal.Calibration({"jump_secs": [60.0, 60.0, 60.0, 60.0, 290.0]})
         self.assertAlmostEqual(cal.jump_minutes, 1.0)
 
-    def test_sc_scale_from_sc_samples(self):
+    def test_legacy_sc_samples_are_discarded(self):
+        """Old configs hold sc_samples that paired a supercruise duration with
+        an unrelated station's distance. They must not be loaded or trusted."""
         ls = 1000
         model = journal.est_sc_minutes(ls) * 60.0
         cal = journal.Calibration({"sc_samples": [(ls, model * 2.0)] * 3})
-        self.assertAlmostEqual(cal.sc_scale, 2.0)
+        self.assertEqual(cal.sc_samples, [])
+        self.assertIsNone(cal.sc_scale)
+        self.assertNotIn("sc_samples", cal.to_dict())
 
-    def test_sc_scale_falls_back_to_approach_samples(self):
+    def test_sc_scale_uses_approach_samples(self):
         ls = 1000
         model = journal.est_sc_minutes(ls) * 60.0
         cal = journal.Calibration({
-            "sc_samples": [(ls, model * 9.0)],          # too few to trust
             "approach_samples": [(ls, model * 1.5)] * 4,
         })
         self.assertAlmostEqual(cal.sc_scale, 1.5)
 
-    def test_sc_scale_prefers_sc_samples_when_it_has_enough(self):
+    def test_sc_scale_always_uses_approach_samples(self):
+        """approach_samples is the only correctly-paired pool: FSDJump->Docked
+        with that station's own DistFromStarLS."""
         ls = 1000
         model = journal.est_sc_minutes(ls) * 60.0
         cal = journal.Calibration({
-            "sc_samples": [(ls, model * 3.0)] * 3,
+            "sc_samples": [(ls, model * 3.0)] * 3,      # must be ignored
             "approach_samples": [(ls, model * 1.0)] * 50,
         })
-        self.assertAlmostEqual(cal.sc_scale, 3.0)
+        self.assertAlmostEqual(cal.sc_scale, 1.0)
 
     def test_sc_scale_none_when_both_pools_short(self):
         cal = journal.Calibration({"sc_samples": [(100, 60.0)],
@@ -530,15 +535,17 @@ class TestHandleApproach(WatcherTestCase):
         )
         self.assertEqual(self.w.cal.approach_samples, [(1200.0, 180.0)])
 
-    def test_supercruise_entry_exit_makes_an_sc_sample(self):
+    def test_supercruise_never_records_a_sample(self):
+        """The journal does not say how far a supercruise was, so pairing its
+        duration with the last docked station's Ls produced ~28x ratios."""
         self.feed(
             {"timestamp": ts(12, 0, 0), "event": "FSDJump", "StarSystem": "Ega"},
             {"timestamp": ts(12, 3, 0), "event": "Docked",
-             "StationName": "A", "DistFromStarLS": 1200.0},
+             "StationName": "A", "DistFromStarLS": 12.0},
             {"timestamp": ts(12, 10, 0), "event": "SupercruiseEntry"},
-            {"timestamp": ts(12, 12, 0), "event": "SupercruiseExit"},
+            {"timestamp": ts(12, 25, 0), "event": "SupercruiseExit"},
         )
-        self.assertEqual(self.w.cal.sc_samples, [(1200.0, 120.0)])
+        self.assertEqual(self.w.cal.sc_samples, [])
 
     def test_supercruise_out_of_window_is_rejected(self):
         self.feed(
