@@ -656,6 +656,7 @@ class App:
         if isinstance(saved, dict) and saved.get("station") and saved.get("commodities"):
             self.dest.update(saved)          # an explicit choice always wins
         self.standing = None
+        self.real_cycle = None      # measured dock-to-dock, distractions and all
         self.ship_label = None
         # 9pt is unreadable on a 5K panel, so scale the default to the display.
         sw = root.winfo_screenwidth()
@@ -1512,6 +1513,7 @@ class App:
             self.watcher, self.cal = w, w.cal
             self._show_cal()
             self._adopt_ship()
+            self._measure_cycle()
             self._adopt_destination()
             self.refresh_standing()
             self.root.after(3000, self._poll_journal, self._poll_token)
@@ -1856,7 +1858,7 @@ class App:
             return "you're there"
 
         top = (self.data or {}).get("mixed") or []
-        mins = top[0]["trip_minutes"] if top else None
+        mins = self.real_cycle or (top[0]["trip_minutes"] if top else None)
         if not mins:
             return "%d run%s" % (runs, "" if runs == 1 else "s")
 
@@ -1899,6 +1901,20 @@ class App:
                 "%s%st still needed to reach top %s%%\n%s"
                 % ("about " if approx else "", f"{gap:,}", st["next_band"],
                    self._effort(gap)))
+            top = (self.data or {}).get("mixed") or []
+            plan = top[0]["trip_minutes"] if top else None
+            if self.real_cycle:
+                detail.append(
+                    "Based on %.0f min per run, which is your measured\n"
+                    "dock-to-dock median - distractions included.%s"
+                    % (self.real_cycle,
+                       "\nThe route itself is ~%.0f min of flying." % plan
+                       if plan else ""))
+            elif plan:
+                detail.append(
+                    "Based on %.0f min of flying per run. Your real pace will\n"
+                    "be slower - this counts travel, not time spent at the\n"
+                    "station." % plan)
             detail.append("You are %.0f%% of the way from top %s%% to top %s%%."
                           % (pct, st["band"], st["next_band"]))
             if approx:
@@ -1924,6 +1940,14 @@ class App:
         if st.get("hours_left"):
             detail.append("Goal ends in %s." % _dhm(st["hours_left"]))
         self.standing_tip.text = "\n\n".join(detail)
+
+    def _measure_cycle(self):
+        """How long a run really takes you, as opposed to how long the
+        travel model says it should."""
+        if journal is None or not self.watcher:
+            return
+        self.real_cycle = journal.real_cycle_minutes(
+            self.watcher.dest_docks, self.dest.get("station"))
 
     def _adopt_ship(self):
         """Take hold size, jump ranges and pad class from the ship you fly.
@@ -2035,7 +2059,8 @@ class App:
             self.status.configure(
                 text="Docked at %s - refreshing for the next run..." % station,
                 foreground=OR)
-            self.search()          # _finish() republishes state at rank 1
+            self._measure_cycle()
+            self.search()
             self.refresh_standing()
 
     def _save_cal(self):

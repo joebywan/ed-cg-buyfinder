@@ -145,6 +145,25 @@ class Calibration:
         return "  |  ".join(bits)
 
 
+def real_cycle_minutes(docks, station, min_samples=3):
+    """Median time between consecutive docks at `station` - a whole run as
+    actually flown.
+
+    The calibrated trip model measures focused travel: its sanity windows
+    reject long station stays so one overnight AFK cannot poison it. That
+    makes it a floor, not a forecast. This is the other number - what a run
+    really costs you, distractions included.
+
+    Anything over four hours is treated as a session break rather than a run.
+    """
+    times = sorted(t for stn, t in docks if stn == station)
+    gaps = [(b - a) / 60.0 for a, b in zip(times, times[1:])
+            if 0 < (b - a) / 60.0 <= 240]
+    if len(gaps) < min_samples:
+        return None
+    return statistics.median(gaps)
+
+
 def laden_jump_range(max_range, unladen_mass, fuel, cargo, observed=None):
     """Jump range with a full hold.
 
@@ -192,6 +211,7 @@ class JournalWatcher:
         self.unladen_mass = None
         self.fuel_capacity = None
         self.best_laden_jump = None     # longest jump actually made with cargo
+        self.dest_docks = []            # times docked at the destination
         self._cargo = None
         self.horizons = None
         self.odyssey = None
@@ -317,6 +337,9 @@ class JournalWatcher:
                         self.cal._add(self.cal.approach_samples, (self._last_ls, dt))
                         learned = True
             self._arrived_at = None
+            if ts:
+                self.dest_docks.append((self.station, ts))
+                del self.dest_docks[:-80]
             if live and self.on_docked:
                 self.on_docked(self.station, self.system)
         elif ev == "Undocked":
