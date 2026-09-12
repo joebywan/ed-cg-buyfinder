@@ -1,0 +1,1139 @@
+#!/usr/bin/env python3
+"""
+cgbuy - buy-location finder for the Ega / Metz Enterprise community goal.
+
+A native desktop app (tkinter). Single file, stdlib only - just run it.
+
+Live sell prices come from EDSM, buy prices and supply from Spansh.
+"""
+
+import json
+import math
+import os
+import queue
+import sys
+import threading
+import tkinter as tk
+import urllib.error
+import urllib.parse
+import urllib.request
+from concurrent.futures import ThreadPoolExecutor
+from tkinter import ttk, filedialog
+
+try:
+    import journal
+except ImportError:            # running without the journal module alongside
+    journal = None
+try:
+    import plot
+except ImportError:
+    plot = None
+try:
+    import eddn
+except ImportError:
+    eddn = None
+
+CG_STATION = "Metz Enterprise"
+CG_SYSTEM = "Ega"
+COMMODITIES = [
+    "Palladium", "Gold", "Silver", "Bertrandite", "Indite", "Gallite",
+    "Coltan", "Uraninite", "Lepidolite", "Cobalt", "Rutile", "Water",
+]
+
+SPANSH_SEARCH = "https://spansh.co.uk/api/stations/search"
+EDSM_MARKET = ("https://www.edsm.net/api-system-v1/stations/market"
+               "?systemName={sys}&stationName={stn}")
+EDSM_STATIONS = "https://www.edsm.net/api-system-v1/stations?systemName={sys}"
+AGENT = "cgbuy/2.0 (personal ED trade helper)"
+
+
+# --------------------------------------------------------------------------
+# data layer
+# --------------------------------------------------------------------------
+
+def post_json(url, payload, timeout=60):
+    req = urllib.request.Request(
+        url, data=json.dumps(payload).encode(),
+        headers={"User-Agent": AGENT, "Content-Type": "application/json"},
+        method="POST")
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        return json.load(r)
+
+
+def get_json(url, timeout=45):
+    req = urllib.request.Request(url, headers={"User-Agent": AGENT})
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        return json.load(r)
+
+
+def fetch_cg_prices():
+    """Sell prices at the CG station. The CG's price multiplier is already
+    baked into these, so we never apply it ourselves."""
+    url = EDSM_MARKET.format(sys=urllib.parse.quote(CG_SYSTEM),
+                             stn=urllib.parse.quote(CG_STATION))
+    data = get_json(url)
+    return {c["name"]: {"sell": c["sellPrice"], "demand": c["demand"]}
+            for c in data.get("commodities", []) if c["name"] in COMMODITIES}
+
+
+def fetch_cg_arrival_ls():
+    try:
+        d = get_json(EDSM_STATIONS.format(sys=urllib.parse.quote(CG_SYSTEM)))
+        for s in d.get("stations", []):
+            if s["name"] == CG_STATION:
+                return s.get("distanceToArrival", 0) or 0
+    except Exception:
+        pass
+    return 0
+
+
+def fetch_sources(commodity, max_ly, min_supply, page_size=500, max_pages=10):
+    """Every market within max_ly that stocks `commodity`.
+
+    Spansh caps results per request, so page through until we run past the
+    radius. A single fixed page silently drops most candidates.
+    """
+    out = []
+    for page in range(max_pages):
+        payload = {
+            "filters": {
+                "distance": {"comparison": "<=>", "value": [0, max_ly]},
+                "market": [{
+                    "name": commodity,
+                    "supply": {"comparison": "<=>",
+                               "value": [min_supply, 100000000]},
+                }],
+            },
+            "sort": [{"distance": {"direction": "asc"}}],
+            "size": page_size, "page": page, "reference_system": CG_SYSTEM,
+        }
+        try:
+            res = post_json(SPANSH_SEARCH, payload).get("results", [])
+        except (urllib.error.URLError, json.JSONDecodeError, TimeoutError):
+            break
+        out.extend(res)
+        if len(res) < page_size or res[-1].get("distance", 0) > max_ly:
+            break
+    return out
+
+
+def sc_minutes(ls):
+    """Rough supercruise time from the arrival star, in minutes.
+    Fitted by eye: ~1 min at 100 Ls, ~4 min at 10k Ls, ~8 min at 100k Ls."""
+    return 0.25 * max(ls, 1) ** 0.3
+
+
+# Defaults used until the journal has taught us better.
+EST_JUMP_MIN = 0.85        # align + charge + jump + scoop
+EST_DOCK_MIN = 3.0         # docked -> undocked, per stop
+EST_SC_SCALE = 1.0         # multiplier on the sc_minutes curve
+
+
+def trip_minutes(dist_ly, src_ls, cg_ls, jump_empty, jump_laden, cal=None):
+    """Round trip: CG -> source empty, source -> CG full.
+
+    An "arrival leg" is supercruise + approach + docking, which is exactly
+    what the journal measures as FSDJump -> Docked. Dock time (docked ->
+    undocked) is counted separately, so nothing is double-counted.
+    """
+    jump_min = (cal.jump_minutes if cal and cal.jump_minutes else EST_JUMP_MIN)
+    dock_min = (cal.dock_minutes if cal and cal.dock_minutes else EST_DOCK_MIN)
+    sc_scale = (cal.sc_scale if cal and cal.sc_scale else EST_SC_SCALE)
+
+    out_j = math.ceil(dist_ly / jump_empty) if dist_ly > 0 else 0
+    back_j = math.ceil(dist_ly / jump_laden) if dist_ly > 0 else 0
+    jumps = (out_j + back_j) * jump_min
+    legs = (sc_minutes(src_ls) + sc_minutes(cg_ls)) * sc_scale
+    return max(jumps + legs + dock_min * 2, 0.5)
+
+
+def build_rows(p, progress=None, cal=None):
+    """Fetch everything and score it. `p` is the parameter dict from the UI."""
+    cg = fetch_cg_prices()
+    if not cg:
+        raise RuntimeError("EDSM returned no market for %s - station renamed?"
+                           % CG_STATION)
+    cg_ls = fetch_cg_arrival_ls()
+    rows, done, lock = [], 0, threading.Lock()
+
+    def one(name):
+        nonlocal done
+        info = cg.get(name)
+        local = []
+        if info and info["sell"] > 0:
+            sell = info["sell"]
+            for st in fetch_sources(name, p["range"], p["min_supply"]):
+                if not st.get("has_large_pad"):
+                    continue
+                carrier = "Carrier" in str(st.get("type", ""))
+                if carrier and not p["carriers"]:
+                    continue
+                e = next((c for c in st.get("market", [])
+                          if c["commodity"] == name), None)
+                if not e or e["supply"] <= 0 or e["buy_price"] <= 0:
+                    continue
+                dist = st.get("distance", 0.0)
+                if dist > p["range"]:
+                    continue
+                profit = sell - e["buy_price"]
+                if profit <= 0:
+                    continue
+                src_ls = st.get("distance_to_arrival", 0) or 0
+                mins = trip_minutes(dist, src_ls, cg_ls,
+                                    p["jump_empty"], p["jump_laden"], cal)
+                load = min(e["supply"], p["hold"])
+                local.append({
+                    "commodity": name, "station": st.get("name", "?"),
+                    "system": st.get("system_name", "?"), "carrier": carrier,
+                    "ly": round(dist, 1), "ls": round(src_ls),
+                    "supply": e["supply"], "buy": e["buy_price"], "sell": sell,
+                    "profit_per_t": profit, "load": load,
+                    "loads_available": round(e["supply"] / p["hold"], 1),
+                    "trip_minutes": round(mins, 1),
+                    "trip_profit": load * profit,
+                    "cr_per_min": round(load * profit / mins),
+                    "t_per_min": round(load / mins, 1),
+                    "updated": (st.get("market_updated_at") or "")[:10],
+                })
+        with lock:
+            rows.extend(local)
+            done += 1
+            if progress:
+                progress(done, len(COMMODITIES), name)
+
+    with ThreadPoolExecutor(max_workers=6) as ex:
+        list(ex.map(one, COMMODITIES))
+
+    return rows, cg, cg_ls
+
+
+def build_mixed(rows, hold):
+    """Rank stations by the best hold they can actually fill.
+
+    A station's most profitable commodity is often supply-capped well below
+    your hold. Topping up with that same station's next best costs no extra
+    travel, and is typically worth ~20% more per run.
+    """
+    stations = {}
+    for r in rows:
+        stations.setdefault((r["station"], r["system"]), []).append(r)
+
+    plans = []
+    for (stn, sysn), items in stations.items():
+        items.sort(key=lambda r: -r["profit_per_t"])
+        remaining, total, mix = hold, 0, []
+        for it in items:
+            if remaining <= 0:
+                break
+            take = min(it["supply"], remaining)
+            if take <= 0:
+                continue
+            mix.append({"commodity": it["commodity"], "tonnes": take,
+                        "profit_per_t": it["profit_per_t"],
+                        "buy": it["buy"], "value": take * it["profit_per_t"]})
+            total += take * it["profit_per_t"]
+            remaining -= take
+        if not mix:
+            continue
+        mins = items[0]["trip_minutes"]
+        plans.append({
+            "station": stn, "system": sysn, "ly": items[0]["ly"],
+            "ls": items[0]["ls"], "carrier": items[0]["carrier"],
+            "updated": items[0]["updated"], "tonnes": hold - remaining,
+            "short": remaining, "trip_minutes": mins, "total": total,
+            "cr_per_min": round(total / mins), "mix": mix,
+        })
+    plans.sort(key=lambda x: -x["cr_per_min"])
+    return plans
+
+
+
+# --------------------------------------------------------------------------
+# desktop UI
+# --------------------------------------------------------------------------
+
+BG      = "#0b0a09"
+PANEL   = "#151210"
+ROW_ALT = "#131010"
+SEL     = "#2b2015"
+OR      = "#ff7100"
+OR_DIM  = "#b35400"
+TXT     = "#e8c9a6"
+DIM     = "#8a6a49"
+LINE    = "#3a2c1d"
+GOOD    = "#5ec27a"
+WARN    = "#e0a33a"
+BAD     = "#d05a4a"
+
+FONT_FAMILY = "DejaVu Sans Mono"
+FONT_MIN, FONT_MAX, FONT_DEFAULT = 7, 22, 9
+
+CONFIG_PATH = os.path.join(
+    os.environ.get("XDG_CONFIG_HOME", os.path.expanduser("~/.config")),
+    "cgbuy.json")
+
+# Read by cgbuy-next, the single Stream Deck button. Kept separate from the
+# config so deck software can poll it cheaply.
+STATE_PATH = os.path.join(
+    os.environ.get("XDG_CONFIG_HOME", os.path.expanduser("~/.config")),
+    "cgbuy-state.json")
+
+
+def write_state(plans, keep_index=None):
+    """Publish the ranked plan list for the deck button."""
+    slim = [{"station": p["station"], "system": p["system"], "ly": p["ly"],
+             "ls": p["ls"], "total": p["total"], "cr_per_min": p["cr_per_min"],
+             "updated": p["updated"],
+             "mix": [{"commodity": m["commodity"], "tonnes": m["tonnes"],
+                      "buy": m["buy"]} for m in p["mix"]]}
+            for p in plans[:8]]
+    prev = {}
+    try:
+        with open(STATE_PATH) as fh:
+            prev = json.load(fh)
+    except Exception:
+        pass
+    idx = keep_index if keep_index is not None else prev.get("index", 0)
+    try:
+        os.makedirs(os.path.dirname(STATE_PATH), exist_ok=True)
+        with open(STATE_PATH, "w") as fh:
+            json.dump({"plans": slim, "index": min(idx, max(0, len(slim) - 1))},
+                      fh, indent=2)
+    except OSError:
+        pass
+
+
+def load_config():
+    try:
+        with open(CONFIG_PATH) as fh:
+            return json.load(fh)
+    except Exception:
+        return {}
+
+
+def save_config(cfg):
+    try:
+        os.makedirs(os.path.dirname(CONFIG_PATH), exist_ok=True)
+        with open(CONFIG_PATH, "w") as fh:
+            json.dump(cfg, fh, indent=2)
+    except OSError:
+        pass          # a UI preference is never worth crashing over
+
+
+def days_old(datestr):
+    """Whole days since an ISO date, or None if we have no date."""
+    if not datestr:
+        return None
+    try:
+        y, m, d = (int(x) for x in datestr.split("-"))
+    except ValueError:
+        return None
+    import datetime
+    return (datetime.date.today() - datetime.date(y, m, d)).days
+
+
+def age_text(datestr):
+    n = days_old(datestr)
+    if n is None:
+        return "?"
+    return "today" if n < 1 else "%dd ago" % n
+
+
+def age_tag(datestr):
+    n = days_old(datestr)
+    if n is None:
+        return "age_old"
+    return "age_ok" if n <= 21 else ("age_mid" if n <= 120 else "age_old")
+
+
+class App:
+    SINGLE_COLS = [
+        ("commodity", "COMMODITY", 96, "w"), ("station", "STATION", 210, "w"),
+        ("system", "SYSTEM", 200, "w"), ("ly", "LY", 56, "e"),
+        ("ls", "LS", 78, "e"), ("supply", "SUPPLY", 84, "e"),
+        ("loads_available", "LOADS", 60, "e"), ("buy", "BUY", 78, "e"),
+        ("profit_per_t", "PROFIT/T", 86, "e"), ("trip_minutes", "TRIP", 56, "e"),
+        ("cr_per_min", "CR/MIN", 92, "e"), ("t_per_min", "T/MIN", 62, "e"),
+        ("updated", "DATA", 78, "e"),
+    ]
+
+    def __init__(self, root, autosearch=True):
+        self.root = root
+        self.cfg = load_config()
+        self.entries = []
+        # 9pt is unreadable on a 5K panel, so scale the default to the display.
+        sw = root.winfo_screenwidth()
+        auto = FONT_DEFAULT if sw < 2560 else (14 if sw < 3840 else 17)
+        self.fs = min(FONT_MAX, max(FONT_MIN,
+                      int(self.cfg.get("font_size", auto))))
+        self.data = None
+        self.q = queue.Queue()
+        self.sort_key = "cr_per_min"
+        self.sort_desc = True
+        self.busy = False
+
+        root.title("CG Buy Finder - Ega")
+        root.configure(bg=BG)
+        root.geometry("1480x860")
+        root.minsize(1000, 600)
+
+        self._style()
+        self._header()
+        self._controls()
+        self._tabs()
+        self._statusbar()
+        self._apply_col_widths()
+        self._fit_window()
+        self._init_journal()
+
+        root.columnconfigure(0, weight=1)
+        root.rowconfigure(3, weight=1)
+        root.after(80, self._drain)
+        if autosearch:
+            root.after(250, self.search)
+        root.bind("<Return>", lambda e: self.search())
+        root.bind("<Control-q>", lambda e: self._quit())
+        root.protocol("WM_DELETE_WINDOW", self._quit)
+        root.bind("<Control-plus>", lambda e: self.bump_font(1))
+        root.bind("<Control-equal>", lambda e: self.bump_font(1))
+        root.bind("<Control-minus>", lambda e: self.bump_font(-1))
+
+    # -- chrome ----------------------------------------------------------
+    def _fonts(self):
+        """All fonts derive from self.fs so one setting rescales everything."""
+        n = self.fs
+        return {
+            "mono": (FONT_FAMILY, n),
+            "bold": (FONT_FAMILY, n, "bold"),
+            "cap": (FONT_FAMILY, max(FONT_MIN - 1, n - 1)),
+            "head": (FONT_FAMILY, max(FONT_MIN - 1, n - 1), "bold"),
+            "title": (FONT_FAMILY, n + 4, "bold"),
+        }
+
+    def _style(self):
+        f = self._fonts()
+        MONO, MONO_B = f["mono"], f["bold"]
+        TITLE = f["title"]
+        s = ttk.Style()
+        try:
+            s.theme_use("clam")
+        except tk.TclError:
+            pass
+        s.configure(".", background=BG, foreground=TXT, font=MONO)
+        s.configure("TFrame", background=BG)
+        s.configure("Panel.TFrame", background=PANEL)
+        s.configure("TLabel", background=BG, foreground=TXT, font=MONO)
+        s.configure("Dim.TLabel", background=BG, foreground=DIM, font=MONO)
+        s.configure("Cap.TLabel", background=PANEL, foreground=DIM, font=f["cap"])
+        s.configure("PanelDim.TLabel", background=PANEL, foreground=DIM, font=MONO)
+        s.configure("PanelTxt.TLabel", background=PANEL, foreground=TXT, font=MONO)
+        s.configure("Or.TLabel", background=BG, foreground=OR, font=TITLE)
+        s.configure("Sub.TLabel", background=BG, foreground=DIM, font=MONO)
+
+        s.configure("TEntry", fieldbackground="#0a0908", foreground=TXT,
+                    insertcolor=OR, bordercolor=LINE, lightcolor=LINE,
+                    darkcolor=LINE, borderwidth=1)
+        s.configure("TCheckbutton", background=PANEL, foreground=TXT, font=MONO)
+        s.map("TCheckbutton", background=[("active", PANEL)],
+              foreground=[("active", OR)])
+
+        s.configure("Step.TButton", background="#2a2118", foreground=OR,
+                    font=MONO_B, borderwidth=0, padding=(2, 2))
+        s.map("Step.TButton", background=[("active", OR_DIM)],
+              foreground=[("active", "#140c05")])
+
+        s.configure("Plot.TButton", background="#2a2118", foreground=OR,
+                    font=MONO_B, borderwidth=0, padding=(14, 7))
+        s.map("Plot.TButton", background=[("active", OR_DIM)],
+              foreground=[("active", "#140c05"), ("disabled", "#6a5844")])
+
+        s.configure("Go.TButton", background=OR, foreground="#140c05",
+                    font=MONO_B, borderwidth=0, padding=(20, 7))
+        s.map("Go.TButton",
+              background=[("active", "#ff8a2e"), ("disabled", "#4a3a2a")],
+              foreground=[("disabled", "#8a7256")])
+
+        s.configure("Treeview", background=PANEL, fieldbackground=PANEL,
+                    foreground=TXT, rowheight=int(self.fs * 2.35) + 2,
+                    borderwidth=0, font=MONO)
+        s.configure("Treeview.Heading", background="#1d1711", foreground=DIM,
+                    font=f["head"], relief="flat", borderwidth=0, padding=(4, 5))
+        s.map("Treeview.Heading", background=[("active", "#2a2118")],
+              foreground=[("active", OR)])
+        s.map("Treeview", background=[("selected", SEL)],
+              foreground=[("selected", OR)])
+        s.layout("Treeview", [("Treeview.treearea", {"sticky": "nswe"})])
+
+        s.configure("TNotebook", background=BG, borderwidth=0, tabmargins=(0, 0, 0, 0))
+        s.configure("TNotebook.Tab", background="#141110", foreground=DIM,
+                    font=f["mono"], padding=(18, 7), borderwidth=0)
+        s.map("TNotebook.Tab", background=[("selected", PANEL)],
+              foreground=[("selected", OR)])
+
+        s.configure("TProgressbar", background=OR, troughcolor="#251c14",
+                    borderwidth=0, thickness=3)
+
+        for orient in ("Vertical.TScrollbar", "Horizontal.TScrollbar"):
+            s.configure(orient, background="#2a2118", troughcolor="#0f0d0b",
+                        bordercolor=BG, arrowcolor=DIM, borderwidth=0,
+                        arrowsize=12)
+            s.map(orient, background=[("active", OR_DIM)])
+
+    def _header(self):
+        f = ttk.Frame(self.root, padding=(16, 12, 16, 8))
+        f.grid(row=0, column=0, sticky="ew")
+        ttk.Label(f, text="CG BUY FINDER", style="Or.TLabel").pack(side="left")
+        self.cg_lbl = ttk.Label(
+            f, text="%s  -  %s" % (CG_STATION, CG_SYSTEM), style="Sub.TLabel")
+        self.cg_lbl.pack(side="left", padx=(14, 0))
+
+    def _num(self, parent, label, default, width=7):
+        box = ttk.Frame(parent, style="Panel.TFrame")
+        box.pack(side="left", padx=(0, 14))
+        ttk.Label(box, text=label, style="Cap.TLabel").pack(anchor="w")
+        var = tk.StringVar(value=str(default))
+        e = ttk.Entry(box, textvariable=var, width=width,
+                      font=self._fonts()["mono"], justify="right")
+        e.pack(anchor="w", pady=(2, 0))
+        self.entries.append(e)
+        return var
+
+    def _controls(self):
+        outer = ttk.Frame(self.root, padding=(16, 0, 16, 0))
+        outer.grid(row=1, column=0, sticky="ew")
+        p = ttk.Frame(outer, style="Panel.TFrame", padding=(14, 10))
+        p.pack(fill="x")
+
+        row = ttk.Frame(p, style="Panel.TFrame")
+        row.pack(fill="x")
+        self.v_hold  = self._num(row, "HOLD (T)", 784)
+        self.v_range = self._num(row, "RADIUS (LY)", 30)
+        self.v_je    = self._num(row, "JUMP EMPTY", 38)
+        self.v_jl    = self._num(row, "JUMP LADEN", 18)
+        self.v_ms    = self._num(row, "MIN SUPPLY", 200)
+
+        self.v_fc = tk.BooleanVar(value=False)
+        cb = ttk.Frame(row, style="Panel.TFrame")
+        cb.pack(side="left", padx=(0, 14))
+        ttk.Label(cb, text=" ", style="Cap.TLabel").pack(anchor="w")
+        ttk.Checkbutton(cb, text="Fleet carriers", variable=self.v_fc).pack(
+            anchor="w", pady=(2, 0))
+
+        fb = ttk.Frame(row, style="Panel.TFrame")
+        fb.pack(side="left", padx=(0, 14))
+        ttk.Label(fb, text="FONT", style="Cap.TLabel").pack(anchor="w")
+        fr = ttk.Frame(fb, style="Panel.TFrame")
+        fr.pack(anchor="w", pady=(2, 0))
+        ttk.Button(fr, text="-", width=2, style="Step.TButton",
+                   command=lambda: self.bump_font(-1)).pack(side="left")
+        self.font_lbl = ttk.Label(fr, text=str(self.fs), style="PanelTxt.TLabel",
+                                  width=3, anchor="center")
+        self.font_lbl.pack(side="left", padx=2)
+        ttk.Button(fr, text="+", width=2, style="Step.TButton",
+                   command=lambda: self.bump_font(1)).pack(side="left")
+
+        self.v_eddn = tk.BooleanVar(value=bool(self.cfg.get("eddn_enabled", False)))
+        self.v_deck = tk.BooleanVar(value=bool(self.cfg.get("deck_enabled", True)))
+
+        sb = ttk.Frame(row, style="Panel.TFrame")
+        sb.pack(side="left", padx=(0, 14))
+        ttk.Label(sb, text=" ", style="Cap.TLabel").pack(anchor="w")
+        ttk.Button(sb, text="SETTINGS", style="Plot.TButton",
+                   command=self.open_settings).pack(anchor="w", pady=(2, 0))
+
+        gb = ttk.Frame(row, style="Panel.TFrame")
+        gb.pack(side="left")
+        ttk.Label(gb, text=" ", style="Cap.TLabel").pack(anchor="w")
+        brow = ttk.Frame(gb, style="Panel.TFrame")
+        brow.pack(anchor="w", pady=(2, 0))
+        self.go = ttk.Button(brow, text="SEARCH", style="Go.TButton",
+                             command=self.search)
+        self.go.pack(side="left")
+        self.plot_btn = ttk.Button(brow, text="PLOT NEXT", style="Plot.TButton",
+                                   command=self.plot_next)
+        self.plot_btn.pack(side="left", padx=(6, 0))
+
+
+        self.prices = ttk.Label(p, text="", style="PanelDim.TLabel",
+                                wraplength=1400, justify="left")
+        self.prices.pack(anchor="w", pady=(10, 0))
+
+        self.pbar = ttk.Progressbar(outer, mode="determinate", maximum=len(COMMODITIES))
+        self.pbar.pack(fill="x", pady=(6, 0))
+
+    def _tree(self, parent, columns, show):
+        wrap = ttk.Frame(parent)
+        wrap.pack(fill="both", expand=True)
+        
+        t = ttk.Treeview(wrap, columns=[c[0] for c in columns], show=show)
+        vs = ttk.Scrollbar(wrap, orient="vertical", command=t.yview)
+        hs = ttk.Scrollbar(wrap, orient="horizontal", command=t.xview)
+        t.configure(yscrollcommand=vs.set, xscrollcommand=hs.set)
+        t.grid(row=0, column=0, sticky="nsew")
+        vs.grid(row=0, column=1, sticky="ns")
+        hs.grid(row=1, column=0, sticky="ew")
+        wrap.rowconfigure(0, weight=1)
+        wrap.columnconfigure(0, weight=1)
+        t.tag_configure("odd", background=ROW_ALT)
+        t.tag_configure("age_ok", foreground=GOOD)
+        t.tag_configure("age_mid", foreground=WARN)
+        t.tag_configure("age_old", foreground=BAD)
+        t.tag_configure("top", background="#241a10")
+        t.tag_configure("head", foreground=OR, font=self._fonts()["bold"])
+        t.tag_configure("child", foreground=TXT)
+        t.tag_configure("muted", foreground=DIM)
+        return t
+
+    def _tabs(self):
+        nb = ttk.Notebook(self.root, padding=(16, 6, 16, 0))
+        nb.grid(row=3, column=0, sticky="nsew")
+
+        f1 = ttk.Frame(nb, padding=(0, 6, 0, 0))
+        nb.add(f1, text="BEST MIXED LOADS")
+        mcols = [("a", "STATION / LOAD", 300, "w"), ("b", "DETAIL", 460, "w"),
+                 ("c", "TONNES", 90, "e"), ("d", "PROFIT/T", 110, "e"),
+                 ("e", "VALUE", 140, "e"), ("f", "CR/MIN", 120, "e")]
+        self.MIXED_COLS = mcols
+        self.t_mixed = self._tree(f1, mcols, "tree headings")
+        self.t_mixed.column("#0", width=26, stretch=False)
+        for k, lbl, w, anc in mcols:
+            self.t_mixed.heading(k, text=lbl, anchor=anc)
+            self.t_mixed.column(k, width=w, anchor=anc,
+                                stretch=(k in ("a", "b")))
+
+        f2 = ttk.Frame(nb, padding=(0, 6, 0, 0))
+        nb.add(f2, text="ALL SOURCES")
+        self.t_single = self._tree(f2, self.SINGLE_COLS, "headings")
+        for k, lbl, w, anc in self.SINGLE_COLS:
+            self.t_single.heading(
+                k, text=lbl, anchor=anc,
+                command=lambda c=k: self._sort_by(c))
+            self.t_single.column(k, width=w, anchor=anc,
+                                 stretch=(k in ("station", "system")))
+
+    def _statusbar(self):
+        f = ttk.Frame(self.root, padding=(16, 6, 16, 10))
+        f.grid(row=4, column=0, sticky="ew")
+        self.status = ttk.Label(f, text="Press SEARCH to pull live market data.",
+                                style="Dim.TLabel")
+        self.status.pack(side="left")
+        self.cal_lbl = ttk.Label(f, text="", style="Dim.TLabel")
+        self.cal_lbl.pack(side="left", padx=(18, 0))
+        ttk.Label(f, style="Dim.TLabel",
+                  text="trip times are estimates  -  data age = last commander report"
+                  ).pack(side="right")
+
+    def _apply_col_widths(self):
+        """Column widths are in pixels, so they have to track the font size
+        or the numbers get truncated at larger sizes."""
+        scale = self.fs / float(FONT_DEFAULT)
+        for tree, cols in ((self.t_mixed, self.MIXED_COLS),
+                           (self.t_single, self.SINGLE_COLS)):
+            for key, _lbl, w, _anc in cols:
+                tree.column(key, width=int(w * scale),
+                            minwidth=int(w * scale), stretch=False)
+        self.t_mixed.column("#0", width=int(26 * scale), stretch=False)
+
+    def _fit_window(self):
+        scale = self.fs / float(FONT_DEFAULT)
+        w = min(int(1480 * scale), self.root.winfo_screenwidth() - 60)
+        h = min(int(860 * scale), self.root.winfo_screenheight() - 80)
+        self.root.geometry("%dx%d" % (w, h))
+
+
+    # -- settings --------------------------------------------------------
+    def open_settings(self):
+        win = tk.Toplevel(self.root)
+        win.title("Settings")
+        win.configure(bg=BG)
+        win.transient(self.root)
+        f = self._fonts()
+        pad = {"padx": 14, "pady": 4}
+        row = [0]
+
+        def section(title):
+            ttk.Label(win, text=title, style="Or.TLabel",
+                      font=f["bold"]).grid(row=row[0], column=0, columnspan=3,
+                                           sticky="w", padx=14, pady=(14, 2))
+            row[0] += 1
+
+        def pathrow(label, value, on_browse, is_dir):
+            ttk.Label(win, text=label, style="Dim.TLabel").grid(
+                row=row[0], column=0, sticky="w", **pad)
+            var = tk.StringVar(value=value or "")
+            e = ttk.Entry(win, textvariable=var, width=58, font=f["mono"])
+            e.grid(row=row[0], column=1, sticky="ew", **pad)
+            ttk.Button(win, text="BROWSE", style="Plot.TButton",
+                       command=lambda: on_browse(var, is_dir)).grid(
+                row=row[0], column=2, sticky="w", padx=(0, 14))
+            row[0] += 1
+            return var
+
+        def browse(var, is_dir):
+            start = var.get() or os.path.expanduser("~")
+            if is_dir:
+                p = filedialog.askdirectory(parent=win, initialdir=start,
+                                            title="Select folder")
+            else:
+                p = filedialog.askopenfilename(
+                    parent=win, initialdir=os.path.dirname(start),
+                    title="Select file",
+                    filetypes=[("Elite binds", "*.binds"), ("All files", "*")])
+            if p:
+                var.set(p)
+
+        jd = (self.watcher.dir if self.watcher else None) or \
+            (journal.find_journal_dir() if journal else "")
+        bf = self.cfg.get("binds_file") or (plot.find_binds_file() if plot else "")
+
+        section("ELITE DANGEROUS")
+        v_journal = pathrow("Journal folder", jd, browse, True)
+        v_binds = pathrow("Bindings file", bf, browse, False)
+        detected = ttk.Label(win, style="Dim.TLabel",
+                             text="auto-detected - change only if you have "
+                                  "several installs")
+        detected.grid(row=row[0], column=1, sticky="w", padx=14)
+        row[0] += 1
+
+        section("GALAXY MAP KEY")
+        cur = (plot.galaxy_map_key(bf, self.cfg.get("galaxy_map_key"))
+               if plot else None)
+        used = plot.keys_in_use(bf) if plot else set()
+        free = [k for k in (plot.BINDABLE_KEYS if plot else []) if k not in used]
+        choices = sorted(set(([cur] if cur else []) + free),
+                         key=lambda k: (len(k), k))
+        ttk.Label(win, text="Key", style="Dim.TLabel").grid(
+            row=row[0], column=0, sticky="w", **pad)
+        v_key = tk.StringVar(value=cur or (free[0] if free else "F6"))
+        combo = ttk.Combobox(win, textvariable=v_key, values=choices,
+                             width=12, font=f["mono"], state="normal")
+        combo.grid(row=row[0], column=1, sticky="w", **pad)
+        keynote = ttk.Label(win, style="Dim.TLabel",
+                            text="free: %s" % ", ".join(free[:8]))
+        keynote.grid(row=row[0], column=2, sticky="w", padx=(0, 14))
+        row[0] += 1
+
+        def apply_bind():
+            if not plot:
+                return
+            ok, msg = plot.set_bind(v_binds.get(), "GalaxyMapOpen",
+                                    v_key.get().strip())
+            keynote.configure(text=msg[:60], foreground=None if ok else BAD)
+
+        ttk.Button(win, text="WRITE TO ELITE BINDS", style="Plot.TButton",
+                   command=apply_bind).grid(row=row[0], column=1, sticky="w",
+                                            padx=14, pady=(0, 4))
+        row[0] += 1
+        ttk.Label(win, style="Dim.TLabel",
+                  text="a backup of your binds is made first; "
+                       "restart Elite to apply").grid(
+            row=row[0], column=1, sticky="w", padx=14)
+        row[0] += 1
+
+        section("INTEGRATIONS")
+        ttk.Checkbutton(win, text="Stream Deck button (cgbuy-next)",
+                        variable=self.v_deck).grid(row=row[0], column=1,
+                                                   sticky="w", **pad)
+        row[0] += 1
+        ttk.Checkbutton(win, text="Share market data to EDDN",
+                        variable=self.v_eddn).grid(row=row[0], column=1,
+                                                   sticky="w", **pad)
+        row[0] += 1
+        who = (self.watcher.commander if self.watcher else None) or "unknown"
+        ttk.Label(win, style="Dim.TLabel",
+                  text="uploads as commander %s - public, pseudonymous" % who
+                  ).grid(row=row[0], column=1, sticky="w", padx=14)
+        row[0] += 1
+
+        section("TRIP TIMINGS")
+        cal_txt = self.cal.summary() if self.cal else "no journal data"
+        ttk.Label(win, text=cal_txt, style="Dim.TLabel").grid(
+            row=row[0], column=1, sticky="w", **pad)
+        row[0] += 1
+
+        def reset_cal():
+            if journal:
+                self.cal = journal.Calibration()
+                if self.watcher:
+                    self.watcher.cal = self.cal
+                self.cfg["calibration"] = self.cal.to_dict()
+                save_config(self.cfg)
+                self._show_cal()
+                win.destroy()
+
+        bar = ttk.Frame(win)
+        bar.grid(row=row[0], column=0, columnspan=3, sticky="ew",
+                 padx=14, pady=14)
+        ttk.Button(bar, text="EDIT PLOT MACRO", style="Plot.TButton",
+                   command=lambda: (win.destroy(), self.edit_macro())).pack(side="left")
+        ttk.Button(bar, text="RESET TIMINGS", style="Plot.TButton",
+                   command=reset_cal).pack(side="left", padx=6)
+
+        def save():
+            self.cfg["journal_dir"] = v_journal.get().strip() or None
+            self.cfg["binds_file"] = v_binds.get().strip() or None
+            self.cfg["galaxy_map_key"] = v_key.get().strip() or None
+            self.cfg["deck_enabled"] = bool(self.v_deck.get())
+            self.cfg["eddn_enabled"] = bool(self.v_eddn.get())
+            save_config(self.cfg)
+            if journal and self.cfg["journal_dir"]:
+                self._init_journal()
+            self.set_status("settings saved")
+            win.destroy()
+
+        ttk.Button(bar, text="SAVE", style="Go.TButton",
+                   command=save).pack(side="right")
+        ttk.Button(bar, text="CANCEL", style="Plot.TButton",
+                   command=win.destroy).pack(side="right", padx=6)
+        win.columnconfigure(1, weight=1)
+
+    def _toggle_eddn(self):
+        on = bool(self.v_eddn.get())
+        self.cfg["eddn_enabled"] = on
+        save_config(self.cfg)
+        self.set_status("EDDN sharing %s" % ("ON - your market visits will be "
+                                             "uploaded" if on else "off"))
+
+    def _toggle_deck(self):
+        on = bool(self.v_deck.get())
+        self.cfg["deck_enabled"] = on
+        save_config(self.cfg)
+        self.set_status("Stream Deck button %s" % ("enabled" if on else "disabled"))
+
+    def current_target(self):
+        if self.data and self.data.get("mixed"):
+            try:
+                st = json.load(open(STATE_PATH))
+                idx = min(st.get("index", 0), len(self.data["mixed"]) - 1)
+            except Exception:
+                idx = 0
+            return self.data["mixed"][idx]
+        return None
+
+    def plot_next(self):
+        """Drive Elite's galaxy map to plot the current target."""
+        if plot is None:
+            self.set_status("plot module not found", BAD)
+            return
+        t = self.current_target()
+        if not t:
+            self.set_status("no target yet - run a search first", BAD)
+            return
+        binds = self.cfg.get("binds_file") or plot.find_binds_file()
+        gm = plot.galaxy_map_key(binds, self.cfg.get("galaxy_map_key"))
+        jd = self.watcher.dir if self.watcher else None
+        if self.cfg.get("plot_macro"):
+            # user has hand-tuned a key macro; respect it
+            ok, msg, _log = plot.run_macro(t["system"],
+                                           self.cfg["plot_macro"], gm)
+        elif jd and gm:
+            ok, msg, _log = plot.plot_route(t["system"], jd, gm)
+        else:
+            ok, msg = False, ("no Galaxy Map key bound" if not gm
+                              else "journal dir unknown")
+        self.set_status("%s  ->  %s" % (msg, t["system"]), None if ok else BAD)
+        if ok:
+            write_state(self.data["mixed"])   # advance for the next press
+
+    def edit_macro(self):
+        """Let the plot sequence be tuned without hand-editing JSON."""
+        if plot is None:
+            return
+        binds = plot.find_binds_file()
+        macro = self.cfg.get("plot_macro") or plot.default_panel_macro(binds)
+
+        win = tk.Toplevel(self.root)
+        win.title("Plot macro")
+        win.configure(bg=BG)
+        f = self._fonts()
+        ttk.Label(win, text="Steps run against the Elite window, in order. "
+                            "Tune waits/keys to your UI.",
+                  style="Dim.TLabel").pack(anchor="w", padx=12, pady=(10, 4))
+        txt = tk.Text(win, width=74, height=18, bg=PANEL, fg=TXT,
+                      insertbackground=OR, font=f["mono"],
+                      relief="flat", highlightthickness=1,
+                      highlightbackground=LINE)
+        txt.pack(fill="both", expand=True, padx=12)
+        txt.insert("1.0", json.dumps(macro, indent=2))
+        note = ttk.Label(win, text="<SYSTEM> is replaced with the destination.",
+                         style="Dim.TLabel")
+        note.pack(anchor="w", padx=12, pady=(6, 0))
+
+        bar = ttk.Frame(win)
+        bar.pack(fill="x", padx=12, pady=10)
+
+        def parse():
+            try:
+                m = json.loads(txt.get("1.0", "end"))
+                assert isinstance(m, list)
+                return m
+            except Exception as e:
+                note.configure(text="invalid: %s" % e, foreground=BAD)
+                return None
+
+        def do_dry():
+            m = parse()
+            if m is None:
+                return
+            t = self.current_target()
+            ok, msg, log = plot.run_macro(
+                t["system"] if t else "Sol", m,
+                plot.galaxy_map_key(binds, self.cfg.get("galaxy_map_key")),
+                dry_run=True)
+            note.configure(text="DRY RUN: " + " | ".join(log)[:110],
+                           foreground=DIM)
+
+        def do_save():
+            m = parse()
+            if m is None:
+                return
+            self.cfg["plot_macro"] = m
+            save_config(self.cfg)
+            win.destroy()
+
+        def do_reset():
+            txt.delete("1.0", "end")
+            txt.insert("1.0", json.dumps(plot.default_panel_macro(binds), indent=2))
+
+        ttk.Button(bar, text="DRY RUN", style="Plot.TButton", command=do_dry).pack(side="left")
+        ttk.Button(bar, text="RESET", style="Plot.TButton", command=do_reset).pack(side="left", padx=6)
+        ttk.Button(bar, text="SAVE", style="Go.TButton", command=do_save).pack(side="right")
+
+    def _quit(self):
+        self._save_cal()
+        self.root.destroy()
+
+    def bump_font(self, delta):
+        new = min(FONT_MAX, max(FONT_MIN, self.fs + delta))
+        if new == self.fs:
+            return
+        self.fs = new
+        self.font_lbl.configure(text=str(new))
+        self._style()                       # restyle every widget class
+        self._apply_col_widths()
+        self._fit_window()
+        for e in self.entries:              # ttk.Entry font is per-widget
+            e.configure(font=self._fonts()["mono"])
+        for t in (self.t_mixed, self.t_single):
+            t.tag_configure("head", foreground=OR, font=self._fonts()["bold"])
+        if self.data:                       # redraw so rows pick up the metrics
+            self._fill_mixed()
+            self._fill_single()
+        self.cfg["font_size"] = new
+        save_config(self.cfg)
+
+    # -- journal ---------------------------------------------------------
+    def _init_journal(self):
+        self.watcher = None
+        self.cal = None
+        self.sender = None
+        if journal is None:
+            self.cal_lbl.configure(text="journal module not found")
+            return
+        try:
+            cal = journal.Calibration(self.cfg.get("calibration"))
+            w = journal.JournalWatcher(self.cfg.get("journal_dir"), cal)
+            if not w.dir:
+                self.cal_lbl.configure(text="no Elite journals found")
+                return
+            w.prime()
+            w.on_docked = self._on_docked
+            w.on_event = self._on_journal_event
+            if eddn:
+                self.sender = eddn.Sender(self.cfg.get("eddn_seen"))
+            self.watcher, self.cal = w, w.cal
+            self._show_cal()
+            self.root.after(3000, self._poll_journal)
+        except Exception as e:
+            self.cal_lbl.configure(text="journal error: %s" % e)
+
+    def set_status(self, text, colour=None):
+        self.status.configure(text=text, foreground=colour or DIM)
+
+    def _show_cal(self):
+        if self.cal:
+            self.cal_lbl.configure(text="TIMINGS  " + self.cal.summary())
+
+    def _poll_journal(self):
+        if self.watcher:
+            try:
+                self.watcher.poll()
+                self._show_cal()
+            except Exception:
+                pass
+            self.root.after(3000, self._poll_journal)
+
+    def _on_journal_event(self, e):
+        """A Market event means the game just rewrote Market.json."""
+        if e.get("event") != "Market" or not self.v_eddn.get():
+            return
+        if not (eddn and self.sender and self.watcher):
+            return
+        path = os.path.join(self.watcher.dir, "Market.json")
+        ok, msg = self.sender.maybe_send(
+            path, self.watcher.commander, self.watcher.horizons,
+            self.watcher.odyssey, self.watcher.gameversion,
+            self.watcher.gamebuild)
+        if msg != "already sent":
+            self.set_status("EDDN: %s" % msg, None if ok else BAD)
+            self.cfg["eddn_seen"] = self.sender.to_list()
+            save_config(self.cfg)
+
+    def _on_docked(self, station, system):
+        """Docking at the CG station means a run just ended - refresh."""
+        self._save_cal()
+        if station == CG_STATION and not self.busy:
+            self.status.configure(
+                text="Docked at %s - refreshing for the next run..." % station,
+                foreground=OR)
+            self.search()          # _finish() republishes state at rank 1
+
+    def _save_cal(self):
+        if self.cal:
+            self.cfg["calibration"] = self.cal.to_dict()
+            if self.watcher and self.watcher.dir:
+                self.cfg["journal_dir"] = self.watcher.dir
+            save_config(self.cfg)
+
+    # -- behaviour -------------------------------------------------------
+    def _params(self):
+        def num(var, default, cast=float):
+            try:
+                return cast(var.get().strip())
+            except ValueError:
+                return default
+        return {
+            "hold": max(1, num(self.v_hold, 784, int)),
+            "range": max(1.0, num(self.v_range, 30.0)),
+            "jump_empty": max(1.0, num(self.v_je, 38.0)),
+            "jump_laden": max(1.0, num(self.v_jl, 18.0)),
+            "min_supply": max(0, num(self.v_ms, 200, int)),
+            "carriers": bool(self.v_fc.get()),
+        }
+
+    def search(self):
+        if self.busy:
+            return
+        self.busy = True
+        self.go.state(["disabled"])
+        self.pbar["value"] = 0
+        self.status.configure(text="Starting...", foreground=DIM)
+        threading.Thread(target=self._work, args=(self._params(),),
+                         daemon=True).start()
+
+    def _work(self, params):
+        try:
+            rows, cg, cg_ls = build_rows(
+                params, lambda d, t, n: self.q.put(("prog", (d, t, n))),
+                cal=self.cal)
+            rows.sort(key=lambda r: -r["cr_per_min"])
+            self.q.put(("done", {
+                "rows": rows, "mixed": build_mixed(rows, params["hold"]),
+                "cg": cg, "cg_ls": cg_ls, "params": params}))
+        except Exception as e:
+            self.q.put(("err", "%s: %s" % (type(e).__name__, e)))
+
+    def _drain(self):
+        try:
+            while True:
+                kind, payload = self.q.get_nowait()
+                if kind == "prog":
+                    d, t, n = payload
+                    self.pbar["value"] = d
+                    self.status.configure(
+                        text="Fetching %d/%d commodities  -  %s" % (d, t, n),
+                        foreground=DIM)
+                elif kind == "done":
+                    self._finish(payload)
+                elif kind == "err":
+                    self.busy = False
+                    self.go.state(["!disabled"])
+                    self.status.configure(text=payload, foreground=BAD)
+        except queue.Empty:
+            pass
+        self.root.after(80, self._drain)
+
+    def _finish(self, d):
+        self.data = d
+        self.busy = False
+        self.go.state(["!disabled"])
+        self.pbar["value"] = len(COMMODITIES)
+        self.cg_lbl.configure(text="%s  -  %s  -  %s Ls from arrival"
+                              % (CG_STATION, CG_SYSTEM, f"{d['cg_ls']:,.0f}"))
+        order = sorted(d["cg"], key=lambda k: -d["cg"][k]["sell"])
+        self.prices.configure(
+            text="CG PAYS   " + "    ".join(
+                "%s %s" % (k, f"{d['cg'][k]['sell']:,}") for k in order))
+        self.status.configure(
+            text="%s sources across %d commodities"
+                 % (f"{len(d['rows']):,}", len(d["cg"])), foreground=DIM)
+        self._fill_mixed()
+        self._fill_single()
+        write_state(d["mixed"], keep_index=0)
+
+    def _fill_mixed(self):
+        t = self.t_mixed
+        t.delete(*t.get_children())
+        for i, p in enumerate(self.data["mixed"][:40]):
+            carrier = "  [CARRIER]" if p["carrier"] else ""
+            short = ("  -  %dt short" % p["short"]) if p["short"] else ""
+            parent = t.insert(
+                "", "end", open=(i < 5),
+                values=("%d. %s%s" % (i + 1, p["station"], carrier),
+                        "%s  -  %.1f ly  -  %s Ls  -  data %s%s"
+                        % (p["system"], p["ly"], f"{p['ls']:,}",
+                           age_text(p["updated"]), short),
+                        "%st" % f"{p['tonnes']:,}", "",
+                        f"{p['total']:,}", f"{p['cr_per_min']:,}"),
+                tags=("head",) if i else ("head", "top"))
+            for m in p["mix"]:
+                t.insert(parent, "end", values=(
+                    "      %s" % m["commodity"],
+                    "buy %s" % f"{m['buy']:,}",
+                    "%st" % f"{m['tonnes']:,}",
+                    "+%s" % f"{m['profit_per_t']:,}",
+                    f"{m['value']:,}", ""), tags=("child",))
+
+    def _sort_by(self, col):
+        if self.sort_key == col:
+            self.sort_desc = not self.sort_desc
+        else:
+            self.sort_key, self.sort_desc = col, True
+        self._fill_single()
+
+    def _fill_single(self):
+        t = self.t_single
+        t.delete(*t.get_children())
+        if not self.data:
+            return
+        k, desc = self.sort_key, self.sort_desc
+        rows = sorted(self.data["rows"], key=lambda r: r[k], reverse=desc)[:400]
+        for k2, lbl, _w, _a in self.SINGLE_COLS:
+            arrow = ("  v" if desc else "  ^") if k2 == k else ""
+            t.heading(k2, text=lbl + arrow)
+        for i, r in enumerate(rows):
+            stn = r["station"] + ("  [FC]" if r["carrier"] else "")
+            tags = [age_tag(r["updated"])]
+            if i % 2:
+                tags.append("odd")
+            t.insert("", "end", values=(
+                r["commodity"], stn, r["system"], "%.1f" % r["ly"],
+                f"{r['ls']:,}", f"{r['supply']:,}", r["loads_available"],
+                f"{r['buy']:,}", f"{r['profit_per_t']:,}",
+                "%dm" % round(r["trip_minutes"]), f"{r['cr_per_min']:,}",
+                r["t_per_min"], age_text(r["updated"])), tags=tags)
+
+
+def main():
+    autosearch = "--no-autosearch" not in sys.argv
+    try:
+        root = tk.Tk()
+    except tk.TclError as e:
+        sys.exit("Cannot open a display (%s). This is a desktop app - run it "
+                 "on the machine's desktop session." % e)
+    App(root, autosearch=autosearch)
+    root.mainloop()
+
+
+if __name__ == "__main__":
+    main()
