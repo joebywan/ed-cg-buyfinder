@@ -172,17 +172,13 @@ against the schema before sending, and each market snapshot is sent at most once
 Everything this tool reads came from someone else doing this, which is the
 argument for turning it on.
 
-## cgbuy-next — one deck button
 
-`cgbuy-next` is one Stream Deck button's worth of behaviour, meant to be bound
 to **a single button in your existing deck software** (OpenDeck or anything
-else). It does **not** talk to the Stream Deck hardware, does not take over the
 device, and does not replace your setup.
 
 From an OpenDeck flatpak button:
 
 ```
-flatpak-spawn --host /path/to/cgbuy-next
 ```
 
 Each press reads the ranked target list the app publishes to
@@ -192,9 +188,6 @@ system, mix, distance and value on stdout, so deck software that renders command
 output shows it on the button face.
 
 ```
-cgbuy-next            # show current target, then advance
-cgbuy-next --peek     # print the current target, change nothing
-cgbuy-next --reset    # back to rank 1
 ```
 
 It respects the `deck_enabled` toggle in the config and reports if the app has
@@ -227,7 +220,6 @@ python cgbuy
 ```
 
 The file has no `.py` extension, so Windows will not associate it; invoke it
-through `python`. `cgbuy-next` works the same way.
 
 **Build an .exe:** `build.bat`, the Windows counterpart of `build.sh`.
 

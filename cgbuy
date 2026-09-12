@@ -495,11 +495,6 @@ def _cache_dir():
 
 CONFIG_PATH = os.path.join(_config_dir(), "cgbuy.json")
 
-# Read by cgbuy-next, the single Stream Deck button. Kept separate from the
-# config so deck software can poll it cheaply.
-STATE_PATH = os.path.join(_config_dir(), "cgbuy-state.json")
-
-
 CACHE_PATH = os.path.join(_cache_dir(), "cgbuy-results.json")
 
 
@@ -550,38 +545,6 @@ def age_phrase(stamp):
         return "%d hour%s" % (h, "" if h == 1 else "s")
     d = round(secs / 86400.0)
     return "%d day%s" % (d, "" if d == 1 else "s")
-
-
-def write_state(plans, keep_index=None, advance=False):
-    """Publish the ranked plan list for the deck button.
-
-    keep_index pins the index; advance moves to the next target.
-    """
-    slim = [{"station": p["station"], "system": p["system"], "ly": p["ly"],
-             "ls": p["ls"], "total": p["total"], "cr_per_min": p["cr_per_min"],
-             "updated": p["updated"], "tonnes": p["tonnes"], "short": p["short"],
-             "trip_minutes": p["trip_minutes"],
-             "mix": [{"commodity": m["commodity"], "tonnes": m["tonnes"],
-                      "buy": m["buy"]} for m in p["mix"]]}
-            for p in plans[:8]]
-    prev = {}
-    try:
-        with open(STATE_PATH) as fh:
-            prev = json.load(fh)
-    except Exception:
-        pass
-    idx = keep_index if keep_index is not None else prev.get("index", 0)
-    if advance and slim:
-        idx = (idx + 1) % len(slim)
-    try:
-        os.makedirs(os.path.dirname(STATE_PATH), exist_ok=True)
-        tmp = STATE_PATH + ".tmp"
-        with open(tmp, "w") as fh:
-            json.dump({"plans": slim, "index": min(idx, max(0, len(slim) - 1))},
-                      fh, indent=2)
-        os.replace(tmp, STATE_PATH)     # readers never see a partial file
-    except OSError:
-        pass
 
 
 def load_config():
@@ -886,7 +849,6 @@ class App:
                    command=lambda: self.bump_font(1)).pack(side="left")
 
         self.v_eddn = tk.BooleanVar(value=bool(self.cfg.get("eddn_enabled", False)))
-        self.v_deck = tk.BooleanVar(value=bool(self.cfg.get("deck_enabled", True)))
 
         sb = ttk.Frame(row, style="Panel.TFrame")
         sb.pack(side="left", padx=(0, 14))
@@ -1372,10 +1334,6 @@ class App:
                   "behind the game.", self)
         row[0] += 1
 
-        ttk.Checkbutton(win, text="Stream Deck button (cgbuy-next)",
-                        variable=self.v_deck).grid(row=row[0], column=1,
-                                                   sticky="w", **pad)
-        row[0] += 1
         ttk.Checkbutton(win, text="Share market data to EDDN",
                         variable=self.v_eddn).grid(row=row[0], column=1,
                                                    sticky="w", **pad)
@@ -1424,7 +1382,6 @@ class App:
                 self.cg_lbl.configure(text="%s  -  %s" % (self.dest["station"],
                                                           self.dest["system"]))
             self.cfg["journal_dir"] = v_journal.get().strip() or None
-            self.cfg["deck_enabled"] = bool(self.v_deck.get())
             self.cfg["notifications"] = bool(self.v_notify.get())
             self.cfg["verify_edsm"] = bool(self.v_verify.get())
             try:
@@ -1444,11 +1401,10 @@ class App:
 
         ttk.Button(bar, text="SAVE", style="Go.TButton",
                    command=save).pack(side="right")
-        was_eddn, was_deck = bool(self.v_eddn.get()), bool(self.v_deck.get())
+        was_eddn = bool(self.v_eddn.get())
 
         def cancel():
             self.v_eddn.set(was_eddn)   # the checkbuttons edit the live vars
-            self.v_deck.set(was_deck)
             win.destroy()
 
         ttk.Button(bar, text="CANCEL", style="Alt.TButton",
@@ -1462,21 +1418,9 @@ class App:
         self.set_status("EDDN sharing %s" % ("ON - your market visits will be "
                                              "uploaded" if on else "off"))
 
-    def _toggle_deck(self):
-        on = bool(self.v_deck.get())
-        self.cfg["deck_enabled"] = on
-        save_config(self.cfg)
-        self.set_status("Stream Deck button %s" % ("enabled" if on else "disabled"))
-
     def current_target(self):
         if self.data and self.data.get("mixed"):
-            try:
-                with open(STATE_PATH) as fh:
-                    st = json.load(fh)
-                idx = min(st.get("index", 0), len(self.data["mixed"]) - 1)
-            except Exception:
-                idx = 0
-            return self.data["mixed"][idx]
+            return self.data["mixed"][0]
         return None
 
     def _spawn(self, fn):
@@ -2151,7 +2095,6 @@ class App:
         self._fill_single()
         if not from_cache:
             self._check_new_best(d.get("mixed") or [])
-        write_state(d["mixed"], keep_index=0)
         if not from_cache:
             save_cache(d)
         self._tick_age()
