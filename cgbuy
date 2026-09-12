@@ -38,12 +38,40 @@ try:
 except ImportError:
     cgstanding = None
 
-CG_STATION = "Metz Enterprise"
-CG_SYSTEM = "Ega"
-COMMODITIES = [
-    "Palladium", "Gold", "Silver", "Bertrandite", "Indite", "Gallite",
-    "Coltan", "Uraninite", "Lepidolite", "Cobalt", "Rutile", "Water",
-]
+# Where you sell, and what that place pays well for. Defaults to the goal
+# this tool was written for so an existing install keeps working, but nothing
+# downstream assumes it - the destination travels through build_rows in the
+# params dict.
+DEFAULT_DEST = {
+    "station": "Metz Enterprise",
+    "system": "Ega",
+    "commodities": [
+        "Palladium", "Gold", "Silver", "Bertrandite", "Indite", "Gallite",
+        "Coltan", "Uraninite", "Lepidolite", "Cobalt", "Rutile", "Water",
+    ],
+    "title": None, "expiry": None, "source": "default",
+}
+
+# A destination station's own market gives away which goods it pays a premium
+# for: a CG sells at a fixed multiple of galactic mean price, far above any
+# ordinary market's spread.
+CG_PRICE_RATIO = 2.5
+
+
+def derive_commodities(market_items):
+    """Pick the premium-paying goods from a station's own market.
+
+    `market_items` is Market.json's Items list, which carries MeanPrice.
+    Returns [] when there is no clear premium, so callers fall back rather
+    than acting on noise.
+    """
+    out = []
+    for it in market_items or []:
+        mean = it.get("MeanPrice") or 0
+        sell = it.get("SellPrice") or 0
+        if mean and sell and sell / mean >= CG_PRICE_RATIO:
+            out.append(it.get("Name_Localised") or it.get("Name") or "")
+    return sorted(n for n in out if n)
 
 SPANSH_SEARCH = "https://spansh.co.uk/api/stations/search"
 EDSM_MARKET = ("https://www.edsm.net/api-system-v1/stations/market"
@@ -71,28 +99,33 @@ def get_json(url, timeout=45):
         return json.load(r)
 
 
-def fetch_cg_prices():
-    """Sell prices at the CG station. The CG's price multiplier is already
-    baked into these, so we never apply it ourselves."""
-    url = EDSM_MARKET.format(sys=urllib.parse.quote(CG_SYSTEM),
-                             stn=urllib.parse.quote(CG_STATION))
+def fetch_cg_prices(dest):
+    """Sell prices at the destination for the goods we care about.
+
+    Any community-goal multiplier is already baked into what the station
+    reports, so it is never applied here.
+    """
+    wanted = set(dest["commodities"])
+    url = EDSM_MARKET.format(sys=urllib.parse.quote(dest["system"]),
+                             stn=urllib.parse.quote(dest["station"]))
     data = get_json(url)
     return {c["name"]: {"sell": c["sellPrice"], "demand": c["demand"]}
-            for c in data.get("commodities", []) if c["name"] in COMMODITIES}
+            for c in data.get("commodities", []) if c["name"] in wanted}
 
 
-def fetch_cg_arrival_ls():
+def fetch_cg_arrival_ls(dest):
     try:
-        d = get_json(EDSM_STATIONS.format(sys=urllib.parse.quote(CG_SYSTEM)))
+        d = get_json(EDSM_STATIONS.format(sys=urllib.parse.quote(dest["system"])))
         for s in d.get("stations", []):
-            if s["name"] == CG_STATION:
+            if s["name"] == dest["station"]:
                 return s.get("distanceToArrival", 0) or 0
     except Exception:
         pass
     return 0
 
 
-def fetch_sources(commodity, max_ly, min_supply, page_size=500, max_pages=10):
+def fetch_sources(commodity, max_ly, min_supply, reference_system,
+                  page_size=500, max_pages=10):
     """Every market within max_ly that stocks `commodity`.
 
     Spansh caps results per request, so page through until we run past the
@@ -110,7 +143,8 @@ def fetch_sources(commodity, max_ly, min_supply, page_size=500, max_pages=10):
                 }],
             },
             "sort": [{"distance": {"direction": "asc"}}],
-            "size": page_size, "page": page, "reference_system": CG_SYSTEM,
+            "size": page_size, "page": page,
+            "reference_system": reference_system,
         }
         try:
             res = post_json(SPANSH_SEARCH, payload).get("results", [])
@@ -216,11 +250,13 @@ def trip_minutes(dist_ly, src_ls, cg_ls, jump_empty, jump_laden, cal=None):
 
 def build_rows(p, progress=None, cal=None):
     """Fetch everything and score it. `p` is the parameter dict from the UI."""
-    cg = fetch_cg_prices()
+    dest = p.get("dest") or DEFAULT_DEST
+    commodities = dest["commodities"]
+    cg = fetch_cg_prices(dest)
     if not cg:
         raise RuntimeError("EDSM returned no market for %s - station renamed?"
-                           % CG_STATION)
-    cg_ls = fetch_cg_arrival_ls()
+                           % dest["station"])
+    cg_ls = fetch_cg_arrival_ls(dest)
     rows, done, lock = [], 0, threading.Lock()
 
     def one(name):
@@ -229,7 +265,8 @@ def build_rows(p, progress=None, cal=None):
         local = []
         if info and info["sell"] > 0:
             sell = info["sell"]
-            for st in fetch_sources(name, p["range"], p["min_supply"]):
+            for st in fetch_sources(name, p["range"], p["min_supply"],
+                                    dest["system"]):
                 if not station_fits(st, p.get("pad", "L")):
                     continue
                 carrier = "Carrier" in str(st.get("type", ""))
@@ -266,17 +303,17 @@ def build_rows(p, progress=None, cal=None):
             rows.extend(local)
             done += 1
             if progress:
-                progress(done, len(COMMODITIES), name)
+                progress(done, len(commodities), name)
 
     with ThreadPoolExecutor(max_workers=6) as ex:
-        list(ex.map(one, COMMODITIES))
+        list(ex.map(one, commodities))
 
     # Spansh is the only way to discover candidates, but its index lags by
     # days. Re-check the shortlist against EDSM, which follows EDDN live.
     if verify is not None and p.get("verify_edsm", True):
         rows.sort(key=lambda r: -r["cr_per_min"])
         if progress:
-            progress(len(COMMODITIES), len(COMMODITIES), "verifying vs EDSM")
+            progress(len(commodities), len(commodities), "verifying vs EDSM")
         try:
             checked, corrected, limited = verify.refresh(
                 rows, top=int(p.get("verify_top", VERIFY_TOP_DEFAULT)))
@@ -291,7 +328,7 @@ def build_rows(p, progress=None, cal=None):
             if limited:
                 note += " (rate limited - rest left as Spansh)"
             if progress:
-                progress(len(COMMODITIES), len(COMMODITIES), note)
+                progress(len(commodities), len(commodities), note)
         except Exception as e:
             print("  ! EDSM verify failed: %s" % e, file=sys.stderr)
 
@@ -311,11 +348,11 @@ def build_rows(p, progress=None, cal=None):
             rows = fresh
             hidden_stale = dropped
             if progress:
-                progress(len(COMMODITIES), len(COMMODITIES),
+                progress(len(commodities), len(commodities),
                          "hid %d rows older than %dd" % (dropped, max_age))
         elif progress:
             # Never leave the user with an empty grid because of a filter.
-            progress(len(COMMODITIES), len(COMMODITIES),
+            progress(len(commodities), len(commodities),
                      "all rows older than %dd - showing them anyway" % max_age)
 
     return rows, cg, cg_ls, hidden_stale
@@ -545,6 +582,10 @@ class App:
         self.entries = []
         self.copy_map = {}          # (widget name, item id) -> system name
         self.pad = self.cfg.get("pad_override") or "L"
+        self.dest = dict(DEFAULT_DEST)
+        saved = self.cfg.get("dest")
+        if isinstance(saved, dict) and saved.get("station") and saved.get("commodities"):
+            self.dest.update(saved)
         self.standing = None
         self.ship_label = None
         # 9pt is unreadable on a 5K panel, so scale the default to the display.
@@ -687,7 +728,8 @@ class App:
         f.grid(row=0, column=0, sticky="ew")
         ttk.Label(f, text="CG BUY FINDER", style="Or.TLabel").pack(side="left")
         self.cg_lbl = ttk.Label(
-            f, text="%s  -  %s" % (CG_STATION, CG_SYSTEM), style="Sub.TLabel")
+            f, text="%s  -  %s" % (self.dest["station"], self.dest["system"]),
+            style="Sub.TLabel")
         self.cg_lbl.pack(side="left", padx=(14, 0))
         self.standing_lbl = ttk.Label(f, text="", style="Or.TLabel",
                                       font=self._fonts()["bold"])
@@ -762,7 +804,9 @@ class App:
                                 wraplength=1400, justify="left")
         self.prices.pack(anchor="w", pady=(10, 0))
 
-        self.pbar = ttk.Progressbar(outer, mode="determinate", maximum=len(COMMODITIES))
+        # maximum is set per search: the commodity count varies by destination
+        self.pbar = ttk.Progressbar(outer, mode="determinate",
+                                    maximum=max(1, len(self.dest["commodities"])))
         self.pbar.pack(fill="x", pady=(6, 0))
 
     def _tree(self, parent, columns, show):
@@ -880,6 +924,13 @@ class App:
     def _start_with_cache(self):
         """Render the last results, then offer a refresh rather than forcing one."""
         cached = load_cache()
+        if cached:
+            cd = cached.get("dest") or {}
+            # Results from a different destination would render under this
+            # one's header, which is worse than no cache at all.
+            if (cd.get("station"), cd.get("system")) != (self.dest["station"],
+                                                         self.dest["system"]):
+                cached = None
         if not cached:
             self.search()
             return
@@ -975,6 +1026,109 @@ class App:
         jd = (self.watcher.dir if self.watcher else None) or \
             (journal.find_journal_dir() if journal else "")
 
+        section("DESTINATION")
+        ttk.Label(win, text="Where you sell", style="Dim.TLabel").grid(
+            row=row[0], column=0, sticky="w", **pad)
+        dbox = ttk.Frame(win)
+        dbox.grid(row=row[0], column=1, sticky="w", **pad)
+        v_stn = tk.StringVar(value=self.dest["station"])
+        v_sys = tk.StringVar(value=self.dest["system"])
+        ttk.Entry(dbox, textvariable=v_stn, width=26, font=f["mono"]).pack(side="left")
+        ttk.Label(dbox, text="  in  ", style="Dim.TLabel").pack(side="left")
+        ttk.Entry(dbox, textvariable=v_sys, width=24, font=f["mono"]).pack(side="left")
+        row[0] += 1
+
+        ttk.Label(win, text="Commodities", style="Dim.TLabel").grid(
+            row=row[0], column=0, sticky="nw", **pad)
+        txt_com = tk.Text(win, width=54, height=4, bg=PANEL, fg=TXT,
+                          insertbackground=OR, font=f["mono"], relief="flat",
+                          highlightthickness=1, highlightbackground=LINE)
+        txt_com.grid(row=row[0], column=1, sticky="ew", **pad)
+        txt_com.insert("1.0", ", ".join(self.dest["commodities"]))
+        row[0] += 1
+
+        dest_note = ttk.Label(win, text="source: %s" % self.dest.get("source", "?"),
+                              style="Dim.TLabel")
+        dest_note.grid(row=row[0], column=1, sticky="w", padx=14)
+        row[0] += 1
+
+        dbtn = ttk.Frame(win)
+        dbtn.grid(row=row[0], column=1, sticky="w", padx=14, pady=(2, 0))
+
+        def prefill_from_cg():
+            """Offer the live trade goals Frontier is advertising."""
+            if cgstanding is None:
+                dest_note.configure(text="cg module not available", foreground=BAD)
+                return
+            dest_note.configure(text="fetching live goals...", foreground=None)
+            win.update_idletasks()
+            goals = [g for g in cgstanding.fetch_live() if g.get("is_trade")]
+            if not goals:
+                dest_note.configure(
+                    text="no live trade goals (or the feed is unavailable) - "
+                         "type a destination instead", foreground=WARN)
+                return
+            pick = tk.Toplevel(win)
+            pick.title("Live community goals")
+            pick.configure(bg=BG)
+            pick.transient(win)
+            for i, g in enumerate(goals):
+                pct = (100.0 * g["qty"] / g["target_qty"]) if g["target_qty"] else 0
+                label = ("%s\n   %s, %s   %d commodities   %.1f%%   expires %s"
+                         % (g["title"][:70], g["station"], g["system"],
+                            len(g["commodities"]), pct, g["expiry"]))
+
+                def choose(g=g):
+                    v_stn.set(g["station"]); v_sys.set(g["system"])
+                    txt_com.delete("1.0", "end")
+                    txt_com.insert("1.0", ", ".join(g["commodities"]))
+                    dest_note.configure(text="source: community goal (expires %s)"
+                                             % g["expiry"], foreground=None)
+                    pick.destroy()
+
+                ttk.Button(pick, text=label, style="Alt.TButton",
+                           command=choose).grid(row=i, column=0, sticky="ew",
+                                                padx=12, pady=6)
+            pick.columnconfigure(0, weight=1)
+
+        def derive_from_market():
+            """Read the destination's own market and pick the premium goods."""
+            jd = self.watcher.dir if self.watcher else None
+            if not jd:
+                dest_note.configure(text="journal folder unknown", foreground=BAD)
+                return
+            try:
+                with open(os.path.join(jd, "Market.json"),
+                          encoding="utf-8", errors="replace") as fh:
+                    mk = json.load(fh)
+            except (OSError, ValueError) as e:
+                dest_note.configure(text="cannot read Market.json: %s" % e,
+                                    foreground=BAD)
+                return
+            if mk.get("StationName") != v_stn.get().strip():
+                dest_note.configure(
+                    text="Market.json is %s - dock at %s and open its market first"
+                         % (mk.get("StationName"), v_stn.get().strip()),
+                    foreground=WARN)
+                return
+            found = derive_commodities(mk.get("Items"))
+            if not found:
+                dest_note.configure(text="no premium-priced goods found here",
+                                    foreground=WARN)
+                return
+            txt_com.delete("1.0", "end")
+            txt_com.insert("1.0", ", ".join(found))
+            dest_note.configure(text="source: derived from %s market (%d goods "
+                                     "at >=%.1fx mean price)"
+                                     % (mk["StationName"], len(found), CG_PRICE_RATIO),
+                                foreground=None)
+
+        ttk.Button(dbtn, text="PREFILL FROM LIVE CG", style="Alt.TButton",
+                   command=prefill_from_cg).pack(side="left")
+        ttk.Button(dbtn, text="DERIVE FROM MARKET", style="Alt.TButton",
+                   command=derive_from_market).pack(side="left", padx=6)
+        row[0] += 1
+
         section("ELITE DANGEROUS")
         v_journal = pathrow("Journal folder", jd, browse, True)
         detected = ttk.Label(win, style="Dim.TLabel",
@@ -1041,6 +1195,19 @@ class App:
                    command=reset_cal).pack(side="left", padx=6)
 
         def save():
+            coms = [c.strip() for c in
+                    txt_com.get("1.0", "end").replace("\n", ",").split(",")
+                    if c.strip()]
+            if v_stn.get().strip() and v_sys.get().strip() and coms:
+                self.dest = {"station": v_stn.get().strip(),
+                             "system": v_sys.get().strip(),
+                             "commodities": coms,
+                             "title": self.dest.get("title"),
+                             "expiry": self.dest.get("expiry"),
+                             "source": "manual"}
+                self.cfg["dest"] = self.dest
+                self.cg_lbl.configure(text="%s  -  %s" % (self.dest["station"],
+                                                          self.dest["system"]))
             self.cfg["journal_dir"] = v_journal.get().strip() or None
             self.cfg["deck_enabled"] = bool(self.v_deck.get())
             self.cfg["verify_edsm"] = bool(self.v_verify.get())
@@ -1237,7 +1404,9 @@ class App:
     def _on_docked(self, station, system):
         """Docking at the CG station means a run just ended - refresh."""
         self._save_cal()
-        if station == CG_STATION and not self.busy:
+        if (station == self.dest["station"]
+                and (not system or system == self.dest["system"])
+                and not self.busy):
             self.status.configure(
                 text="Docked at %s - refreshing for the next run..." % station,
                 foreground=OR)
@@ -1266,6 +1435,7 @@ class App:
             "min_supply": max(0, num(self.v_ms, 200, int)),
             "carriers": bool(self.v_fc.get()),
             "pad": self.pad,
+            "dest": self.dest,
             "max_age_days": max(0, num(self.v_age, MAX_AGE_DEFAULT, int)),
             "verify_edsm": bool(self.cfg.get("verify_edsm", True)),
             "verify_top": int(self.cfg.get("verify_top", VERIFY_TOP_DEFAULT)),
@@ -1293,6 +1463,7 @@ class App:
         self._save_params()
         self.busy = True
         self.go.state(["disabled"])
+        self.pbar.configure(maximum=max(1, len(self.dest["commodities"])))
         self.pbar["value"] = 0
         self.status.configure(text="Starting...", foreground=DIM)
         threading.Thread(target=self._work, args=(self._params(),),
@@ -1307,7 +1478,8 @@ class App:
             self.q.put(("done", {
                 "rows": rows, "mixed": build_mixed(rows, params["hold"]),
                 "cg": cg, "cg_ls": cg_ls, "params": params,
-                "hidden_stale": hidden_stale, "fetched_at": time.time()}))
+                "hidden_stale": hidden_stale, "fetched_at": time.time(),
+                "dest": params.get("dest")}))
         except Exception as e:
             self.q.put(("err", "%s: %s" % (type(e).__name__, e)))
 
@@ -1357,9 +1529,10 @@ class App:
         self.data = d
         self.busy = False
         self.go.state(["!disabled"])
-        self.pbar["value"] = len(COMMODITIES)
+        self.pbar["value"] = self.pbar["maximum"]
         self.cg_lbl.configure(text="%s  -  %s  -  %s Ls from arrival"
-                              % (CG_STATION, CG_SYSTEM, f"{d['cg_ls']:,.0f}"))
+                              % (self.dest["station"], self.dest["system"],
+                                 f"{d['cg_ls']:,.0f}"))
         order = sorted(d["cg"], key=lambda k: -d["cg"][k]["sell"])
         self.prices.configure(
             text="CG PAYS   " + "    ".join(

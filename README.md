@@ -9,6 +9,29 @@ market in range come from Spansh. The twelve commodities the CG accepts are
 hardcoded: Palladium, Gold, Silver, Bertrandite, Indite, Gallite, Coltan,
 Uraninite, Lepidolite, Cobalt, Rutile, Water.
 
+
+## Destination
+
+The tool is not tied to one community goal. **Settings → DESTINATION** sets
+where you sell and which goods to look for, and there are two ways to fill it
+in without typing:
+
+- **PREFILL FROM LIVE CG** reads Frontier's own initiatives feed and lists the
+  trade goals currently running (`activityType == "tradelist"` with a commodity
+  list — combat and exploration goals are excluded). Picking one fills in the
+  station, system and its exact commodity list.
+- **DERIVE FROM MARKET** reads `Market.json` for the station you are docked at
+  and picks out whatever it pays a premium for — anything selling at ≥2.5× its
+  galactic mean price. At a CG station that recovers the goal's commodity list
+  exactly; at an ordinary station it finds what that station actually wants.
+
+Neither is required. Type a station, a system and a comma-separated commodity
+list and it works — which also makes it useful for ordinary hauling to any
+station that pays well, not just community goals.
+
+The Frontier feed is undocumented and unsupported, so a failure there is
+treated as normal: you get a message and the manual fields, not an error.
+
 ## The idea
 
 A run carries at most one hold of cargo. The time cost of the trip is the same
