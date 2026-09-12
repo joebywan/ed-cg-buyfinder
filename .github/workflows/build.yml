@@ -1,0 +1,100 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Run the suite
+        # tkinter needs a display even to construct widgets
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq python3-tk xvfb
+          xvfb-run -a python test_cgbuy.py
+
+  build:
+    needs: test
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            artifact: cgbuy-linux
+            built: dist/cgbuy
+          - os: windows-latest
+            artifact: cgbuy-windows.exe
+            built: dist/cgbuy.exe
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Linux tkinter
+        if: runner.os == 'Linux'
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq python3-tk
+      - name: Install PyInstaller
+        run: python -m pip install --quiet --upgrade pip pyinstaller
+      # PyInstaller cannot cross-compile, which is the whole reason for the
+      # matrix: each binary is built on the OS it targets.
+      - name: Build
+        shell: bash
+        run: |
+          python -c "import shutil; shutil.copy('cgbuy', 'build_src.py')"
+          pyinstaller --onefile --name cgbuy --clean --noconfirm --distpath dist --workpath .build --specpath .build build_src.py
+      - name: Smoke test
+        shell: bash
+        run: |
+          test -f "${{ matrix.built }}" || { echo "binary missing"; exit 1; }
+          "${{ matrix.built }}" --version
+      - name: Rename
+        shell: bash
+        run: mv "${{ matrix.built }}" "${{ matrix.artifact }}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ matrix.artifact }}
+
+  snapshot:
+    # Every push to main refreshes a single rolling pre-release, so there is
+    # always a current build to download without minting version numbers.
+    needs: build
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with: { merge-multiple: true }
+      - name: Move the snapshot tag to this commit
+        run: |
+          git tag -f snapshot
+          git push -f origin snapshot
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: snapshot
+          name: "Snapshot (latest main)"
+          prerelease: true
+          body: |
+            Rolling build of `main` — replaced on every push, not a stable version.
+
+            Commit `${{ github.sha }}`
+
+            * `cgbuy-linux` — Linux x86-64
+            * `cgbuy-windows.exe` — Windows x86-64
+
+            Neither is signed; Windows SmartScreen will warn on first run.
+          files: |
+            cgbuy-linux
+            cgbuy-windows.exe

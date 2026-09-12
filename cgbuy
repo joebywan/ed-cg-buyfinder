@@ -663,6 +663,7 @@ class App:
         # Worker threads outlive a destroyed root otherwise, which races the
         # interpreter shutdown and can take the process down on quit.
         self.closing = False
+        self.last_fetch = None      # when the shown data was actually fetched
         self.workers = []
         self.pad = self.cfg.get("pad_override") or "L"
         self.dest = dict(DEFAULT_DEST)
@@ -700,6 +701,7 @@ class App:
         root.columnconfigure(0, weight=1)
         root.rowconfigure(3, weight=1)
         root.after(80, self._drain)
+        root.after(200, self._tick_age)
         if autosearch:
             root.after(200, self._start_with_cache)
         root.bind("<Return>", lambda e: self.search())
@@ -980,6 +982,9 @@ class App:
         self.status = ttk.Label(f, text="Press SEARCH to pull live market data.",
                                 style="Dim.TLabel")
         self.status.pack(side="left")
+        self.fetch_lbl = ttk.Label(f, text="", style="Or.TLabel",
+                                   font=self._fonts()["bold"])
+        self.fetch_lbl.pack(side="left", padx=(18, 0))
         self.cal_lbl = ttk.Label(f, text="", style="Dim.TLabel")
         self.cal_lbl.pack(side="left", padx=(18, 0))
         ttk.Label(f, style="Dim.TLabel",
@@ -1473,6 +1478,30 @@ class App:
         except Exception as e:
             self.cal_lbl.configure(text="journal error: %s" % e)
 
+    def _tick_age(self):
+        """Keep 'updated N ago' honest without waiting for the next search.
+
+        Auto-refresh fires on docking at the destination; without a visible
+        clock there is no way to tell whether it actually ran.
+        """
+        if self.closing:
+            return
+        if self.busy:
+            self.fetch_lbl.configure(text="updating now...", foreground=OR)
+        elif self.last_fetch:
+            mins = cache_age_minutes(self.last_fetch)
+            if mins is None:
+                self.fetch_lbl.configure(text="")
+            else:
+                stale = mins >= int(self.cfg.get("cache_fresh_minutes",
+                                                 CACHE_FRESH_MINUTES))
+                self.fetch_lbl.configure(
+                    text="updated %s ago" % age_phrase(self.last_fetch),
+                    foreground=WARN if stale else GOOD)
+        else:
+            self.fetch_lbl.configure(text="not updated yet", foreground=DIM)
+        self.root.after(15000, self._tick_age)
+
     def set_status(self, text, colour=None):
         self.status.configure(text=text, foreground=colour or DIM)
 
@@ -1629,6 +1658,7 @@ class App:
         self._save_params()
         self.busy = True
         self.go.state(["disabled"])
+        self._tick_age()
         self.pbar.configure(maximum=max(1, len(self.dest["commodities"])))
         self.pbar["value"] = 0
         self.status.configure(text="Starting...", foreground=DIM)
@@ -1696,6 +1726,7 @@ class App:
 
     def _finish(self, d, from_cache=False):
         self.data = d
+        self.last_fetch = d.get("fetched_at")
         self.busy = False
         self.go.state(["!disabled"])
         self.pbar["value"] = self.pbar["maximum"]
@@ -1719,6 +1750,7 @@ class App:
         write_state(d["mixed"], keep_index=0)
         if not from_cache:
             save_cache(d)
+        self._tick_age()
 
     def _fill_mixed(self):
         t = self.t_mixed
