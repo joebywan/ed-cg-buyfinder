@@ -184,6 +184,14 @@ def sc_minutes(ls):
 # Defaults used until the journal has taught us better.
 VERIFY_TOP_DEFAULT = 18    # stations re-checked against EDSM per search
 MAX_AGE_DEFAULT = 7        # drop market data older than this many days
+# Toolbar starting values, used only until a journal names the real ship.
+# Deliberately a small starter hauler: too small is visibly wrong, whereas a
+# plausible big-ship number would be believed.
+HOLD_DEFAULT = 64
+RANGE_DEFAULT = 30
+JUMP_EMPTY_DEFAULT = 20.0
+JUMP_LADEN_DEFAULT = 15.0
+MIN_SUPPLY_DEFAULT = 200
 CACHE_FRESH_MINUTES = 10   # newer than this, show it; older, just re-fetch
 
 # Age colouring. The old 21/120-day thresholds were written for casual
@@ -581,6 +589,39 @@ def save_config(cfg):
         pass          # a UI preference is never worth crashing over
 
 
+# Boxes the ship itself decides. Everything else in PARAM_KEYS is a search
+# preference, remembered exactly as typed.
+SHIP_KEYS = ("hold", "jump_empty", "jump_laden")
+
+
+def _same_number(a, b):
+    """Equal as numbers, so 18 and 18.0 are not a difference of opinion."""
+    try:
+        return abs(float(a) - float(b)) < 1e-9
+    except (TypeError, ValueError):
+        return str(a).strip() == str(b).strip()
+
+
+def manual_ship_fields(current, adopted, previous=()):
+    """Which ship boxes the commander has actually typed over.
+
+    `adopted` is what the app last wrote in from the journal, so a box only
+    counts as hand-set once it stops matching that - and counts as automatic
+    again the moment it matches. A box the journal never filled keeps whatever
+    standing it already had.
+    """
+    manual = set(previous)
+    for k in SHIP_KEYS:
+        auto = adopted.get(k)
+        if auto is None:
+            continue
+        if _same_number(current.get(k), auto):
+            manual.discard(k)
+        else:
+            manual.add(k)
+    return sorted(manual)
+
+
 def days_old(datestr):
     """Whole days since an ISO date, or None if we have no date."""
     if not datestr:
@@ -662,6 +703,13 @@ class App:
         self.last_band = None       # last CG percentile band seen
         self.workers = []
         self.pad = self.cfg.get("pad_override") or "L"
+        # Which ship boxes the commander overrode by hand, and what the journal
+        # last put in them. The old boolean flag meant "a search has happened",
+        # which latched the very first launch's numbers forever, so it is
+        # dropped rather than honoured.
+        self.manual = set(self.cfg.get("manual_fields") or ())
+        self.cfg.pop("manual_params", None)
+        self.auto_params = {}
         self.dest = dict(DEFAULT_DEST)
         saved = self.cfg.get("dest")
         if isinstance(saved, dict) and saved.get("station") and saved.get("commodities"):
@@ -859,11 +907,11 @@ class App:
 
         row = ttk.Frame(p, style="Panel.TFrame")
         row.pack(fill="x")
-        self.v_hold  = self._num(row, "HOLD (T)", 64)
-        self.v_range = self._num(row, "RADIUS (LY)", 30)
-        self.v_je    = self._num(row, "JUMP EMPTY", 20)
-        self.v_jl    = self._num(row, "JUMP LADEN", 15)
-        self.v_ms    = self._num(row, "MIN SUPPLY", 200)
+        self.v_hold  = self._num(row, "HOLD (T)", HOLD_DEFAULT)
+        self.v_range = self._num(row, "RADIUS (LY)", RANGE_DEFAULT)
+        self.v_je    = self._num(row, "JUMP EMPTY", int(JUMP_EMPTY_DEFAULT))
+        self.v_jl    = self._num(row, "JUMP LADEN", int(JUMP_LADEN_DEFAULT))
+        self.v_ms    = self._num(row, "MIN SUPPLY", MIN_SUPPLY_DEFAULT)
         self.v_age   = self._num(row, "MAX AGE (D)", MAX_AGE_DEFAULT, width=5)
 
         self.v_fc = tk.BooleanVar(value=False)
@@ -1971,6 +2019,11 @@ class App:
         w = self.watcher
         if not w or not w.ship:
             return
+        sig = (w.ship, w.cargo_capacity, w.max_jump_range, w.unladen_mass,
+               w.fuel_capacity, w.best_laden_jump)
+        if sig == getattr(self, "_ship_sig", None):
+            return                      # same ship, same numbers, nothing to say
+        self._ship_sig = sig
         if self.cfg.get("pad_override"):
             self.pad = self.cfg["pad_override"]
         else:
@@ -1981,13 +2034,17 @@ class App:
             laden = journal.laden_jump_range(
                 w.max_jump_range, w.unladen_mass, w.fuel_capacity,
                 w.cargo_capacity, w.best_laden_jump)
-        if not self.cfg.get("manual_params"):
-            if w.cargo_capacity:
-                self.v_hold.set(str(w.cargo_capacity))
-            if w.max_jump_range:
-                self.v_je.set("%.1f" % w.max_jump_range)
-            if laden:
-                self.v_jl.set("%.1f" % laden)
+        for key, var, value in (("hold", self.v_hold,
+                                 str(w.cargo_capacity) if w.cargo_capacity else None),
+                                ("jump_empty", self.v_je,
+                                 "%.1f" % w.max_jump_range if w.max_jump_range else None),
+                                ("jump_laden", self.v_jl,
+                                 "%.1f" % laden if laden else None)):
+            if value is None:
+                continue
+            self.auto_params[key] = value
+            if key not in self.manual:
+                var.set(value)
         self.set_status(
             "%s  -  %st hold, %s pad, %s ly laden"
             % (self.ship_label, w.cargo_capacity or "?", self.pad,
@@ -2020,6 +2077,12 @@ class App:
     def _on_journal_event(self, e):
         if e.get("event") in ("CommunityGoalJoin", "CommunityGoalDiscard"):
             self._on_join(e)
+            return
+        if e.get("event") in ("Loadout", "FSDJump"):
+            # Swapping ship or refitting changes the hold and the jump ranges,
+            # and a laden jump is fresh evidence of the real laden range.
+            # Neither should need a restart to be believed.
+            self._adopt_ship()
             return
         """A Market event means the game just rewrote Market.json."""
         if e.get("event") != "Market" or not self.v_eddn.get():
@@ -2085,11 +2148,13 @@ class App:
             except ValueError:
                 return default
         return {
-            "hold": max(1, num(self.v_hold, 784, int)),
-            "range": max(1.0, num(self.v_range, 30.0)),
-            "jump_empty": max(1.0, num(self.v_je, 38.0)),
-            "jump_laden": max(1.0, num(self.v_jl, 18.0)),
-            "min_supply": max(0, num(self.v_ms, 200, int)),
+            # An unreadable box falls back to what it started as, not to some
+            # other ship's numbers.
+            "hold": max(1, num(self.v_hold, HOLD_DEFAULT, int)),
+            "range": max(1.0, num(self.v_range, float(RANGE_DEFAULT))),
+            "jump_empty": max(1.0, num(self.v_je, JUMP_EMPTY_DEFAULT)),
+            "jump_laden": max(1.0, num(self.v_jl, JUMP_LADEN_DEFAULT)),
+            "min_supply": max(0, num(self.v_ms, MIN_SUPPLY_DEFAULT, int)),
             "carriers": bool(self.v_fc.get()),
             "pad": self.pad,
             "dest": self.dest,
@@ -2104,8 +2169,13 @@ class App:
 
     def _save_params(self):
         """Search boxes were reset to defaults on every launch."""
-        self.cfg["params"] = {k: getattr(self, v).get() for k, v in self.PARAM_KEYS}
-        self.cfg["manual_params"] = True
+        cur = {k: getattr(self, v).get() for k, v in self.PARAM_KEYS}
+        self.cfg["params"] = cur
+        # Only boxes that disagree with the journal are the commander's own
+        # choice; the rest keep following the ship.
+        self.manual = set(manual_ship_fields(cur, self.auto_params, self.manual))
+        self.cfg["manual_fields"] = sorted(self.manual)
+        self.cfg.pop("manual_params", None)
         save_config(self.cfg)
 
     def _load_params(self):

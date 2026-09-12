@@ -159,9 +159,10 @@ multiplier is already baked into the EDSM price — the tool does not apply it).
 
 ## Interface
 
-Inputs across the top: hold size (784t), radius (30 ly), jump range empty (38)
-and laden (18), minimum supply (200), and a fleet-carrier toggle. Enter or
-SEARCH runs it.
+Inputs across the top: hold size (64t), radius (30 ly), jump range empty (20)
+and laden (15), minimum supply (200), and a fleet-carrier toggle. The hold and
+the two jump ranges are replaced by your own ship's as soon as a journal is
+read — see [Ship detection](#ship-detection). Enter or SEARCH runs it.
 
 **Font scaling.** The default size is picked from your screen width (9pt under
 2560px, 14 under 3840, 17 above). The `- 9 +` control, or Ctrl+`+` / Ctrl+`-`,
@@ -307,8 +308,13 @@ tell at a glance whether docking at the destination actually refreshed it.
 Hold size, jump ranges and landing-pad class are read from the game's
 `Loadout` event, not typed in. The toolbar values you see before a journal is
 found are a small starter hauler's, present only so the fields are not blank —
-they are replaced the moment a ship is detected, and swapping ships updates
-them.
+they are replaced the moment a ship is detected, and swapping ships or
+refitting updates them live, without a restart.
+
+Type over one of those three boxes and that box is yours from then on: it is
+remembered and the journal stops touching it, while the other two keep
+following the ship. Clear the override by typing the ship's own number back in
+(the status line shows it), and the box goes back to tracking the journal.
 
 Laden jump range is the one the game never reports. It is derived from the
 mass ratio — FSD range is inversely proportional to total mass, so the unladen

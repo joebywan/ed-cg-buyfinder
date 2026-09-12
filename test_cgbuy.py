@@ -1911,6 +1911,97 @@ class TestBandBrackets(unittest.TestCase):
         self.assertEqual(cg.band_brackets(h), {75: (0, 500)})
 
 
+class TestManualShipFields(unittest.TestCase):
+    """Which toolbar boxes stop following the ship.
+
+    The rule the app depends on: saving the search parameters must not, by
+    itself, make a box manual. That bug froze whatever numbers happened to be
+    on screen at the first ever search, and no later journal could correct
+    them.
+    """
+
+    ADOPTED = {"hold": "832", "jump_empty": "39.6", "jump_laden": "27.8"}
+
+    def manual(self, current, adopted=None, previous=()):
+        return cgbuy.manual_ship_fields(current, self.ADOPTED if adopted is None
+                                        else adopted, previous)
+
+    def test_saving_untouched_boxes_claims_nothing(self):
+        self.assertEqual(self.manual(dict(self.ADOPTED)), [])
+
+    def test_a_typed_over_box_is_manual(self):
+        self.assertEqual(self.manual({**self.ADOPTED, "jump_laden": "18"}),
+                         ["jump_laden"])
+
+    def test_only_the_typed_box_stops_following_the_ship(self):
+        manual = self.manual({**self.ADOPTED, "hold": "400"})
+        self.assertEqual(manual, ["hold"])
+        self.assertNotIn("jump_laden", manual)
+
+    def test_the_same_number_written_differently_is_not_an_edit(self):
+        self.assertEqual(self.manual({"hold": "832.0", "jump_empty": " 39.60 ",
+                                      "jump_laden": "27.80"}), [])
+
+    def test_typing_the_ship_number_back_releases_the_override(self):
+        self.assertEqual(self.manual(dict(self.ADOPTED),
+                                     previous=["jump_laden"]), [])
+
+    def test_an_override_survives_a_save_that_did_not_touch_it(self):
+        self.assertEqual(self.manual({**self.ADOPTED, "jump_laden": "18"},
+                                     previous=["jump_laden"]), ["jump_laden"])
+
+    def test_with_no_journal_nothing_becomes_manual(self):
+        # no ship detected, so no value to disagree with
+        self.assertEqual(self.manual({"hold": "64", "jump_laden": "15"},
+                                     adopted={}), [])
+
+    def test_with_no_journal_an_existing_override_is_kept(self):
+        self.assertEqual(self.manual({"hold": "64"}, adopted={},
+                                     previous=["hold"]), ["hold"])
+
+    def test_search_preferences_are_never_ship_fields(self):
+        self.assertEqual(
+            self.manual({**self.ADOPTED, "range": "60", "min_supply": "5000",
+                         "max_age_days": "1"}), [])
+
+    def test_an_unparsable_box_is_an_edit_not_a_crash(self):
+        self.assertEqual(self.manual({**self.ADOPTED, "jump_laden": ""}),
+                         ["jump_laden"])
+
+
+class TestLadenJumpRange(unittest.TestCase):
+    """The laden figure the game never states."""
+
+    # Panther Clipper Mk II: the mass ratio says 27.8, not the 18 that a
+    # stale hand-set box was claiming.
+    PANTHER = dict(max_range=39.575737, unladen_mass=1836.5, fuel=128.0,
+                   cargo=832)
+
+    def test_a_full_hold_scales_the_range_by_the_mass_ratio(self):
+        self.assertAlmostEqual(journal.laden_jump_range(**self.PANTHER),
+                               39.575737 * 1964.5 / 2796.5, places=6)
+
+    def test_an_empty_hold_is_the_unladen_maximum(self):
+        self.assertIsNone(journal.laden_jump_range(
+            **{**self.PANTHER, "cargo": 0}))
+
+    def test_a_longer_jump_actually_made_beats_the_formula(self):
+        self.assertEqual(journal.laden_jump_range(**self.PANTHER,
+                                                  observed=31.0), 31.0)
+
+    def test_a_shorter_jump_actually_made_does_not_drag_it_down(self):
+        self.assertAlmostEqual(
+            journal.laden_jump_range(**self.PANTHER, observed=21.555),
+            journal.laden_jump_range(**self.PANTHER))
+
+    def test_without_a_loadout_there_is_only_what_was_flown(self):
+        self.assertEqual(journal.laden_jump_range(None, None, None, 832,
+                                                  observed=21.5), 21.5)
+
+    def test_nothing_known_is_no_answer_rather_than_a_guess(self):
+        self.assertIsNone(journal.laden_jump_range(None, None, None, None))
+
+
 class TestStanding(unittest.TestCase):
 
     def test_an_empty_history_has_no_standing(self):
