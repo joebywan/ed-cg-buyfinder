@@ -264,3 +264,21 @@ daemon; the mark clears when you next focus the window. Turn it off with
 The status bar also shows how long ago the shown data was fetched, ticking
 live and turning amber once it passes the auto-refresh threshold — so you can
 tell at a glance whether docking at the destination actually refreshed it.
+
+## Ship detection
+
+Hold size, jump ranges and landing-pad class are read from the game's
+`Loadout` event, not typed in. The toolbar values you see before a journal is
+found are a small starter hauler's, present only so the fields are not blank —
+they are replaced the moment a ship is detected, and swapping ships updates
+them.
+
+Laden jump range is the one the game never reports. It is derived from the
+mass ratio — FSD range is inversely proportional to total mass, so the unladen
+maximum scales by `(hull + fuel) / (hull + fuel + cargo)` — and then floored by
+the longest jump you have actually made with cargo aboard, which is hard
+evidence no formula can argue with.
+
+This matters more than it sounds. An underestimate makes the tool think the
+return leg needs an extra jump, inflating every trip time and quietly biasing
+the ranking against the nearer stations.

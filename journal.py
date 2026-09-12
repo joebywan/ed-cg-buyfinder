@@ -145,6 +145,23 @@ class Calibration:
         return "  |  ".join(bits)
 
 
+def laden_jump_range(max_range, unladen_mass, fuel, cargo, observed=None):
+    """Jump range with a full hold.
+
+    FSD range is inversely proportional to total mass, so scaling the ship's
+    unladen maximum by the mass ratio gives the laden figure. `observed` is
+    the longest jump actually made while carrying cargo - a hard lower bound
+    that overrides the estimate if the estimate is somehow lower.
+    """
+    est = None
+    if max_range and unladen_mass and cargo:
+        dry = unladen_mass + (fuel or 0.0)
+        est = max_range * dry / (dry + cargo)
+    if observed and (not est or observed > est):
+        est = observed
+    return est
+
+
 def est_sc_minutes(ls):
     """The uncalibrated supercruise estimate (same curve the app ships with)."""
     return 0.25 * max(ls, 1) ** 0.3
@@ -172,6 +189,10 @@ class JournalWatcher:
         self.ship_name = None       # localised, e.g. "Panther Clipper Mk II"
         self.cargo_capacity = None
         self.max_jump_range = None
+        self.unladen_mass = None
+        self.fuel_capacity = None
+        self.best_laden_jump = None     # longest jump actually made with cargo
+        self._cargo = None
         self.horizons = None
         self.odyssey = None
         self.gameversion = None
@@ -268,6 +289,11 @@ class JournalWatcher:
                 if 15 <= dt <= 300:
                     self.cal._add(self.cal.jump_secs, dt)
                     learned = True
+            # A jump actually made with a hold full of cargo is hard evidence
+            # of laden range, and beats any formula.
+            if self._cargo and self._cargo > 0 and e.get("JumpDist"):
+                if not self.best_laden_jump or e["JumpDist"] > self.best_laden_jump:
+                    self.best_laden_jump = e["JumpDist"]
             self._last_fsdjump = ts
             self._arrived_at = ts
             self._jump_start = None
@@ -309,6 +335,11 @@ class JournalWatcher:
                 self.cargo_capacity = e["CargoCapacity"]
             if e.get("MaxJumpRange"):
                 self.max_jump_range = e["MaxJumpRange"]
+            if e.get("UnladenMass"):
+                self.unladen_mass = e["UnladenMass"]
+            fuel = e.get("FuelCapacity")
+            if isinstance(fuel, dict) and fuel.get("Main"):
+                self.fuel_capacity = fuel["Main"]
         elif ev in ("LoadGame", "Fileheader"):
             if e.get("Ship"):
                 self.ship = e["Ship"].lower()
@@ -320,6 +351,8 @@ class JournalWatcher:
                 self.odyssey = e["Odyssey"]
             self.gameversion = e.get("gameversion", self.gameversion)
             self.gamebuild = (e.get("build") or self.gamebuild or "").strip() or None
+        elif ev == "Cargo" and e.get("Count") is not None:
+            self._cargo = e["Count"]
         elif ev == "Location":
             self.system = e.get("StarSystem", self.system)
             self.station = e.get("StationName")

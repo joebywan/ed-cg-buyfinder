@@ -845,10 +845,10 @@ class App:
 
         row = ttk.Frame(p, style="Panel.TFrame")
         row.pack(fill="x")
-        self.v_hold  = self._num(row, "HOLD (T)", 784)
+        self.v_hold  = self._num(row, "HOLD (T)", 64)
         self.v_range = self._num(row, "RADIUS (LY)", 30)
-        self.v_je    = self._num(row, "JUMP EMPTY", 38)
-        self.v_jl    = self._num(row, "JUMP LADEN", 18)
+        self.v_je    = self._num(row, "JUMP EMPTY", 20)
+        self.v_jl    = self._num(row, "JUMP LADEN", 15)
         self.v_ms    = self._num(row, "MIN SUPPLY", 200)
         self.v_age   = self._num(row, "MAX AGE (D)", MAX_AGE_DEFAULT, width=5)
 
@@ -1607,10 +1607,16 @@ class App:
         self.standing_lbl.configure(text="   ".join(bits))
 
     def _adopt_ship(self):
-        """Take hold size, jump range and pad class from the ship you fly.
+        """Take hold size, jump ranges and pad class from the ship you fly.
 
-        Three of the five search boxes are facts about the ship, previously
-        retyped by hand and silently wrong after a ship swap.
+        These are facts about the ship, not preferences: the toolbar defaults
+        exist only for the case where no journal can be found, and are
+        deliberately those of a small starter hauler rather than any
+        particular ship.
+
+        Laden range is the one the game never states. It is derived from the
+        mass ratio (FSD range is inversely proportional to total mass) and
+        floored by the longest jump actually made with cargo aboard.
         """
         w = self.watcher
         if not w or not w.ship:
@@ -1620,13 +1626,22 @@ class App:
         else:
             self.pad = pad_for_ship(w.ship)
         self.ship_label = w.ship_name or w.ship
+        laden = None
+        if journal is not None:
+            laden = journal.laden_jump_range(
+                w.max_jump_range, w.unladen_mass, w.fuel_capacity,
+                w.cargo_capacity, w.best_laden_jump)
         if not self.cfg.get("manual_params"):
             if w.cargo_capacity:
                 self.v_hold.set(str(w.cargo_capacity))
             if w.max_jump_range:
                 self.v_je.set("%.1f" % w.max_jump_range)
-        self.set_status("%s  -  %st hold, %s pad"
-                        % (self.ship_label, w.cargo_capacity or "?", self.pad))
+            if laden:
+                self.v_jl.set("%.1f" % laden)
+        self.set_status(
+            "%s  -  %st hold, %s pad, %s ly laden"
+            % (self.ship_label, w.cargo_capacity or "?", self.pad,
+               "%.1f" % laden if laden else "?"))
 
     def _show_cal(self):
         if self.cal:
