@@ -319,6 +319,13 @@ False positives are reported to the vendors as they come up. Beyond that, the
 options above are the answer: run from source, check the hash, read the sandbox
 report — or don't run it. All three are reasonable.
 
+Every release scans itself. After a version is published, CI submits both
+binaries to VirusTotal and appends the detection counts, hashes and the names
+of any flagging engines to the release notes. The numbers are a point-in-time
+reading and the links show the current verdict — but it means anyone forwarded
+an alarming-looking scan link finds the same figures already on the download
+page, with this section next to them, rather than having to guess.
+
 ## Notifications
 
 The window normally sits behind the game, so it tells you when something
