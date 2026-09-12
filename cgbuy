@@ -2413,7 +2413,7 @@ class App:
             self._remember(t, iid, r["system"])
 
 
-VERSION = "2.1"
+VERSION = "1.0"
 
 USAGE = """cgbuy - where to buy for a community goal, ranked by credits/minute
 
