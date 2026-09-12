@@ -85,6 +85,9 @@ class Calibration:
         d = data or {}
         self.jump_secs = list(d.get("jump_secs", []))[-200:]
         self.dock_secs = list(d.get("dock_secs", []))[-200:]
+        # Undocked -> first FSDJump: launch, clear mass lock, align, charge.
+        # Mechanical and low variance, unlike time spent sitting on the pad.
+        self.depart_secs = list(d.get("depart_secs", []))[-200:]
         # Deliberately NOT loaded from config: earlier versions paired each
         # supercruise duration with the arrival distance of the previously
         # docked station, which is unrelated. Those samples are unusable.
@@ -95,6 +98,7 @@ class Calibration:
 
     def to_dict(self):
         return {"jump_secs": self.jump_secs, "dock_secs": self.dock_secs,
+                "depart_secs": self.depart_secs,
                 "approach_samples": self.approach_samples}
 
     # -- learned values, or None when we don't have the evidence -----------
@@ -117,6 +121,13 @@ class Calibration:
         if len(self.dock_secs) < self.MIN_SAMPLES:
             return None
         return statistics.median(self.dock_secs) / 60.0
+
+    @property
+    def depart_minutes(self):
+        """Median time from leaving the pad to the first jump, in minutes."""
+        if len(self.depart_secs) < self.MIN_SAMPLES:
+            return None
+        return statistics.median(self.depart_secs) / 60.0
 
     @property
     def sc_scale(self):
@@ -144,6 +155,10 @@ class Calibration:
         j, d, s = self.jump_minutes, self.dock_minutes, self.sc_scale
         bits.append("jump %s" % ("%.2f min (n=%d)" % (j, len(self.jump_secs))
                                  if j else "estimate (n=%d)" % len(self.jump_secs)))
+        dep = self.depart_minutes
+        bits.append("departure %s" % ("%.1f min (n=%d)" % (dep, len(self.depart_secs))
+                                      if dep else "estimate (n=%d)"
+                                      % len(self.depart_secs)))
         bits.append("station stop %s (not used: fixed 2 min turnaround)"
                     % ("%.1f min median" % d if d else "no samples"))
         n_sc = len(self.approach_samples)
@@ -228,6 +243,7 @@ class JournalWatcher:
         self._jump_start = None
         self._last_fsdjump = None
         self._arrived_at = None
+        self._undocked_at = None
         self._dock_at = None
         self._sc_entry = None
         self._last_ls = None
@@ -321,6 +337,12 @@ class JournalWatcher:
             if self._cargo and self._cargo > 0 and e.get("JumpDist"):
                 if not self.best_laden_jump or e["JumpDist"] > self.best_laden_jump:
                     self.best_laden_jump = e["JumpDist"]
+            if self._undocked_at and ts and ts > self._undocked_at:
+                dt = ts - self._undocked_at
+                if 20 <= dt <= 600:      # beyond ten minutes is not a departure
+                    self.cal._add(self.cal.depart_secs, dt)
+                    learned = True
+            self._undocked_at = None
             self._last_fsdjump = ts
             self._arrived_at = ts
             self._jump_start = None
@@ -356,6 +378,7 @@ class JournalWatcher:
                     self.cal._add(self.cal.dock_secs, dt)
                     learned = True
             self._dock_at, self.docked = None, False
+            self._undocked_at = ts
         elif ev == "Loadout":
             # The ship is the source of truth for hold size, jump range and
             # which landing pads you can actually use.

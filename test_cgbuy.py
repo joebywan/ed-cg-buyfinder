@@ -664,7 +664,7 @@ class TestTripMinutes(unittest.TestCase):
         expected = (5 * cgbuy.EST_JUMP_MIN
                     + (cgbuy.sc_minutes(1000) + cgbuy.sc_minutes(500))
                     * cgbuy.EST_SC_SCALE
-                    + cgbuy.EST_DOCK_MIN * 2)
+                    + (cgbuy.EST_DOCK_MIN + cgbuy.EST_DEPART_MIN) * 2)
         self.assertAlmostEqual(self.trip(), expected)
 
     def test_calibrated_jump_time_is_used_when_supplied(self):
@@ -672,9 +672,18 @@ class TestTripMinutes(unittest.TestCase):
         self.assertAlmostEqual(cal.jump_minutes, 2.0)
         expected = (5 * 2.0
                     + (cgbuy.sc_minutes(1000) + cgbuy.sc_minutes(500))
-                    + cgbuy.EST_DOCK_MIN * 2)
+                    + (cgbuy.EST_DOCK_MIN + cgbuy.EST_DEPART_MIN) * 2)
         self.assertAlmostEqual(self.trip(cal=cal), expected)
         self.assertGreater(self.trip(cal=cal), self.trip())
+
+    def test_departure_is_counted_and_calibrated(self):
+        """Undocked -> first jump used to fall between the cracks: jump time
+        is measured jump-to-jump, so the run out from the pad was in no
+        interval at all. It happens twice a round trip."""
+        cal = journal.Calibration({"depart_secs": [300.0] * 3})   # 5 min out
+        self.assertAlmostEqual(cal.depart_minutes, 5.0)
+        gap = self.trip(cal=cal) - self.trip()
+        self.assertAlmostEqual(gap, (5.0 - cgbuy.EST_DEPART_MIN) * 2)
 
     def test_station_time_is_fixed_and_never_calibrated(self):
         """Docked -> Undocked cannot separate trading from being AFK, so the

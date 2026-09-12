@@ -245,6 +245,7 @@ EST_JUMP_MIN = 0.85        # align + charge + jump + scoop
 # out of the median also discards genuine 40-minute stops. Two minutes is a
 # clean turnaround: dock, trade, undock.
 EST_DOCK_MIN = 2.0
+EST_DEPART_MIN = 1.8       # undocked -> first jump, until measured
 EST_SC_SCALE = 1.0         # multiplier on the sc_minutes curve
 
 
@@ -257,13 +258,19 @@ def trip_minutes(dist_ly, src_ls, cg_ls, jump_empty, jump_laden, cal=None):
     """
     jump_min = (cal.jump_minutes if cal and cal.jump_minutes else EST_JUMP_MIN)
     dock_min = EST_DOCK_MIN        # never calibrated; see the constant
+    depart_min = (cal.depart_minutes if cal and cal.depart_minutes
+                  else EST_DEPART_MIN)
     sc_scale = (cal.sc_scale if cal and cal.sc_scale else EST_SC_SCALE)
 
     out_j = math.ceil(dist_ly / jump_empty) if dist_ly > 0 else 0
     back_j = math.ceil(dist_ly / jump_laden) if dist_ly > 0 else 0
     jumps = (out_j + back_j) * jump_min
     legs = (sc_minutes(src_ls) + sc_minutes(cg_ls)) * sc_scale
-    return max(jumps + legs + dock_min * 2, 0.5)
+    # Two of each per round trip: leave the destination, arrive at the
+    # source, leave the source, arrive back. Departure was previously counted
+    # nowhere - jump time is measured jump-to-jump, so the run out from the
+    # pad to the first jump fell between the cracks.
+    return max(jumps + legs + (dock_min + depart_min) * 2, 0.5)
 
 
 def build_rows(p, progress=None, cal=None):
