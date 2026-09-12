@@ -341,7 +341,7 @@ def wait_for_route(journal_dir, system, timeout=12.0, poll=0.5):
 
 def plot_route(system, journal_dir, gm_key=None, dry_run=False,
                open_timeout=8.0, type_delay=30,
-               select_right=3, select_down=7):
+               select_right=3, select_down=7, walk_pane=False):
     """Open the galaxy map, confirm it is open, then search for `system`.
 
     Closed-loop: every stage is verified against Status.json GuiFocus, so we
@@ -406,9 +406,16 @@ def plot_route(system, journal_dir, gm_key=None, dry_run=False,
     send_key(win, "space"); time.sleep(1.6)
     log.append("selected first result")
 
-    # Walk the destination pane to "plot route". These counts depend on the
-    # pane layout, so they are configurable and the result is verified
-    # against NavRoute.json rather than assumed.
+    if not walk_pane:
+        # Stop here by default. Walking the destination pane with fixed arrow
+        # counts is NOT safe: the pane layout varies with what the system
+        # offers, and an off-by-one lands somewhere else entirely. In testing
+        # it reached the ARX store and then the pause menu. The map is open
+        # with the system selected - one keypress finishes it, and you can
+        # see what you are pressing.
+        return True, ("found %s - press the plot button to confirm the route"
+                      % system), log
+
     for _ in range(max(0, select_right)):
         send_key(win, "Right"); time.sleep(0.4)
     for _ in range(max(0, select_down)):
@@ -419,8 +426,8 @@ def plot_route(system, journal_dir, gm_key=None, dry_run=False,
     if wait_for_route(journal_dir, system, timeout=12.0):
         return True, "plotted %s" % system, log
     return (False,
-            "typed %s but no route appeared - adjust plot_select_right / "
-            "plot_select_down in settings" % system, log)
+            "typed %s but no route appeared - the pane walk did not land on "
+            "plot route" % system, log)
 
 
 def run_macro(system, macro=None, gm_key=None, dry_run=False):

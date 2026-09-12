@@ -989,7 +989,8 @@ class App:
             ok, msg, _log = plot.plot_route(
                 t["system"], jd, gm,
                 select_right=int(self.cfg.get("plot_select_right", 3)),
-                select_down=int(self.cfg.get("plot_select_down", 7)))
+                select_down=int(self.cfg.get("plot_select_down", 7)),
+                walk_pane=bool(self.cfg.get("plot_walk_pane", False)))
         else:
             ok, msg = False, ("no Galaxy Map key bound" if not gm
                               else "journal dir unknown")
