@@ -912,10 +912,15 @@ class App:
         # A dismissible notice, not a blocker: routes load either way.
         self.banner = ttk.Frame(outer, style="Banner.TFrame")
         self.banner_lbl = ttk.Label(self.banner, text="", style="Banner.TLabel",
-                                    anchor="w", wraplength=1500, justify="left")
+                                    anchor="w", wraplength=1400, justify="left")
         self.banner_lbl.pack(side="left", fill="x", expand=True)
         ttk.Button(self.banner, text="GOT IT", style="Alt.TButton",
-                   command=self._dismiss_banner).pack(side="right", padx=(12, 0))
+                   command=self._dismiss_banner).pack(side="right", padx=(8, 0))
+        # You need the system in the galaxy map search to get there at all.
+        self.banner_copy = ttk.Button(self.banner, text="COPY SYSTEM",
+                                      style="Alt.TButton",
+                                      command=self._copy_dest_system)
+        self.banner_copy.pack(side="right")
         self.banner_dismissed = False
         self.pbar = ttk.Progressbar(outer, mode="determinate",
                                     maximum=max(1, len(self.dest["commodities"])))
@@ -1606,6 +1611,25 @@ class App:
             self.banner_lbl.configure(text="")
             self.banner.pack_forget()
 
+    def _copy_dest_system(self):
+        """Put the destination system on the clipboard, ready to paste into
+        the galaxy map search."""
+        system = self.dest.get("system")
+        if not system:
+            return
+        try:
+            self.root.clipboard_clear()
+            self.root.clipboard_append(system)
+            self.root.update_idletasks()
+        except tk.TclError:
+            self.set_status("could not reach the clipboard", BAD)
+            return
+        self.banner_copy.configure(text="COPIED")
+        self.root.after(1800, lambda: self.banner_copy.configure(
+            text="COPY SYSTEM"))
+        self.set_status("copied  %s  - paste it into the galaxy map search"
+                        % system, OR)
+
     def _dismiss_banner(self):
         # Session-only: a new launch while still unregistered reminds once
         # more, which is the last useful moment to mention it.
@@ -1664,7 +1688,8 @@ class App:
                 "We've found a trading community goal you'll need to register "
                 "for, at %s in %s.  Head there and sign up at the goal board - "
                 "anything you deliver before registering won't count.  "
-                "Meanwhile we're working out your best trade routes.%s%s"
+                "Meanwhile we're working out your best trade routes.  "
+                "Use COPY SYSTEM to paste it into the galaxy map.%s%s"
                 % (self.dest["station"], self.dest["system"],
                    "  Goal ends %s." % expiry[:16] if expiry else "", more))
             self.set_status("Live CG at %s, %s - register there to contribute"
