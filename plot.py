@@ -311,8 +311,37 @@ def galaxy_map_key(binds_path=None, override=None):
     return read_bind(binds_path or find_binds_file(), "GalaxyMapOpen")
 
 
+def read_route(journal_dir):
+    """Systems in the currently plotted route, from the game's own file."""
+    import json
+    try:
+        with open(os.path.join(journal_dir, "NavRoute.json"),
+                  encoding="utf-8", errors="replace") as fh:
+            return [h.get("StarSystem") for h in json.load(fh).get("Route", [])]
+    except (OSError, ValueError, TypeError):
+        return []
+
+
+def wait_for_route(journal_dir, system, timeout=12.0, poll=0.5):
+    """True once NavRoute.json actually contains `system`.
+
+    This is the only honest confirmation that a route was plotted - the UI
+    navigation counts below are not verifiable any other way.
+    """
+    import time as _t
+    deadline = _t.time() + timeout
+    want = (system or "").strip().lower()
+    while _t.time() < deadline:
+        route = [r.lower() for r in read_route(journal_dir) if r]
+        if route and want in route:
+            return True
+        _t.sleep(poll)
+    return False
+
+
 def plot_route(system, journal_dir, gm_key=None, dry_run=False,
-               open_timeout=8.0, type_delay=30):
+               open_timeout=8.0, type_delay=30,
+               select_right=3, select_down=7):
     """Open the galaxy map, confirm it is open, then search for `system`.
 
     Closed-loop: every stage is verified against Status.json GuiFocus, so we
@@ -355,20 +384,43 @@ def plot_route(system, journal_dir, gm_key=None, dry_run=False,
                     "when the bind was added, restart it."
                     % GUI_NAMES.get(focus, focus), log)
 
-    time.sleep(0.6)
-    send_key(win, "ctrl+a")
-    ok, why = send_text(win, system, type_delay)
+    time.sleep(1.0)
+
+    # Reach the search box from a known state. Left then Right always lands
+    # on it regardless of where the cursor was, and Space is what actually
+    # puts the field into text-entry mode - without it, characters are
+    # silently dropped however they are injected.
+    for key, pause in (("Left", 0.5), ("Right", 0.5), ("space", 0.7)):
+        send_key(win, key)
+        time.sleep(pause)
+    log.append("focused search box")
+
+    ok, why = send_text_held(win, system, hold=0.09, gap=0.05)
     if not ok:
         return False, why, log
     log.append("typed %r" % system)
-    time.sleep(0.9)
-    send_key(win, "Return")
-    log.append("Return (search)")
     time.sleep(1.6)
-    send_key(win, "Return")
-    log.append("Return (select/plot)")
 
-    return True, "plotted %s" % system, log
+    # Pick the first result.
+    send_key(win, "Down"); time.sleep(0.5)
+    send_key(win, "space"); time.sleep(1.6)
+    log.append("selected first result")
+
+    # Walk the destination pane to "plot route". These counts depend on the
+    # pane layout, so they are configurable and the result is verified
+    # against NavRoute.json rather than assumed.
+    for _ in range(max(0, select_right)):
+        send_key(win, "Right"); time.sleep(0.4)
+    for _ in range(max(0, select_down)):
+        send_key(win, "Down"); time.sleep(0.4)
+    send_key(win, "space")
+    log.append("right x%d, down x%d, select" % (select_right, select_down))
+
+    if wait_for_route(journal_dir, system, timeout=12.0):
+        return True, "plotted %s" % system, log
+    return (False,
+            "typed %s but no route appeared - adjust plot_select_right / "
+            "plot_select_down in settings" % system, log)
 
 
 def run_macro(system, macro=None, gm_key=None, dry_run=False):

@@ -857,6 +857,24 @@ class App:
             row=row[0], column=1, sticky="w", padx=14)
         row[0] += 1
 
+        section("PLOT ROUTE")
+        ttk.Label(win, text="Destination pane steps", style="Dim.TLabel").grid(
+            row=row[0], column=0, sticky="w", **pad)
+        steps = ttk.Frame(win)
+        steps.grid(row=row[0], column=1, sticky="w", **pad)
+        v_right = tk.StringVar(value=str(self.cfg.get("plot_select_right", 3)))
+        v_down = tk.StringVar(value=str(self.cfg.get("plot_select_down", 7)))
+        ttk.Label(steps, text="right x", style="Dim.TLabel").pack(side="left")
+        ttk.Entry(steps, textvariable=v_right, width=4, font=f["mono"]).pack(side="left")
+        ttk.Label(steps, text="  down x", style="Dim.TLabel").pack(side="left")
+        ttk.Entry(steps, textvariable=v_down, width=4, font=f["mono"]).pack(side="left")
+        row[0] += 1
+        ttk.Label(win, style="Dim.TLabel",
+                  text="how far to walk the destination pane to reach "
+                       "\"plot route\"; verified against NavRoute.json").grid(
+            row=row[0], column=1, sticky="w", padx=14)
+        row[0] += 1
+
         section("INTEGRATIONS")
         ttk.Checkbutton(win, text="Stream Deck button (cgbuy-next)",
                         variable=self.v_deck).grid(row=row[0], column=1,
@@ -900,6 +918,12 @@ class App:
             self.cfg["journal_dir"] = v_journal.get().strip() or None
             self.cfg["binds_file"] = v_binds.get().strip() or None
             self.cfg["galaxy_map_key"] = v_key.get().strip() or None
+            for key, var, dflt in (("plot_select_right", v_right, 3),
+                                   ("plot_select_down", v_down, 7)):
+                try:
+                    self.cfg[key] = max(0, int(var.get().strip()))
+                except ValueError:
+                    self.cfg[key] = dflt
             self.cfg["deck_enabled"] = bool(self.v_deck.get())
             self.cfg["eddn_enabled"] = bool(self.v_eddn.get())
             save_config(self.cfg)
@@ -962,7 +986,10 @@ class App:
             ok, msg, _log = plot.run_macro(t["system"],
                                            self.cfg["plot_macro"], gm)
         elif jd and gm:
-            ok, msg, _log = plot.plot_route(t["system"], jd, gm)
+            ok, msg, _log = plot.plot_route(
+                t["system"], jd, gm,
+                select_right=int(self.cfg.get("plot_select_right", 3)),
+                select_down=int(self.cfg.get("plot_select_down", 7)))
         else:
             ok, msg = False, ("no Galaxy Map key bound" if not gm
                               else "journal dir unknown")
