@@ -725,6 +725,25 @@ class App:
                     font=MONO_B, padding=(12, 8))
         s.configure("Sub.TLabel", background=BG, foreground=DIM, font=MONO)
 
+        # ttk.Combobox does NOT inherit TEntry styling: without this it keeps
+        # Tk's white field, and pale text on white is unreadable. The dropdown
+        # list is a Tk widget, not ttk, so it is set via option_add below.
+        s.configure("TCombobox", fieldbackground="#0a0908", background="#2a2118",
+                    foreground=TXT, arrowcolor=OR, bordercolor=LINE,
+                    lightcolor=LINE, darkcolor=LINE, insertcolor=OR,
+                    selectbackground=SEL, selectforeground=OR)
+        s.map("TCombobox",
+              fieldbackground=[("readonly", "#0a0908"), ("focus", "#0a0908")],
+              foreground=[("readonly", TXT), ("focus", TXT),
+                          ("disabled", DIM)],
+              selectbackground=[("!focus", "#0a0908")],
+              selectforeground=[("!focus", TXT)])
+        self.root.option_add("*TCombobox*Listbox.background", PANEL)
+        self.root.option_add("*TCombobox*Listbox.foreground", TXT)
+        self.root.option_add("*TCombobox*Listbox.selectBackground", SEL)
+        self.root.option_add("*TCombobox*Listbox.selectForeground", OR)
+        self.root.option_add("*TCombobox*Listbox.font", MONO)
+
         s.configure("TEntry", fieldbackground="#0a0908", foreground=TXT,
                     insertcolor=OR, bordercolor=LINE, lightcolor=LINE,
                     darkcolor=LINE, borderwidth=1)
@@ -973,17 +992,20 @@ class App:
     def _statusbar(self):
         f = ttk.Frame(self.root, padding=(16, 6, 16, 10))
         f.grid(row=4, column=0, sticky="ew")
+        # Pack the right-hand hint FIRST so the status text yields to it
+        # instead of overlapping when it grows.
+        ttk.Label(f, style="Dim.TLabel",
+                  text="click a row to copy its system  -  trip times are "
+                       "estimates").pack(side="right")
         self.status = ttk.Label(f, text="Press SEARCH to pull live market data.",
-                                style="Dim.TLabel")
-        self.status.pack(side="left")
+                                style="Dim.TLabel", anchor="w")
+        self.status.pack(side="left", fill="x", expand=True)
         self.fetch_lbl = ttk.Label(f, text="", style="Or.TLabel",
                                    font=self._fonts()["bold"])
-        self.fetch_lbl.pack(side="left", padx=(18, 0))
-        self.cal_lbl = ttk.Label(f, text="", style="Dim.TLabel")
-        self.cal_lbl.pack(side="left", padx=(18, 0))
-        ttk.Label(f, style="Dim.TLabel",
-                  text="click a row to copy its system  -  trip times are estimates"
-                  ).pack(side="right")
+        self.fetch_lbl.pack(side="left", padx=(18, 24))
+        # Calibration lives in Settings > TRIP TIMINGS; repeating it here
+        # crowded the bar until the other fields were truncated.
+        self.cal_lbl = ttk.Label(f, text="")     # kept for _show_cal, not packed
 
     def _apply_col_widths(self):
         """Column widths are in pixels, so they have to track the font size
