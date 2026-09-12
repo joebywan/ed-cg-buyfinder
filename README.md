@@ -32,6 +32,13 @@ station that pays well, not just community goals.
 The Frontier feed is undocumented and unsupported, so a failure there is
 treated as normal: you get a message and the manual fields, not an error.
 
+
+**On startup** the last results are shown straight away. If they are more than
+10 minutes old a fresh search starts by itself, with the old numbers on screen
+while it runs — there is no "do you want to update?" prompt to dismiss. The
+threshold is `Auto-refresh after (min)` in Settings; set it to 0 to always
+refetch. Cached results are discarded if they were for a different destination.
+
 ## The idea
 
 A run carries at most one hold of cargo. The time cost of the trip is the same
