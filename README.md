@@ -1,16 +1,61 @@
 # cgbuy
 
-Finds the best places to **buy** for the Elite Dangerous community goal at
-**Metz Enterprise, Ega** — and ranks them by credits per minute of round trip,
-not by headline profit per tonne.
+Finds the best places to **buy** for an Elite Dangerous community goal, ranked
+by credits per minute of round trip — not by profit per tonne, because a rich
+station 40 minutes away loses to a decent one 15 minutes away.
 
-Sell prices at the CG station come from EDSM. Buy prices and supply at every
-market in range come from Spansh. The twelve commodities the CG accepts are
-hardcoded: Palladium, Gold, Silver, Bertrandite, Indite, Gallite, Coltan,
-Uraninite, Lepidolite, Cobalt, Rutile, Water.
+![Best mixed loads](screenshots/01-best-mixed-loads.png)
+
+It reads your journal to know which goal you joined, what ship you are flying
+and how long your jumps actually take, then discovers candidate markets through
+Spansh and re-checks the best of them against EDSM, which is days fresher.
+
+## Install
+
+**Download a binary** — no Python needed:
+
+| | |
+|---|---|
+| [Latest release](https://github.com/joebywan/ed-cg-buyfinder/releases/latest) | stable, version-tagged |
+| [Snapshot](https://github.com/joebywan/ed-cg-buyfinder/releases/tag/snapshot) | rebuilt on every push to `main` |
+
+Take `cgbuy-linux` or `cgbuy-windows.exe`. On Linux, `chmod +x cgbuy-linux`
+first. Neither is code-signed, so Windows SmartScreen will warn on first run
+("More info" → "Run anyway").
+
+**Or run from source** — Python 3 with tkinter, nothing else:
+
+```
+git clone https://github.com/joebywan/ed-cg-buyfinder
+cd ed-cg-buyfinder
+python cgbuy
+```
+
+Building your own binary: `./build.sh` on Linux, `build.bat` on Windows.
+PyInstaller cannot cross-compile, so each has to be built on the OS it targets
+— which is what the CI matrix does.
+
+## What you are looking at
+
+The **best mixed loads** view groups by station and shows what to buy there.
+A station's most profitable commodity is often capped below your hold, so it
+tops up with that station's next best — no extra travel, more credits.
+
+Expand a row for the per-commodity breakdown, or switch to **all sources** for
+the flat sortable table:
+
+![All sources](screenshots/02-all-sources.png)
+
+`SRC` says whether a row was verified against EDSM or is still Spansh's
+figure, and `DATA` is colour-coded by age — stale supply is the single
+biggest cause of a wasted trip.
+
+Click any row to copy its system to the clipboard.
 
 
 ## Destination
+
+![Settings](screenshots/03-settings.png)
 
 The tool works out where you are selling rather than asking:
 
