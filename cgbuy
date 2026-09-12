@@ -33,6 +33,10 @@ try:
     import eddn
 except ImportError:
     eddn = None
+try:
+    import verify
+except ImportError:
+    verify = None
 
 CG_STATION = "Metz Enterprise"
 CG_SYSTEM = "Ega"
@@ -207,7 +211,44 @@ def build_rows(p, progress=None, cal=None):
     with ThreadPoolExecutor(max_workers=6) as ex:
         list(ex.map(one, COMMODITIES))
 
+    # Spansh is the only way to discover candidates, but its index lags by
+    # days. Re-check the shortlist against EDSM, which follows EDDN live.
+    if verify is not None and p.get("verify_edsm", True):
+        rows.sort(key=lambda r: -r["cr_per_min"])
+        if progress:
+            progress(len(COMMODITIES), len(COMMODITIES), "verifying vs EDSM")
+        try:
+            checked, corrected, limited = verify.refresh(
+                rows, top=int(p.get("verify_top", 14)))
+            for r in rows:
+                if r.get("edsm"):
+                    rescore(r, p["hold"], cal, cg_ls,
+                            p["jump_empty"], p["jump_laden"])
+            # A station EDSM says is empty must drop out, not sit at the top
+            # on a supply figure that no longer exists.
+            rows = [r for r in rows if r["profit_per_t"] > 0 and r["supply"] > 0]
+            note = "EDSM: %d checked, %d corrected" % (checked, corrected)
+            if limited:
+                note += " (rate limited - rest left as Spansh)"
+            if progress:
+                progress(len(COMMODITIES), len(COMMODITIES), note)
+        except Exception as e:
+            print("  ! EDSM verify failed: %s" % e, file=sys.stderr)
+
     return rows, cg, cg_ls
+
+
+def rescore(r, hold, cal, cg_ls, jump_empty, jump_laden):
+    """Recompute the derived figures after EDSM corrects supply or price."""
+    r["profit_per_t"] = r["sell"] - r["buy"]
+    r["load"] = min(r["supply"], hold)
+    r["loads_available"] = round(r["supply"] / hold, 1)
+    mins = trip_minutes(r["ly"], r["ls"], cg_ls, jump_empty, jump_laden, cal)
+    r["trip_minutes"] = round(mins, 1)
+    r["trip_profit"] = r["load"] * r["profit_per_t"]
+    r["cr_per_min"] = round(r["load"] * r["profit_per_t"] / mins)
+    r["t_per_min"] = round(r["load"] / mins, 1)
+    return r
 
 
 def build_mixed(rows, hold):
@@ -411,7 +452,7 @@ class App:
         ("loads_available", "LOADS", 60, "e"), ("buy", "BUY", 78, "e"),
         ("profit_per_t", "PROFIT/T", 86, "e"), ("trip_minutes", "TRIP", 56, "e"),
         ("cr_per_min", "CR/MIN", 92, "e"), ("t_per_min", "T/MIN", 62, "e"),
-        ("updated", "DATA", 78, "e"),
+        ("updated", "DATA", 78, "e"), ("src", "SRC", 52, "e"),
     ]
 
     def __init__(self, root, autosearch=True):
@@ -875,6 +916,26 @@ class App:
             row=row[0], column=1, sticky="w", padx=14)
         row[0] += 1
 
+        section("DATA ACCURACY")
+        self.v_verify = tk.BooleanVar(
+            value=bool(self.cfg.get("verify_edsm", True)))
+        ttk.Checkbutton(win, text="Re-check top results against EDSM",
+                        variable=self.v_verify).grid(row=row[0], column=1,
+                                                     sticky="w", **pad)
+        row[0] += 1
+        ttk.Label(win, text="Stations to check", style="Dim.TLabel").grid(
+            row=row[0], column=0, sticky="w", **pad)
+        v_vtop = tk.StringVar(value=str(self.cfg.get("verify_top", 18)))
+        ttk.Entry(win, textvariable=v_vtop, width=5, font=f["mono"]).grid(
+            row=row[0], column=1, sticky="w", **pad)
+        row[0] += 1
+        ttk.Label(win, style="Dim.TLabel",
+                  text="Spansh finds candidates but lags days; EDSM follows "
+                       "EDDN live.\nEDSM rate-limits, so only the best few "
+                       "are re-checked.").grid(row=row[0], column=1,
+                                               sticky="w", padx=14)
+        row[0] += 1
+
         section("INTEGRATIONS")
         ttk.Checkbutton(win, text="Stream Deck button (cgbuy-next)",
                         variable=self.v_deck).grid(row=row[0], column=1,
@@ -925,6 +986,11 @@ class App:
                 except ValueError:
                     self.cfg[key] = dflt
             self.cfg["deck_enabled"] = bool(self.v_deck.get())
+            self.cfg["verify_edsm"] = bool(self.v_verify.get())
+            try:
+                self.cfg["verify_top"] = max(0, int(v_vtop.get().strip()))
+            except ValueError:
+                self.cfg["verify_top"] = 18
             self.cfg["eddn_enabled"] = bool(self.v_eddn.get())
             save_config(self.cfg)
             if journal and self.cfg["journal_dir"]:
@@ -1185,6 +1251,8 @@ class App:
             "jump_laden": max(1.0, num(self.v_jl, 18.0)),
             "min_supply": max(0, num(self.v_ms, 200, int)),
             "carriers": bool(self.v_fc.get()),
+            "verify_edsm": bool(self.cfg.get("verify_edsm", True)),
+            "verify_top": int(self.cfg.get("verify_top", 18)),
         }
 
     def search(self):
@@ -1322,7 +1390,8 @@ class App:
                 f"{r['ls']:,}", f"{r['supply']:,}", r["loads_available"],
                 f"{r['buy']:,}", f"{r['profit_per_t']:,}",
                 "%dm" % round(r["trip_minutes"]), f"{r['cr_per_min']:,}",
-                r["t_per_min"], age_text(r["updated"])), tags=tags)
+                r["t_per_min"], age_text(r["updated"]),
+                "EDSM" if r.get("edsm") else "spansh"), tags=tags)
 
 
 def main():
