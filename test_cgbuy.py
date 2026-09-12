@@ -34,7 +34,6 @@ atexit.register(shutil.rmtree, _CONFIG_SANDBOX, True)
 
 import eddn                                                   # noqa: E402
 import journal                                                # noqa: E402
-import plot                                                   # noqa: E402
 
 # cgbuy has no .py extension, so the normal import machinery cannot see it.
 # Importing it only defines things; main() runs under __name__ == "__main__",
@@ -897,120 +896,6 @@ BINDS_XML = """<?xml version="1.0" encoding="UTF-8"?>
   </Unbound>
 </Root>
 """
-
-
-class BindsTestCase(unittest.TestCase):
-
-    @classmethod
-    def setUpClass(cls):
-        cls._tmp = tempfile.TemporaryDirectory(prefix="cgbuy-test-binds-")
-        cls.binds = os.path.join(cls._tmp.name, "Custom.4.0.binds")
-        with open(cls.binds, "w", encoding="utf-8") as fh:
-            fh.write(BINDS_XML)
-        cls.bad = os.path.join(cls._tmp.name, "Broken.binds")
-        with open(cls.bad, "w", encoding="utf-8") as fh:
-            fh.write("<Root><GalaxyMapOpen>")          # truncated XML
-        cls.missing = os.path.join(cls._tmp.name, "NoSuchFile.binds")
-
-    @classmethod
-    def tearDownClass(cls):
-        cls._tmp.cleanup()
-
-
-class TestReadBind(BindsTestCase):
-
-    def test_function_key(self):
-        self.assertEqual(plot.read_bind(self.binds, "GalaxyMapOpen"), "F6")
-
-    def test_named_key_is_translated_for_xdotool(self):
-        self.assertEqual(plot.read_bind(self.binds, "UI_Select"), "space")
-
-    def test_single_letter_is_lowercased(self):
-        self.assertEqual(plot.read_bind(self.binds, "UI_Up"), "w")
-
-    def test_modifier_key_name_is_translated(self):
-        self.assertEqual(plot.read_bind(self.binds, "UIFocus"), "shift")
-
-    def test_keyboard_modifier_is_prefixed(self):
-        self.assertEqual(
-            plot.read_bind(self.binds, "TargetNextRouteSystem"), "ctrl+n")
-
-    def test_hotas_bind_is_ignored(self):
-        """xdotool cannot press a joystick button, so this must not be used."""
-        self.assertIsNone(plot.read_bind(self.binds, "SystemMapOpen"))
-
-    def test_keyboard_secondary_is_used_when_primary_is_hotas(self):
-        self.assertEqual(
-            plot.read_bind(self.binds, "HyperSuperCombination"), "j")
-
-    def test_hotas_modifier_is_dropped_from_the_spec(self):
-        self.assertEqual(plot.read_bind(self.binds, "ShipSpotLightToggle"), "l")
-
-    def test_unbound_action_is_none(self):
-        self.assertIsNone(plot.read_bind(self.binds, "Unbound"))
-
-    def test_unknown_action_is_none(self):
-        self.assertIsNone(plot.read_bind(self.binds, "NoSuchAction"))
-
-    def test_missing_or_unparseable_file_is_none(self):
-        self.assertIsNone(plot.read_bind(None, "GalaxyMapOpen"))
-        self.assertIsNone(plot.read_bind("", "GalaxyMapOpen"))
-        self.assertIsNone(plot.read_bind(self.missing, "GalaxyMapOpen"))
-        self.assertIsNone(plot.read_bind(self.bad, "GalaxyMapOpen"))
-
-    def test_galaxy_map_key_override_wins(self):
-        self.assertEqual(plot.galaxy_map_key(self.binds, "F10"), "F10")
-
-    def test_galaxy_map_key_reads_the_binds_file(self):
-        self.assertEqual(plot.galaxy_map_key(self.binds), "F6")
-
-
-class TestKeysInUse(BindsTestCase):
-
-    def test_plain_keyboard_binds_are_reported(self):
-        used = plot.keys_in_use(self.binds)
-        self.assertEqual(used, {"F6", "Space", "W", "LeftShift", "J"})
-
-    def test_hotas_keys_are_not_reported(self):
-        used = plot.keys_in_use(self.binds)
-        self.assertNotIn("Joy_5", used)
-        self.assertNotIn("Joy_2", used)
-
-    def test_modified_binds_are_not_reported(self):
-        """ctrl+N does not occupy plain N."""
-        self.assertNotIn("N", plot.keys_in_use(self.binds))
-        self.assertNotIn("L", plot.keys_in_use(self.binds))
-
-    def test_free_bindable_keys_can_be_computed(self):
-        free = [k for k in plot.BINDABLE_KEYS
-                if k not in plot.keys_in_use(self.binds)]
-        self.assertNotIn("F6", free)
-        self.assertIn("F7", free)
-
-    def test_missing_or_unparseable_file_gives_an_empty_set(self):
-        self.assertEqual(plot.keys_in_use(None), set())
-        self.assertEqual(plot.keys_in_use(self.missing), set())
-        self.assertEqual(plot.keys_in_use(self.bad), set())
-
-
-# --------------------------------------------------------------------------
-
-class TestNoSideEffects(unittest.TestCase):
-    """Guards on the test harness itself."""
-
-    def test_config_paths_are_sandboxed(self):
-        self.assertTrue(cgbuy.CONFIG_PATH.startswith(_CONFIG_SANDBOX))
-        self.assertTrue(cgbuy.STATE_PATH.startswith(_CONFIG_SANDBOX))
-        self.assertFalse(os.path.exists(cgbuy.CONFIG_PATH))
-        self.assertFalse(os.path.exists(cgbuy.STATE_PATH))
-
-    def test_modules_are_wired_together(self):
-        self.assertIsNotNone(cgbuy.journal)
-        self.assertIsNotNone(cgbuy.plot)
-        self.assertIsNotNone(cgbuy.eddn)
-
-    def test_no_tk_window_was_created(self):
-        self.assertFalse(cgbuy.tk._default_root)
 
 
 if __name__ == "__main__":

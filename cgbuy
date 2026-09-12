@@ -26,10 +26,6 @@ try:
 except ImportError:            # running without the journal module alongside
     journal = None
 try:
-    import plot
-except ImportError:
-    plot = None
-try:
     import eddn
 except ImportError:
     eddn = None
@@ -372,8 +368,7 @@ def age_phrase(stamp):
 def write_state(plans, keep_index=None, advance=False):
     """Publish the ranked plan list for the deck button.
 
-    keep_index pins the index; advance moves to the next target (what the
-    PLOT NEXT button wants, so pressing it twice does not replot rank 1).
+    keep_index pins the index; advance moves to the next target.
     """
     slim = [{"station": p["station"], "system": p["system"], "ly": p["ly"],
              "ls": p["ls"], "total": p["total"], "cr_per_min": p["cr_per_min"],
@@ -557,9 +552,9 @@ class App:
         s.map("Step.TButton", background=[("active", OR_DIM)],
               foreground=[("active", "#140c05")])
 
-        s.configure("Plot.TButton", background="#2a2118", foreground=OR,
+        s.configure("Alt.TButton", background="#2a2118", foreground=OR,
                     font=MONO_B, borderwidth=0, padding=(14, 7))
-        s.map("Plot.TButton", background=[("active", OR_DIM)],
+        s.map("Alt.TButton", background=[("active", OR_DIM)],
               foreground=[("active", "#140c05"), ("disabled", "#6a5844")])
 
         s.configure("Go.TButton", background=OR, foreground="#140c05",
@@ -653,7 +648,7 @@ class App:
         sb = ttk.Frame(row, style="Panel.TFrame")
         sb.pack(side="left", padx=(0, 14))
         ttk.Label(sb, text=" ", style="Cap.TLabel").pack(anchor="w")
-        ttk.Button(sb, text="SETTINGS", style="Plot.TButton",
+        ttk.Button(sb, text="SETTINGS", style="Alt.TButton",
                    command=self.open_settings).pack(anchor="w", pady=(2, 0))
 
         gb = ttk.Frame(row, style="Panel.TFrame")
@@ -664,9 +659,6 @@ class App:
         self.go = ttk.Button(brow, text="SEARCH", style="Go.TButton",
                              command=self.search)
         self.go.pack(side="left")
-        self.plot_btn = ttk.Button(brow, text="PLOT NEXT", style="Plot.TButton",
-                                   command=self.plot_next)
-        self.plot_btn.pack(side="left", padx=(6, 0))
 
 
         self.prices = ttk.Label(p, text="", style="PanelDim.TLabel",
@@ -827,7 +819,7 @@ class App:
         # Yes is the default: it has focus and takes the Return key.
         y = ttk.Button(bar, text="YES", style="Go.TButton", command=yes)
         y.pack(side="left", padx=(0, 8))
-        ttk.Button(bar, text="NO", style="Plot.TButton", command=no).pack(side="left")
+        ttk.Button(bar, text="NO", style="Alt.TButton", command=no).pack(side="left")
 
         win.bind("<Return>", yes)
         win.bind("<KP_Enter>", yes)
@@ -864,7 +856,7 @@ class App:
             var = tk.StringVar(value=value or "")
             e = ttk.Entry(win, textvariable=var, width=58, font=f["mono"])
             e.grid(row=row[0], column=1, sticky="ew", **pad)
-            ttk.Button(win, text="BROWSE", style="Plot.TButton",
+            ttk.Button(win, text="BROWSE", style="Alt.TButton",
                        command=lambda: on_browse(var, is_dir)).grid(
                 row=row[0], column=2, sticky="w", padx=(0, 14))
             row[0] += 1
@@ -885,68 +877,13 @@ class App:
 
         jd = (self.watcher.dir if self.watcher else None) or \
             (journal.find_journal_dir() if journal else "")
-        bf = self.cfg.get("binds_file") or (plot.find_binds_file() if plot else "")
 
         section("ELITE DANGEROUS")
         v_journal = pathrow("Journal folder", jd, browse, True)
-        v_binds = pathrow("Bindings file", bf, browse, False)
         detected = ttk.Label(win, style="Dim.TLabel",
                              text="auto-detected - change only if you have "
                                   "several installs")
         detected.grid(row=row[0], column=1, sticky="w", padx=14)
-        row[0] += 1
-
-        section("GALAXY MAP KEY")
-        cur = (plot.galaxy_map_key(bf, self.cfg.get("galaxy_map_key"))
-               if plot else None)
-        used = plot.keys_in_use(bf) if plot else set()
-        free = [k for k in (plot.BINDABLE_KEYS if plot else []) if k not in used]
-        choices = sorted(set(([cur] if cur else []) + free),
-                         key=lambda k: (len(k), k))
-        ttk.Label(win, text="Key", style="Dim.TLabel").grid(
-            row=row[0], column=0, sticky="w", **pad)
-        v_key = tk.StringVar(value=cur or (free[0] if free else "F6"))
-        combo = ttk.Combobox(win, textvariable=v_key, values=choices,
-                             width=12, font=f["mono"], state="normal")
-        combo.grid(row=row[0], column=1, sticky="w", **pad)
-        keynote = ttk.Label(win, style="Dim.TLabel",
-                            text="free: %s" % ", ".join(free[:8]))
-        keynote.grid(row=row[0], column=2, sticky="w", padx=(0, 14))
-        row[0] += 1
-
-        def apply_bind():
-            if not plot:
-                return
-            ok, msg = plot.set_bind(v_binds.get(), "GalaxyMapOpen",
-                                    v_key.get().strip())
-            keynote.configure(text=msg[:60], foreground=None if ok else BAD)
-
-        ttk.Button(win, text="WRITE TO ELITE BINDS", style="Plot.TButton",
-                   command=apply_bind).grid(row=row[0], column=1, sticky="w",
-                                            padx=14, pady=(0, 4))
-        row[0] += 1
-        ttk.Label(win, style="Dim.TLabel",
-                  text="a backup of your binds is made first; "
-                       "restart Elite to apply").grid(
-            row=row[0], column=1, sticky="w", padx=14)
-        row[0] += 1
-
-        section("PLOT ROUTE")
-        ttk.Label(win, text="Destination pane steps", style="Dim.TLabel").grid(
-            row=row[0], column=0, sticky="w", **pad)
-        steps = ttk.Frame(win)
-        steps.grid(row=row[0], column=1, sticky="w", **pad)
-        v_right = tk.StringVar(value=str(self.cfg.get("plot_select_right", 3)))
-        v_down = tk.StringVar(value=str(self.cfg.get("plot_select_down", 7)))
-        ttk.Label(steps, text="right x", style="Dim.TLabel").pack(side="left")
-        ttk.Entry(steps, textvariable=v_right, width=4, font=f["mono"]).pack(side="left")
-        ttk.Label(steps, text="  down x", style="Dim.TLabel").pack(side="left")
-        ttk.Entry(steps, textvariable=v_down, width=4, font=f["mono"]).pack(side="left")
-        row[0] += 1
-        ttk.Label(win, style="Dim.TLabel",
-                  text="how far to walk the destination pane to reach "
-                       "\"plot route\"; verified against NavRoute.json").grid(
-            row=row[0], column=1, sticky="w", padx=14)
         row[0] += 1
 
         section("DATA ACCURACY")
@@ -1003,21 +940,11 @@ class App:
         bar = ttk.Frame(win)
         bar.grid(row=row[0], column=0, columnspan=3, sticky="ew",
                  padx=14, pady=14)
-        ttk.Button(bar, text="EDIT PLOT MACRO", style="Plot.TButton",
-                   command=lambda: (win.destroy(), self.edit_macro())).pack(side="left")
-        ttk.Button(bar, text="RESET TIMINGS", style="Plot.TButton",
+        ttk.Button(bar, text="RESET TIMINGS", style="Alt.TButton",
                    command=reset_cal).pack(side="left", padx=6)
 
         def save():
             self.cfg["journal_dir"] = v_journal.get().strip() or None
-            self.cfg["binds_file"] = v_binds.get().strip() or None
-            self.cfg["galaxy_map_key"] = v_key.get().strip() or None
-            for key, var, dflt in (("plot_select_right", v_right, 3),
-                                   ("plot_select_down", v_down, 7)):
-                try:
-                    self.cfg[key] = max(0, int(var.get().strip()))
-                except ValueError:
-                    self.cfg[key] = dflt
             self.cfg["deck_enabled"] = bool(self.v_deck.get())
             self.cfg["verify_edsm"] = bool(self.v_verify.get())
             try:
@@ -1040,7 +967,7 @@ class App:
             self.v_deck.set(was_deck)
             win.destroy()
 
-        ttk.Button(bar, text="CANCEL", style="Plot.TButton",
+        ttk.Button(bar, text="CANCEL", style="Alt.TButton",
                    command=cancel).pack(side="right", padx=6)
         win.columnconfigure(1, weight=1)
 
@@ -1067,106 +994,6 @@ class App:
                 idx = 0
             return self.data["mixed"][idx]
         return None
-
-    def plot_next(self):
-        """Drive Elite's galaxy map to plot the current target."""
-        if plot is None:
-            self.set_status("plot module not found", BAD)
-            return
-        t = self.current_target()
-        if not t:
-            self.set_status("no target yet - run a search first", BAD)
-            return
-        binds = self.cfg.get("binds_file") or plot.find_binds_file()
-        gm = plot.galaxy_map_key(binds, self.cfg.get("galaxy_map_key"))
-        jd = self.watcher.dir if self.watcher else None
-        if self.cfg.get("plot_macro"):
-            # user has hand-tuned a key macro; respect it
-            ok, msg, _log = plot.run_macro(t["system"],
-                                           self.cfg["plot_macro"], gm)
-        elif jd and gm:
-            ok, msg, _log = plot.plot_route(
-                t["system"], jd, gm,
-                select_right=int(self.cfg.get("plot_select_right", 3)),
-                select_down=int(self.cfg.get("plot_select_down", 7)),
-                walk_pane=bool(self.cfg.get("plot_walk_pane", False)))
-        else:
-            ok, msg = False, ("no Galaxy Map key bound" if not gm
-                              else "journal dir unknown")
-        self.set_status("%s  ->  %s" % (msg, t["system"]), None if ok else BAD)
-        if ok:
-            write_state(self.data["mixed"], advance=True)
-
-    def edit_macro(self):
-        """Let the plot sequence be tuned without hand-editing JSON."""
-        if plot is None:
-            return
-        binds = plot.find_binds_file()
-        macro = self.cfg.get("plot_macro") or plot.default_panel_macro(binds)
-
-        win = tk.Toplevel(self.root)
-        win.title("Plot macro")
-        win.configure(bg=BG)
-        f = self._fonts()
-        ttk.Label(win, text="Steps run against the Elite window, in order. "
-                            "Tune waits/keys to your UI.",
-                  style="Dim.TLabel").pack(anchor="w", padx=12, pady=(10, 4))
-        txt = tk.Text(win, width=74, height=18, bg=PANEL, fg=TXT,
-                      insertbackground=OR, font=f["mono"],
-                      relief="flat", highlightthickness=1,
-                      highlightbackground=LINE)
-        txt.pack(fill="both", expand=True, padx=12)
-        txt.insert("1.0", json.dumps(macro, indent=2))
-        note = ttk.Label(win, text="<SYSTEM> is replaced with the destination.",
-                         style="Dim.TLabel")
-        note.pack(anchor="w", padx=12, pady=(6, 0))
-
-        bar = ttk.Frame(win)
-        bar.pack(fill="x", padx=12, pady=10)
-
-        def parse():
-            try:
-                m = json.loads(txt.get("1.0", "end"))
-                if not isinstance(m, list):
-                    raise ValueError("macro must be a list of steps")
-                for i, st in enumerate(m):
-                    if not isinstance(st, dict):
-                        raise ValueError("step %d is not an object" % (i + 1))
-                    if "key" not in st and "type" not in st:
-                        raise ValueError("step %d needs 'key' or 'type'" % (i + 1))
-                    float(st.get("wait", 0.4))
-                return m
-            except Exception as e:
-                note.configure(text="invalid: %s" % e, foreground=BAD)
-                return None
-
-        def do_dry():
-            m = parse()
-            if m is None:
-                return
-            t = self.current_target()
-            ok, msg, log = plot.run_macro(
-                t["system"] if t else "Sol", m,
-                plot.galaxy_map_key(binds, self.cfg.get("galaxy_map_key")),
-                dry_run=True)
-            note.configure(text="DRY RUN: " + " | ".join(log)[:110],
-                           foreground=DIM)
-
-        def do_save():
-            m = parse()
-            if m is None:
-                return
-            self.cfg["plot_macro"] = m
-            save_config(self.cfg)
-            win.destroy()
-
-        def do_reset():
-            txt.delete("1.0", "end")
-            txt.insert("1.0", json.dumps(plot.default_panel_macro(binds), indent=2))
-
-        ttk.Button(bar, text="DRY RUN", style="Plot.TButton", command=do_dry).pack(side="left")
-        ttk.Button(bar, text="RESET", style="Plot.TButton", command=do_reset).pack(side="left", padx=6)
-        ttk.Button(bar, text="SAVE", style="Go.TButton", command=do_save).pack(side="right")
 
     def _quit(self):
         self._save_cal()

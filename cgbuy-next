@@ -4,21 +4,20 @@ cgbuy-next - one Stream Deck button's worth of behaviour.
 
 Bind this to a single button in OpenDeck (or any deck software, or a hotkey).
 It does NOT touch the Stream Deck hardware - your existing setup keeps full
-control of the device.
+control of the device, and it never sends input to the game.
 
 On each press it:
   1. reads the current best buy target (written by the cgbuy app),
-  2. types that system name into Elite's focused text field,
+  2. prints it,
   3. advances to the next target so the following press moves you on.
 
 It prints the target on stdout, so deck software that can show command output
 will display it on the button face.
 
 Usage:
-  cgbuy-next              # send current target to Elite, then advance
-  cgbuy-next --peek       # print the current target, change nothing
+  cgbuy-next              # show the current target, then advance
+  cgbuy-next --peek       # show the current target, change nothing
   cgbuy-next --reset      # go back to the top-ranked target
-  cgbuy-next --no-type    # advance + print, but never touch Elite
 
 From an OpenDeck (flatpak) button, run:
   flatpak-spawn --host /path/to/cgbuy-next
@@ -27,7 +26,6 @@ From an OpenDeck (flatpak) button, run:
 import argparse
 import json
 import os
-import subprocess
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -35,17 +33,6 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 STATE_PATH = os.path.join(
     os.environ.get("XDG_CONFIG_HOME", os.path.expanduser("~/.config")),
     "cgbuy-state.json")
-
-ELITE_PATTERNS = ["Elite - Dangerous (CLIENT)", "Elite - Dangerous"]
-
-
-def run(args, timeout=5):
-    try:
-        p = subprocess.run(args, capture_output=True, timeout=timeout, text=True)
-        return p.returncode, p.stdout.strip()
-    except (OSError, subprocess.SubprocessError):
-        return 1, ""
-
 
 def load_state():
     try:
@@ -59,8 +46,7 @@ def save_index(idx):
     """Update only the index.
 
     Rewriting the whole document would clobber a fresher plan list that the
-    app may have published while we were driving the galaxy map (which takes
-    several seconds).
+    app may have published in the meantime.
     """
     try:
         st = load_state() or {}
@@ -72,42 +58,6 @@ def save_index(idx):
         os.replace(tmp, STATE_PATH)
     except OSError:
         pass
-
-
-def find_elite():
-    if not run(["which", "xdotool"])[0] == 0:
-        return None
-    for pat in ELITE_PATTERNS:
-        rc, out = run(["xdotool", "search", "--name", pat])
-        if rc == 0 and out:
-            return out.split("\n")[-1].strip()
-    return None
-
-
-def type_into_elite(text):
-    """Open the galaxy map and search for `text`.
-
-    Uses the shared closed-loop plotter when available: it confirms via
-    Status.json that the map actually opened before typing, so a mistimed
-    press cannot dump a system name onto the flight controls.
-    """
-    try:
-        import plot, journal
-    except ImportError:
-        plot = None
-    if plot is not None:
-        jd = journal.find_journal_dir()
-        gm = plot.galaxy_map_key(plot.find_binds_file())
-        if jd and gm:
-            ok, msg, _log = plot.plot_route(text, jd, gm)
-            return ok, msg
-    win = find_elite()
-    if not win:
-        return False, "Elite window not found"
-    run(["xdotool", "windowactivate", "--sync", win])
-    rc, _ = run(["xdotool", "type", "--clearmodifiers", "--window", win,
-                 "--delay", "25", text], timeout=15)
-    return rc == 0, ("typed" if rc == 0 else "xdotool type failed")
 
 
 def describe(plan, idx, total):
@@ -126,7 +76,6 @@ def main():
     ap = argparse.ArgumentParser(add_help=True)
     ap.add_argument("--peek", action="store_true", help="print only")
     ap.add_argument("--reset", action="store_true", help="back to rank 1")
-    ap.add_argument("--no-type", action="store_true", help="never touch Elite")
     a = ap.parse_args()
 
     cfg_path = os.path.join(
@@ -157,14 +106,8 @@ def main():
         print(describe(plan, idx, len(plans)))
         return 0
 
-    note = ""
-    if not a.no_type:
-        ok, msg = type_into_elite(plan["system"])
-        note = "" if ok else "  [%s]" % msg
-
     save_index((idx + 1) % len(plans))
-
-    print(describe(plan, idx, len(plans)) + note)
+    print(describe(plan, idx, len(plans)))
     return 0
 
 

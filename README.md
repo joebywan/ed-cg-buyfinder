@@ -94,15 +94,15 @@ rescales everything — fonts, row heights, column widths, and the window itself
 and the choice is saved.
 
 **Settings** (SETTINGS button): journal folder and bindings file (both
-auto-detected, override only for multiple installs), the Galaxy Map key with a
+auto-detected, override only for multiple installs),
 list of keys not already bound in your binds file and a button that writes
 `GalaxyMapOpen` into Elite's binds (a timestamped backup is taken first; restart
 Elite to apply), toggles for the deck button and EDDN, a readout of current trip
-timings with a reset, and an editor for the plot macro.
+timings with a reset.
 
 **Config** lives at `~/.config/cgbuy.json` (`$XDG_CONFIG_HOME` respected) and
-holds font size, paths, the Galaxy Map key, the two integration toggles,
-accumulated calibration samples, and the custom plot macro if you write one.
+holds font size, paths, the integration toggles and accumulated
+calibration samples.
 
 ## Journal calibration
 
@@ -158,40 +158,19 @@ flatpak-spawn --host /path/to/cgbuy-next
 ```
 
 Each press reads the ranked target list the app publishes to
-`~/.config/cgbuy-state.json`, plots the current target's system in Elite, then
+`~/.config/cgbuy-state.json`, prints the current target, then
 advances the index so the next press moves you on. It prints the station,
 system, mix, distance and value on stdout, so deck software that renders command
 output shows it on the button face.
 
 ```
-cgbuy-next            # plot current target, then advance
+cgbuy-next            # show current target, then advance
 cgbuy-next --peek     # print the current target, change nothing
 cgbuy-next --reset    # back to rank 1
-cgbuy-next --no-type  # advance and print, never touch Elite
 ```
 
 It respects the `deck_enabled` toggle in the config and reports if the app has
 not produced targets yet.
-
-## Route plotting
-
-Elite has no route-plotting API. This is **keystroke automation** via `xdotool`:
-it presses your real Galaxy Map bind, types the system name into the search box,
-and presses Return twice.
-
-Requirements: `xdotool` installed, X11 (not Wayland-native), and `GalaxyMapOpen`
-bound to a keyboard key — the Settings dialog can write that bind for you.
-
-The dangerous failure is typing a system name into the flight controls because
-the map never opened. To avoid that, the plotter is closed-loop: after pressing
-the bind it polls `Status.json` for `GuiFocus == 6` (galaxy map) and **stops
-rather than typing** if the map has not opened within 8 seconds. If Elite was
-running when the bind was written, it needs a restart before the key works.
-
-If your UI version or binds need a different sequence, Settings → EDIT PLOT
-MACRO exposes the step list (keys, waits, `<SYSTEM>` placeholder) as JSON with a
-dry-run button. A saved macro is used instead of the closed-loop plotter — note
-that a hand-written macro presses blind and does not get the GuiFocus check.
 
 ## Limitations
 
@@ -202,8 +181,6 @@ that a hand-written macro presses blind and does not get the GuiFocus check.
   fast during a CG, and a station showing 40,000t three weeks ago may be empty.
   Watch the DATA column; it is coloured for exactly this reason.
 - **Fleet carriers move and reprice.** Off by default for that reason.
-- **Route plotting is a macro, not an API.** It is timing- and state-dependent.
-  The GuiFocus check makes the common failure safe, not impossible.
 - **`cgbuy-linux` is glibc/Linux-specific** and still depends on the system's
   tkinter. Build it on the machine you will run it on.
 - **The CG is hardcoded** — station, system, and the twelve commodities are
@@ -213,11 +190,10 @@ that a hand-written macro presses blind and does not get the GuiFocus check.
 
 - `cgbuy.py` — the original terminal version. Same scoring, prints a table;
   `--hold --range --jump-empty --jump-laden --min-supply --top --sort
-  --carriers --mixed --json`. No calibration, no plotting, no EDDN.
+  --carriers --mixed --json`. No calibration, no EDDN.
 - `cgbuy-web.py` — a superseded version that served the same UI over
   `http://127.0.0.1:8731`. Kept for reference; the tkinter app replaced it.
 
 Each module also runs standalone for diagnostics: `python3 journal.py` prints
-the detected journal directory and calibration, `python3 plot.py --check` prints
-the binds file, Galaxy Map key, and a dry-run macro, and `python3 eddn.py`
+the detected journal directory and calibration, and `python3 eddn.py`
 prints the message it would build from your current `Market.json`.
