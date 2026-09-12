@@ -227,6 +227,7 @@ class JournalWatcher:
         self.docked = False
         self.commander = None
         self.ship = None            # internal name, e.g. "panthermkii"
+        self.ship_id = None         # distinguishes two of the same hull
         self.ship_name = None       # localised, e.g. "Panther Clipper Mk II"
         self.cargo_capacity = None
         self.max_jump_range = None
@@ -305,6 +306,36 @@ class JournalWatcher:
             pass
 
     # -- event handling ---------------------------------------------------
+    def _set_ship(self, ship, ship_id=None, localised=None):
+        """Adopt a ship identity, dropping the last ship's numbers if it changed.
+
+        Hold size, jump range and the longest laden jump all belong to one
+        hull. Carrying them across a swap is worse than having nothing: the
+        Panther's 832t would quietly plan runs for a Cobra, and priming reads
+        several journals back, so a swap is normal rather than exotic.
+        """
+        ship = (ship or "").lower() or None
+        if not ship:
+            return False
+        changed = bool(self.ship) and (
+            ship != self.ship
+            or (ship_id is not None and self.ship_id is not None
+                and ship_id != self.ship_id))
+        if changed:
+            self.ship_name = None
+            self.cargo_capacity = None
+            self.max_jump_range = None
+            self.unladen_mass = None
+            self.fuel_capacity = None
+            self.best_laden_jump = None
+            self._cargo = None
+        self.ship = ship
+        if ship_id is not None:
+            self.ship_id = ship_id
+        if localised:
+            self.ship_name = localised
+        return changed
+
     def _handle(self, line, live):
         line = line.strip()
         if not line:
@@ -382,8 +413,8 @@ class JournalWatcher:
         elif ev == "Loadout":
             # The ship is the source of truth for hold size, jump range and
             # which landing pads you can actually use.
-            self.ship = (e.get("Ship") or self.ship or "").lower() or None
-            self.ship_name = e.get("Ship_Localised") or self.ship_name
+            self._set_ship(e.get("Ship") or self.ship, e.get("ShipID"),
+                           e.get("Ship_Localised"))
             if e.get("CargoCapacity") is not None:
                 self.cargo_capacity = e["CargoCapacity"]
             if e.get("MaxJumpRange"):
@@ -393,10 +424,15 @@ class JournalWatcher:
             fuel = e.get("FuelCapacity")
             if isinstance(fuel, dict) and fuel.get("Main"):
                 self.fuel_capacity = fuel["Main"]
+        elif ev in ("ShipyardSwap", "ShipyardNew"):
+            # The swap itself, before the new Loadout lands: the old ship's
+            # figures must stop being used the moment they stop applying.
+            self._set_ship(e.get("ShipType"),
+                           e.get("ShipID", e.get("NewShipID")),
+                           e.get("ShipType_Localised"))
         elif ev in ("LoadGame", "Fileheader"):
-            if e.get("Ship"):
-                self.ship = e["Ship"].lower()
-                self.ship_name = e.get("Ship_Localised") or self.ship_name
+            self._set_ship(e.get("Ship"), e.get("ShipID"),
+                           e.get("Ship_Localised"))
             self.commander = e.get("Commander", self.commander)
             if "Horizons" in e:
                 self.horizons = e["Horizons"]

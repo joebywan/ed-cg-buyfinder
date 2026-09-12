@@ -589,37 +589,27 @@ def save_config(cfg):
         pass          # a UI preference is never worth crashing over
 
 
-# Boxes the ship itself decides. Everything else in PARAM_KEYS is a search
-# preference, remembered exactly as typed.
+# Boxes the ship decides, not the commander. While a journal names a ship
+# these follow it and are not editable; the rest of the toolbar is preference.
 SHIP_KEYS = ("hold", "jump_empty", "jump_laden")
 
 
-def _same_number(a, b):
-    """Equal as numbers, so 18 and 18.0 are not a difference of opinion."""
-    try:
-        return abs(float(a) - float(b)) < 1e-9
-    except (TypeError, ValueError):
-        return str(a).strip() == str(b).strip()
+def ship_params(ship, cargo_capacity, max_jump_range, laden):
+    """The toolbar values a detected ship implies, as strings.
 
-
-def manual_ship_fields(current, adopted, previous=()):
-    """Which ship boxes the commander has actually typed over.
-
-    `adopted` is what the app last wrote in from the journal, so a box only
-    counts as hand-set once it stops matching that - and counts as automatic
-    again the moment it matches. A box the journal never filled keeps whatever
-    standing it already had.
+    Only what the journal actually stated: a missing figure leaves that box
+    alone rather than inventing one.
     """
-    manual = set(previous)
-    for k in SHIP_KEYS:
-        auto = adopted.get(k)
-        if auto is None:
-            continue
-        if _same_number(current.get(k), auto):
-            manual.discard(k)
-        else:
-            manual.add(k)
-    return sorted(manual)
+    if not ship:
+        return {}
+    out = {}
+    if cargo_capacity:
+        out["hold"] = str(int(cargo_capacity))
+    if max_jump_range:
+        out["jump_empty"] = "%.1f" % max_jump_range
+    if laden:
+        out["jump_laden"] = "%.1f" % laden
+    return out
 
 
 def days_old(datestr):
@@ -703,13 +693,13 @@ class App:
         self.last_band = None       # last CG percentile band seen
         self.workers = []
         self.pad = self.cfg.get("pad_override") or "L"
-        # Which ship boxes the commander overrode by hand, and what the journal
-        # last put in them. The old boolean flag meant "a search has happened",
-        # which latched the very first launch's numbers forever, so it is
-        # dropped rather than honoured.
-        self.manual = set(self.cfg.get("manual_fields") or ())
+        self.boxes = {}             # ship key -> (entry, caption, label, tip)
+        self.ship_id = None         # what was being flown last time we looked
+        self._pending_swap = False  # swapped hull, figures not in yet
+        # Both are dead: they recorded that the boxes had been hand-set, which
+        # is no longer a thing the journal can be overruled by.
         self.cfg.pop("manual_params", None)
-        self.auto_params = {}
+        self.cfg.pop("manual_fields", None)
         self.dest = dict(DEFAULT_DEST)
         saved = self.cfg.get("dest")
         if isinstance(saved, dict) and saved.get("station") and saved.get("commodities"):
@@ -813,6 +803,10 @@ class App:
         s.configure("TEntry", fieldbackground="#0a0908", foreground=TXT,
                     insertcolor=OR, bordercolor=LINE, lightcolor=LINE,
                     darkcolor=LINE, borderwidth=1)
+        # A box the journal owns: still fully legible, visibly not a text box.
+        s.map("TEntry", fieldbackground=[("readonly", PANEL)],
+              foreground=[("readonly", TXT)], bordercolor=[("readonly", PANEL)],
+              lightcolor=[("readonly", PANEL)], darkcolor=[("readonly", PANEL)])
         # ttk's indicator is a fixed-size element, so it has to be scaled
         # explicitly or it stays tiny next to a large font on a HiDPI panel.
         ind = int(self.fs * 1.5) + 4
@@ -888,15 +882,20 @@ class App:
         self.standing_lbl.pack(side="right")
         self.standing_tip = Tip(self.standing_lbl, "", self)
 
-    def _num(self, parent, label, default, width=7):
+    def _num(self, parent, label, default, width=7, key=None):
         box = ttk.Frame(parent, style="Panel.TFrame")
         box.pack(side="left", padx=(0, 14))
-        ttk.Label(box, text=label, style="Cap.TLabel").pack(anchor="w")
+        cap = ttk.Label(box, text=label, style="Cap.TLabel")
+        cap.pack(anchor="w")
         var = tk.StringVar(value=str(default))
         e = ttk.Entry(box, textvariable=var, width=width,
                       font=self._fonts()["mono"], justify="right")
         e.pack(anchor="w", pady=(2, 0))
         self.entries.append(e)
+        if key:
+            # Ship boxes need their widgets back to lock them once a journal
+            # takes them over, and to say where the number came from.
+            self.boxes[key] = (e, cap, label, Tip(e, "", self))
         return var
 
     def _controls(self):
@@ -907,10 +906,12 @@ class App:
 
         row = ttk.Frame(p, style="Panel.TFrame")
         row.pack(fill="x")
-        self.v_hold  = self._num(row, "HOLD (T)", HOLD_DEFAULT)
+        self.v_hold  = self._num(row, "HOLD (T)", HOLD_DEFAULT, key="hold")
         self.v_range = self._num(row, "RADIUS (LY)", RANGE_DEFAULT)
-        self.v_je    = self._num(row, "JUMP EMPTY", int(JUMP_EMPTY_DEFAULT))
-        self.v_jl    = self._num(row, "JUMP LADEN", int(JUMP_LADEN_DEFAULT))
+        self.v_je    = self._num(row, "JUMP EMPTY", int(JUMP_EMPTY_DEFAULT),
+                                 key="jump_empty")
+        self.v_jl    = self._num(row, "JUMP LADEN", int(JUMP_LADEN_DEFAULT),
+                                 key="jump_laden")
         self.v_ms    = self._num(row, "MIN SUPPLY", MIN_SUPPLY_DEFAULT)
         self.v_age   = self._num(row, "MAX AGE (D)", MAX_AGE_DEFAULT, width=5)
 
@@ -1557,12 +1558,14 @@ class App:
         self.sender = None
         if journal is None:
             self.cal_lbl.configure(text="journal module not found")
+            self._lock_ship_boxes(None)  # nothing to read: the boxes are yours
             return
         try:
             cal = journal.Calibration(self.cfg.get("calibration"))
             w = journal.JournalWatcher(self.cfg.get("journal_dir"), cal)
             if not w.dir:
                 self.cal_lbl.configure(text="no Elite journals found")
+                self._lock_ship_boxes(None)
                 return
             w.prime()
             w.on_docked = self._on_docked
@@ -2007,10 +2010,12 @@ class App:
     def _adopt_ship(self):
         """Take hold size, jump ranges and pad class from the ship you fly.
 
-        These are facts about the ship, not preferences: the toolbar defaults
-        exist only for the case where no journal can be found, and are
-        deliberately those of a small starter hauler rather than any
-        particular ship.
+        These are facts about the ship, not preferences. While a journal is
+        readable it is the source of truth and the three boxes are locked to
+        it; they only open up when no ship can be seen, where a commander's
+        own estimate is all there is. The defaults behind them are a small
+        starter hauler's, deliberately: too small is visibly wrong, whereas a
+        plausible big-ship number would be believed.
 
         Laden range is the one the game never states. It is derived from the
         mass ratio (FSD range is inversely proportional to total mass) and
@@ -2018,37 +2023,85 @@ class App:
         """
         w = self.watcher
         if not w or not w.ship:
+            self._lock_ship_boxes(None)
             return
-        sig = (w.ship, w.cargo_capacity, w.max_jump_range, w.unladen_mass,
-               w.fuel_capacity, w.best_laden_jump)
+        sig = (w.ship, w.ship_id, w.cargo_capacity, w.max_jump_range,
+               w.unladen_mass, w.fuel_capacity, w.best_laden_jump)
         if sig == getattr(self, "_ship_sig", None):
             return                      # same ship, same numbers, nothing to say
         self._ship_sig = sig
-        if self.cfg.get("pad_override"):
-            self.pad = self.cfg["pad_override"]
-        else:
-            self.pad = pad_for_ship(w.ship)
+
+        if self.ship_id is not None and (w.ship, w.ship_id) != self.ship_id:
+            # ShipyardSwap names the new hull a moment before its Loadout
+            # states the hold and the range, so the swap stays pending until
+            # the figures that go with it arrive.
+            self._pending_swap = True
+        self.ship_id = (w.ship, w.ship_id)
+        # The hull decides the pad. An override only still has a job for a
+        # hull this build has never heard of, where pad_for_ship guesses L.
+        self.pad = (self.cfg.get("pad_override") or "L"
+                    if w.ship not in SHIP_PADS else pad_for_ship(w.ship))
         self.ship_label = w.ship_name or w.ship
         laden = None
         if journal is not None:
             laden = journal.laden_jump_range(
                 w.max_jump_range, w.unladen_mass, w.fuel_capacity,
                 w.cargo_capacity, w.best_laden_jump)
-        for key, var, value in (("hold", self.v_hold,
-                                 str(w.cargo_capacity) if w.cargo_capacity else None),
-                                ("jump_empty", self.v_je,
-                                 "%.1f" % w.max_jump_range if w.max_jump_range else None),
-                                ("jump_laden", self.v_jl,
-                                 "%.1f" % laden if laden else None)):
-            if value is None:
-                continue
-            self.auto_params[key] = value
-            if key not in self.manual:
-                var.set(value)
-        self.set_status(
-            "%s  -  %st hold, %s pad, %s ly laden"
-            % (self.ship_label, w.cargo_capacity or "?", self.pad,
-               "%.1f" % laden if laden else "?"))
+        var = {"hold": self.v_hold, "jump_empty": self.v_je,
+               "jump_laden": self.v_jl}
+        for key, value in ship_params(w.ship, w.cargo_capacity,
+                                      w.max_jump_range, laden).items():
+            var[key].set(value)
+        self._lock_ship_boxes(w, laden)
+
+        summary = ("%s  -  %st hold, %s pad, %s ly laden"
+                   % (self.ship_label, w.cargo_capacity or "?", self.pad,
+                      "%.1f" % laden if laden else "?"))
+        if self._pending_swap and not (w.cargo_capacity and w.max_jump_range):
+            self.set_status("Switched to %s - waiting for its loadout"
+                            % self.ship_label, WARN)
+        elif self._pending_swap:
+            self._pending_swap = False
+            # Pad class decides which stations are eligible at all, so the
+            # results on screen are about a ship no longer being flown.
+            self.set_status("Now flying " + summary, OR)
+            if self.data and not self.busy:
+                self.search()
+        else:
+            self.set_status(summary)
+
+    def _lock_ship_boxes(self, w, laden=None):
+        """Ship boxes are readable but not typeable while a ship is detected.
+
+        Silently overwriting what someone typed would be worse than refusing
+        it: the box would look accepted and plan something else.
+        """
+        detail = {}
+        if w:
+            detail = {
+                "hold": "%st, from the ship's Loadout." % (w.cargo_capacity or "?"),
+                "jump_empty": "%s ly, the MaxJumpRange in the ship's Loadout."
+                              % ("%.1f" % w.max_jump_range
+                                 if w.max_jump_range else "?"),
+                "jump_laden": "%s ly, from the mass ratio%s."
+                              % ("%.1f" % laden if laden else "?",
+                                 ", floored by your longest jump with cargo "
+                                 "(%.1f ly)" % w.best_laden_jump
+                                 if w.best_laden_jump else ""),
+            }
+        for key, (entry, cap, label, tip) in self.boxes.items():
+            if w:
+                entry.state(["readonly"])
+                cap.configure(text=label + " *")
+                tip.text = ("%s\n\nRead from your journal (%s), which is the "
+                            "source of truth while the game logs are "
+                            "available." % (detail.get(key, ""),
+                                            w.ship_name or w.ship))
+            else:
+                entry.state(["!readonly"])
+                cap.configure(text=label)
+                tip.text = ("No ship in the journal, so this one is yours to "
+                            "set. It is remembered between sessions.")
 
     def _show_cal(self):
         if self.cal:
@@ -2074,19 +2127,22 @@ class App:
         self._adopt_destination()
         self.refresh_standing()
 
+    SHIP_EVENTS = ("Loadout", "ShipyardSwap", "ShipyardNew", "LoadGame",
+                   "FSDJump")
+
     def _on_journal_event(self, e):
-        if e.get("event") in ("CommunityGoalJoin", "CommunityGoalDiscard"):
+        ev = e.get("event")
+        if ev in ("CommunityGoalJoin", "CommunityGoalDiscard"):
             self._on_join(e)
             return
-        if e.get("event") in ("Loadout", "FSDJump"):
-            # Swapping ship or refitting changes the hold and the jump ranges,
-            # and a laden jump is fresh evidence of the real laden range.
-            # Neither should need a restart to be believed.
+        if ev in self.SHIP_EVENTS:
+            # Swapping ship or refitting changes the hold, the jump ranges and
+            # the pad; a laden jump is fresh evidence of the real laden range.
+            # None of it should need a restart to be believed.
             self._adopt_ship()
             return
-        """A Market event means the game just rewrote Market.json."""
-        if e.get("event") != "Market" or not self.v_eddn.get():
-            return
+        if ev != "Market" or not self.v_eddn.get():
+            return                      # the game just rewrote Market.json
         if not (eddn and self.sender and self.watcher):
             return
         path = os.path.join(self.watcher.dir, "Market.json")
@@ -2169,16 +2225,18 @@ class App:
 
     def _save_params(self):
         """Search boxes were reset to defaults on every launch."""
-        cur = {k: getattr(self, v).get() for k, v in self.PARAM_KEYS}
-        self.cfg["params"] = cur
-        # Only boxes that disagree with the journal are the commander's own
-        # choice; the rest keep following the ship.
-        self.manual = set(manual_ship_fields(cur, self.auto_params, self.manual))
-        self.cfg["manual_fields"] = sorted(self.manual)
-        self.cfg.pop("manual_params", None)
+        self.cfg["params"] = {k: getattr(self, v).get()
+                              for k, v in self.PARAM_KEYS}
         save_config(self.cfg)
 
     def _load_params(self):
+        """Restore the toolbar from last time.
+
+        The ship boxes are restored too, but only as a stand-in until the
+        journal is read - _adopt_ship overwrites them a moment later. They
+        matter when there is no journal at all, where last session's numbers
+        beat a starter hauler's.
+        """
         saved = self.cfg.get("params") or {}
         for k, v in self.PARAM_KEYS:
             if saved.get(k):

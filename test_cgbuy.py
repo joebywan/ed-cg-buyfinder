@@ -1911,62 +1911,132 @@ class TestBandBrackets(unittest.TestCase):
         self.assertEqual(cg.band_brackets(h), {75: (0, 500)})
 
 
-class TestManualShipFields(unittest.TestCase):
-    """Which toolbar boxes stop following the ship.
+class TestShipParams(unittest.TestCase):
+    """What a detected ship puts in the toolbar."""
 
-    The rule the app depends on: saving the search parameters must not, by
-    itself, make a box manual. That bug froze whatever numbers happened to be
-    on screen at the first ever search, and no later journal could correct
-    them.
+    def test_a_detected_ship_fills_every_box(self):
+        self.assertEqual(cgbuy.ship_params("panthermkii", 832, 39.575737, 27.8),
+                         {"hold": "832", "jump_empty": "39.6",
+                          "jump_laden": "27.8"})
+
+    def test_no_ship_means_no_claim_on_any_box(self):
+        self.assertEqual(cgbuy.ship_params(None, 832, 39.6, 27.8), {})
+
+    def test_a_figure_the_journal_never_stated_is_left_alone(self):
+        # a Loadout without MaxJumpRange must not blank or invent the box
+        self.assertEqual(cgbuy.ship_params("sidewinder", 4, None, None),
+                         {"hold": "4"})
+
+    def test_a_ship_with_no_hold_does_not_claim_the_hold_box(self):
+        self.assertNotIn("hold", cgbuy.ship_params("eagle", 0, 25.0, 25.0))
+
+
+class TestShipIdentity(WatcherTestCase):
+    """The journal's ship figures must belong to the ship being flown.
+
+    prime() reads several journals back, so a swap is ordinary rather than
+    exotic - and carrying a Panther's 832t hold onto a Cobra is worse than
+    knowing nothing, because it plans confident runs that cannot be flown.
     """
 
-    ADOPTED = {"hold": "832", "jump_empty": "39.6", "jump_laden": "27.8"}
+    PANTHER = {
+        "timestamp": ts(12, 0), "event": "Loadout", "Ship": "PantherMkII",
+        "ShipID": 36, "Ship_Localised": "Panther Clipper Mk II",
+        "CargoCapacity": 832, "MaxJumpRange": 39.575737,
+        "UnladenMass": 1836.5, "FuelCapacity": {"Main": 128.0},
+    }
+    COBRA = {
+        "timestamp": ts(12, 30), "event": "Loadout", "Ship": "CobraMkIII",
+        "ShipID": 7, "Ship_Localised": "Cobra Mk III", "CargoCapacity": 64,
+        "MaxJumpRange": 28.0, "UnladenMass": 180.0,
+        "FuelCapacity": {"Main": 16.0},
+    }
+    SWAP_TO_COBRA = {
+        "timestamp": ts(12, 20), "event": "ShipyardSwap",
+        "ShipType": "CobraMkIII", "ShipID": 7,
+        "ShipType_Localised": "Cobra Mk III",
+    }
 
-    def manual(self, current, adopted=None, previous=()):
-        return cgbuy.manual_ship_fields(current, self.ADOPTED if adopted is None
-                                        else adopted, previous)
+    def test_the_ship_and_its_figures_come_from_the_loadout(self):
+        self.feed(self.PANTHER)
+        self.assertEqual((self.w.ship, self.w.ship_id, self.w.cargo_capacity),
+                         ("panthermkii", 36, 832))
+        self.assertEqual(self.w.max_jump_range, 39.575737)
+        self.assertEqual(self.w.ship_name, "Panther Clipper Mk II")
 
-    def test_saving_untouched_boxes_claims_nothing(self):
-        self.assertEqual(self.manual(dict(self.ADOPTED)), [])
+    def test_swapping_ship_drops_the_old_ship_figures(self):
+        self.feed(self.PANTHER, self.SWAP_TO_COBRA)
+        self.assertEqual(self.w.ship, "cobramkiii")
+        for stale in (self.w.cargo_capacity, self.w.max_jump_range,
+                      self.w.unladen_mass, self.w.fuel_capacity,
+                      self.w.best_laden_jump):
+            self.assertIsNone(stale)
 
-    def test_a_typed_over_box_is_manual(self):
-        self.assertEqual(self.manual({**self.ADOPTED, "jump_laden": "18"}),
-                         ["jump_laden"])
+    def test_the_new_loadout_fills_the_figures_back_in(self):
+        self.feed(self.PANTHER, self.SWAP_TO_COBRA, self.COBRA)
+        self.assertEqual((self.w.cargo_capacity, self.w.max_jump_range),
+                         (64, 28.0))
 
-    def test_only_the_typed_box_stops_following_the_ship(self):
-        manual = self.manual({**self.ADOPTED, "hold": "400"})
-        self.assertEqual(manual, ["hold"])
-        self.assertNotIn("jump_laden", manual)
+    def test_a_loadout_alone_is_enough_to_notice_the_swap(self):
+        # the swap event is missed (it was in an older journal), but the new
+        # Loadout still must not merge with the old ship's numbers
+        self.feed(self.PANTHER, {"timestamp": ts(13, 0), "event": "Loadout",
+                                 "Ship": "CobraMkIII", "ShipID": 7,
+                                 "CargoCapacity": 64})
+        self.assertEqual((self.w.cargo_capacity, self.w.ship), (64, "cobramkiii"))
+        self.assertIsNone(self.w.max_jump_range)
 
-    def test_the_same_number_written_differently_is_not_an_edit(self):
-        self.assertEqual(self.manual({"hold": "832.0", "jump_empty": " 39.60 ",
-                                      "jump_laden": "27.80"}), [])
+    def test_two_of_the_same_hull_are_different_ships(self):
+        self.feed(self.PANTHER, {"timestamp": ts(13, 0), "event": "Loadout",
+                                 "Ship": "PantherMkII", "ShipID": 99,
+                                 "CargoCapacity": 400})
+        self.assertEqual((self.w.ship_id, self.w.cargo_capacity), (99, 400))
+        self.assertIsNone(self.w.max_jump_range)
 
-    def test_typing_the_ship_number_back_releases_the_override(self):
-        self.assertEqual(self.manual(dict(self.ADOPTED),
-                                     previous=["jump_laden"]), [])
+    def test_a_refit_keeps_what_it_does_not_restate(self):
+        self.feed(self.PANTHER, {"timestamp": ts(13, 0), "event": "Loadout",
+                                 "Ship": "PantherMkII", "ShipID": 36,
+                                 "CargoCapacity": 784})
+        self.assertEqual(self.w.cargo_capacity, 784)
+        self.assertEqual(self.w.max_jump_range, 39.575737)
 
-    def test_an_override_survives_a_save_that_did_not_touch_it(self):
-        self.assertEqual(self.manual({**self.ADOPTED, "jump_laden": "18"},
-                                     previous=["jump_laden"]), ["jump_laden"])
+    def test_a_laden_jump_belongs_to_the_ship_that_made_it(self):
+        self.feed(self.PANTHER,
+                  {"timestamp": ts(12, 5), "event": "Cargo", "Count": 800},
+                  {"timestamp": ts(12, 10), "event": "FSDJump",
+                   "StarSystem": "Ega", "JumpDist": 21.5})
+        self.assertEqual(self.w.best_laden_jump, 21.5)
+        self.feed(self.SWAP_TO_COBRA)
+        self.assertIsNone(self.w.best_laden_jump)
 
-    def test_with_no_journal_nothing_becomes_manual(self):
-        # no ship detected, so no value to disagree with
-        self.assertEqual(self.manual({"hold": "64", "jump_laden": "15"},
-                                     adopted={}), [])
+    def test_loading_the_game_in_another_ship_is_a_swap(self):
+        self.feed(self.PANTHER, {"timestamp": ts(13, 0), "event": "LoadGame",
+                                 "Ship": "CobraMkIII", "ShipID": 7,
+                                 "Commander": "Jameson"})
+        self.assertEqual(self.w.ship, "cobramkiii")
+        self.assertIsNone(self.w.cargo_capacity)
+        self.assertEqual(self.w.commander, "Jameson")
 
-    def test_with_no_journal_an_existing_override_is_kept(self):
-        self.assertEqual(self.manual({"hold": "64"}, adopted={},
-                                     previous=["hold"]), ["hold"])
+    def test_loading_the_game_in_the_same_ship_keeps_its_figures(self):
+        self.feed(self.PANTHER, {"timestamp": ts(13, 0), "event": "LoadGame",
+                                 "Ship": "PantherMkII", "ShipID": 36,
+                                 "Commander": "Jameson"})
+        self.assertEqual(self.w.cargo_capacity, 832)
 
-    def test_search_preferences_are_never_ship_fields(self):
-        self.assertEqual(
-            self.manual({**self.ADOPTED, "range": "60", "min_supply": "5000",
-                         "max_age_days": "1"}), [])
+    def test_an_on_foot_loadgame_does_not_forget_the_ship(self):
+        # Odyssey writes LoadGame without a ship when you log in on foot
+        self.feed(self.PANTHER, {"timestamp": ts(13, 0), "event": "LoadGame",
+                                 "Commander": "Jameson"})
+        self.assertEqual((self.w.ship, self.w.cargo_capacity),
+                         ("panthermkii", 832))
 
-    def test_an_unparsable_box_is_an_edit_not_a_crash(self):
-        self.assertEqual(self.manual({**self.ADOPTED, "jump_laden": ""}),
-                         ["jump_laden"])
+    def test_the_pad_follows_the_hull(self):
+        self.feed(self.PANTHER)
+        self.assertEqual(cgbuy.pad_for_ship(self.w.ship), "L")
+        self.feed(self.COBRA)
+        self.assertEqual(cgbuy.pad_for_ship(self.w.ship), "S")
+        self.assertEqual(cgbuy.pad_for_ship("python"), "M")
+        self.assertEqual(cgbuy.pad_for_ship("nosuchship"), "L")
 
 
 class TestLadenJumpRange(unittest.TestCase):

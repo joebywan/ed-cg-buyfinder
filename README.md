@@ -159,10 +159,12 @@ multiplier is already baked into the EDSM price — the tool does not apply it).
 
 ## Interface
 
-Inputs across the top: hold size (64t), radius (30 ly), jump range empty (20)
-and laden (15), minimum supply (200), and a fleet-carrier toggle. The hold and
-the two jump ranges are replaced by your own ship's as soon as a journal is
-read — see [Ship detection](#ship-detection). Enter or SEARCH runs it.
+Inputs across the top: hold size, radius (30 ly), jump range empty and laden,
+minimum supply (200), and a fleet-carrier toggle. Enter or SEARCH runs it.
+
+Hold and the two jump ranges are marked `*` and locked while your journal can
+see a ship — they are the ship's, not yours to guess at. Hover one to see
+where its number came from. See [Ship detection](#ship-detection).
 
 **Font scaling.** The default size is picked from your screen width (9pt under
 2560px, 14 under 3840, 17 above). The `- 9 +` control, or Ctrl+`+` / Ctrl+`-`,
@@ -306,15 +308,22 @@ tell at a glance whether docking at the destination actually refreshed it.
 ## Ship detection
 
 Hold size, jump ranges and landing-pad class are read from the game's
-`Loadout` event, not typed in. The toolbar values you see before a journal is
-found are a small starter hauler's, present only so the fields are not blank —
-they are replaced the moment a ship is detected, and swapping ships or
-refitting updates them live, without a restart.
+`Loadout` event, not typed in. **While a journal is readable it is the source
+of truth**: those boxes show the ship's own figures, are locked, and update
+themselves. They unlock only when no journal names a ship — with nothing to
+read, your estimate is all there is, and it is remembered between sessions.
+(The starter-hauler numbers behind them are deliberately small: too small is
+visibly wrong, whereas a plausible big-ship number would just be believed.)
 
-Type over one of those three boxes and that box is yours from then on: it is
-remembered and the journal stops touching it, while the other two keep
-following the ship. Clear the override by typing the ship's own number back in
-(the status line shows it), and the box goes back to tracking the journal.
+Swapping ships, refitting, or flying a longer laden jump than before all
+update the toolbar live, without a restart. A swap is taken from `Loadout`,
+`ShipyardSwap`, `ShipyardNew` or `LoadGame`, and the previous ship's figures
+are dropped the instant the hull changes rather than lingering — priming reads
+several journals back, so a swap is ordinary, and a Panther's 832t hold on a
+Cobra would plan confident runs you cannot fly. Between the swap and the new
+`Loadout` the status bar says so. Once the new figures land, the results are
+re-run automatically: pad class decides which stations are eligible at all, so
+what was on screen was about a ship you are no longer flying.
 
 Laden jump range is the one the game never reports. It is derived from the
 mass ratio — FSD range is inversely proportional to total mass, so the unladen
