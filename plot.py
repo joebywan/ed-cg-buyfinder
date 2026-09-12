@@ -102,6 +102,40 @@ DEFAULT_MACRO = [
 ]
 
 
+def send_key(win, spec, timeout=10):
+    """Press a key so that Elite actually sees it.
+
+    `xdotool key --window <id>` delivers via XSendEvent, which Wine/Proton
+    games ignore - they read raw input, not synthesised X events. Omitting
+    --window uses XTEST instead, which is indistinguishable from hardware.
+    The cost is that it goes to whatever is focused, so the caller must
+    activate the window first and we re-check focus before every press.
+    """
+    if not window_is_active(win):
+        return False, "Elite lost focus"
+    rc, _o, _e = run(["xdotool", "key", "--clearmodifiers", spec], timeout)
+    return rc == 0, ("sent %s" % spec if rc == 0 else "xdotool rejected %r" % spec)
+
+
+def send_text(win, text, delay=30, timeout=30):
+    """Type text via XTEST, for the same reason as send_key."""
+    if not window_is_active(win):
+        return False, "Elite lost focus"
+    rc, _o, _e = run(["xdotool", "type", "--clearmodifiers",
+                      "--delay", str(delay), text], timeout)
+    return rc == 0, "typed"
+
+
+def window_is_active(win):
+    rc, out, _ = run(["xdotool", "getactivewindow"])
+    if rc != 0 or not out:
+        return False
+    try:
+        return int(out.strip()) == int(win)
+    except ValueError:
+        return False
+
+
 def run(args, timeout=20):
     try:
         p = subprocess.run(args, capture_output=True, timeout=timeout, text=True)
@@ -263,10 +297,14 @@ def plot_route(system, journal_dir, gm_key=None, dry_run=False,
         return True, "dry run", log
 
     run(["xdotool", "windowactivate", "--sync", win])
-    time.sleep(0.3)
+    time.sleep(0.4)
+    if not window_is_active(win):
+        return False, "could not focus the Elite window", log
 
     if focus != GUI_GALAXY_MAP:
-        run(["xdotool", "key", "--clearmodifiers", "--window", win, gm_key])
+        ok, why = send_key(win, gm_key)
+        if not ok:
+            return False, why, log
         focus = wait_for_gui(journal_dir, GUI_GALAXY_MAP, open_timeout)
         log.append("after %s: focus=%s" % (gm_key, GUI_NAMES.get(focus, focus)))
         if focus != GUI_GALAXY_MAP:
@@ -277,15 +315,16 @@ def plot_route(system, journal_dir, gm_key=None, dry_run=False,
                     % GUI_NAMES.get(focus, focus), log)
 
     time.sleep(0.6)
-    run(["xdotool", "key", "--clearmodifiers", "--window", win, "ctrl+a"])
-    run(["xdotool", "type", "--clearmodifiers", "--window", win,
-         "--delay", str(type_delay), system], timeout=30)
+    send_key(win, "ctrl+a")
+    ok, why = send_text(win, system, type_delay)
+    if not ok:
+        return False, why, log
     log.append("typed %r" % system)
     time.sleep(0.9)
-    run(["xdotool", "key", "--clearmodifiers", "--window", win, "Return"])
+    send_key(win, "Return")
     log.append("Return (search)")
     time.sleep(1.6)
-    run(["xdotool", "key", "--clearmodifiers", "--window", win, "Return"])
+    send_key(win, "Return")
     log.append("Return (select/plot)")
 
     return True, "plotted %s" % system, log
@@ -320,13 +359,12 @@ def run_macro(system, macro=None, gm_key=None, dry_run=False):
                 continue
             log.append("key %s" % spec)
             if not dry_run:
-                run(["xdotool", "key", "--clearmodifiers", "--window", win, spec])
+                send_key(win, spec)
         elif "type" in st:
             text = str(st["type"]).replace("<SYSTEM>", system)
             log.append("type %r" % text)
             if not dry_run:
-                run(["xdotool", "type", "--clearmodifiers", "--window", win,
-                     "--delay", "30", text], timeout=30)
+                send_text(win, text)
         if not dry_run:
             time.sleep(wait)
 
