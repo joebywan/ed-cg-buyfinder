@@ -81,9 +81,6 @@ jobs:
             artifact: cgbuy-windows.exe
             built: dist/cgbuy.exe
     runs-on: ${{ matrix.os }}
-    env:
-      WINDOWS_CERT_PFX_BASE64: ${{ secrets.WINDOWS_CERT_PFX_BASE64 }}
-      WINDOWS_CERT_PASSWORD: ${{ secrets.WINDOWS_CERT_PASSWORD }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -104,24 +101,6 @@ jobs:
         run: |
           python -c "import shutil; shutil.copy('cgbuy', 'build_src.py')"
           pyinstaller --onefile --name cgbuy --clean --noconfirm --windowed --distpath dist --workpath .build --specpath .build build_src.py
-      - name: Sign the Windows binary
-        if: runner.os == 'Windows' && env.WINDOWS_CERT_PFX_BASE64 != ''
-        shell: pwsh
-        run: |
-          $pfx = Join-Path $env:RUNNER_TEMP 'cgbuy-signing.pfx'
-          try {
-            [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:WINDOWS_CERT_PFX_BASE64))
-            $signtool = Get-ChildItem 'C:\Program Files (x86)\Windows Kits\10\bin\*\x64\signtool.exe' -ErrorAction SilentlyContinue |
-              Sort-Object FullName -Descending | Select-Object -First 1
-            if (-not $signtool) { throw 'signtool.exe not found on this runner' }
-            & $signtool.FullName sign /f $pfx /p $env:WINDOWS_CERT_PASSWORD `
-              /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 '${{ matrix.built }}'
-            if ($LASTEXITCODE -ne 0) { throw "signtool sign failed ($LASTEXITCODE)" }
-            & $signtool.FullName verify /pa '${{ matrix.built }}'
-            if ($LASTEXITCODE -ne 0) { throw "the signature did not verify ($LASTEXITCODE)" }
-          } finally {
-            if (Test-Path $pfx) { Remove-Item $pfx -Force }
-          }
       - name: Smoke test, and check it reports the released version
         shell: bash
         run: |
@@ -145,37 +124,22 @@ jobs:
     steps:
       - uses: actions/download-artifact@v4
         with: { merge-multiple: true }
-      # Composed here rather than inline so the signing line states what this
-      # build actually did, instead of a claim that goes stale the day a
-      # certificate is added. inputs.notes arrives via env, never interpolated
-      # into the script body.
-      - name: Compose the release notes
-        shell: bash
-        env:
-          NOTES: ${{ inputs.notes }}
-          SIGNED: ${{ secrets.WINDOWS_CERT_PFX_BASE64 != '' }}
-        run: |
-          {
-            if [ -n "$NOTES" ]; then printf '%s\n' "$NOTES"; echo; fi
-            echo '* `cgbuy-linux` — Linux x86-64'
-            echo '* `cgbuy-windows.exe` — Windows x86-64'
-            echo
-            if [ "$SIGNED" = "true" ]; then
-              echo 'The Windows binary is Authenticode-signed.'
-            else
-              echo 'Neither binary is signed; Windows SmartScreen will warn on first run.'
-            fi
-            echo 'Running from source works too: `python cgbuy`.'
-            echo
-            echo 'Some antivirus engines flag PyInstaller one-file builds generically.'
-            echo 'See [Antivirus false positives](../../#antivirus-false-positives).'
-          } > notes.md
       - uses: softprops/action-gh-release@v2
         with:
           tag_name: v${{ needs.tag.outputs.version }}
           name: v${{ needs.tag.outputs.version }}
           generate_release_notes: true
-          body_path: notes.md
+          body: |
+            ${{ inputs.notes }}
+
+            * `cgbuy-linux` — Linux x86-64
+            * `cgbuy-windows.exe` — Windows x86-64
+
+            Neither binary is signed and neither will be; Windows SmartScreen
+            will warn on first run. Some antivirus engines flag PyInstaller
+            one-file builds generically — see
+            [Antivirus false positives](../../#antivirus-false-positives),
+            or run from source: `python cgbuy`.
           files: |
             cgbuy-linux
             cgbuy-windows.exe

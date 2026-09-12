@@ -286,40 +286,6 @@ What adapts automatically:
 Nothing in the tool shells out or calls a POSIX-only API, so there is no
 platform-specific behaviour beyond those paths.
 
-## Code signing
-
-The released `cgbuy-windows.exe` is unsigned unless a certificate is configured,
-which is why SmartScreen warns on first run and why some antivirus engines are
-suspicious of it.
-
-Signing is wired into both workflows and turns itself on the moment two
-repository secrets exist (Settings -> Secrets and variables -> Actions):
-
-| Secret | Contents |
-| --- | --- |
-| `WINDOWS_CERT_PFX_BASE64` | the code-signing `.pfx`, base64-encoded: `base64 -w0 cert.pfx` |
-| `WINDOWS_CERT_PASSWORD` | the password protecting that `.pfx` |
-
-With both present, the Windows job signs the binary with SHA-256, timestamps it
-against DigiCert's server so the signature outlives the certificate, verifies the
-result, and shreds the `.pfx` from the runner. Without them the step is skipped
-and the build proceeds unsigned, so forks and pull requests still build.
-
-**Never commit the `.pfx` or its password.** They go in repository secrets and
-nowhere else; the workflow reconstructs the file inside `RUNNER_TEMP` at build
-time and deletes it in a `finally` block.
-
-Two routes to a certificate, if you want one:
-
-- **Azure Trusted Signing** — roughly $10/month, no hardware token, and the
-  identity validation is the light one. The cheapest credible option today.
-- **An EV certificate from a CA** — a few hundred a year on a hardware token.
-  Its advantage is an immediate SmartScreen reputation rather than one earned
-  over time.
-
-A standard (non-EV) certificate stops the "unknown publisher" wording but still
-accrues SmartScreen reputation gradually.
-
 ## Antivirus false positives
 
 A handful of engines flag the Windows binary. As of the 2026-09-12 snapshot,
@@ -345,8 +311,13 @@ If you would rather not take that on trust:
 - **Read the sandbox report** rather than the score. The relevant question is
   what it did: contacted hosts, files written, processes spawned.
 
-False positives are reported to the vendors as they come up, and signing the
-binary removes most of the incentive for a heuristic to fire in the first place.
+The binary is not code-signed, and will not be. A certificate is a recurring
+annual cost and this is a free tool written for its author's own use; sharing it
+is a courtesy. Signing would likely quiet the heuristics, but not at that price.
+
+False positives are reported to the vendors as they come up. Beyond that, the
+options above are the answer: run from source, check the hash, read the sandbox
+report — or don't run it. All three are reasonable.
 
 ## Notifications
 
