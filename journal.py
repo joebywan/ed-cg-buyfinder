@@ -153,6 +153,10 @@ class JournalWatcher:
         self.station = None
         self.docked = False
         self.commander = None
+        self.ship = None            # internal name, e.g. "panthermkii"
+        self.ship_name = None       # localised, e.g. "Panther Clipper Mk II"
+        self.cargo_capacity = None
+        self.max_jump_range = None
         self.horizons = None
         self.odyssey = None
         self.gameversion = None
@@ -281,7 +285,19 @@ class JournalWatcher:
                     self.cal._add(self.cal.dock_secs, dt)
                     learned = True
             self._dock_at, self.docked = None, False
+        elif ev == "Loadout":
+            # The ship is the source of truth for hold size, jump range and
+            # which landing pads you can actually use.
+            self.ship = (e.get("Ship") or self.ship or "").lower() or None
+            self.ship_name = e.get("Ship_Localised") or self.ship_name
+            if e.get("CargoCapacity") is not None:
+                self.cargo_capacity = e["CargoCapacity"]
+            if e.get("MaxJumpRange"):
+                self.max_jump_range = e["MaxJumpRange"]
         elif ev in ("LoadGame", "Fileheader"):
+            if e.get("Ship"):
+                self.ship = e["Ship"].lower()
+                self.ship_name = e.get("Ship_Localised") or self.ship_name
             self.commander = e.get("Commander", self.commander)
             if "Horizons" in e:
                 self.horizons = e["Horizons"]

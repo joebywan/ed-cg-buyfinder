@@ -93,12 +93,10 @@ SEARCH runs it.
 rescales everything — fonts, row heights, column widths, and the window itself —
 and the choice is saved.
 
-**Settings** (SETTINGS button): journal folder and bindings file (both
-auto-detected, override only for multiple installs),
-list of keys not already bound in your binds file and a button that writes
-`GalaxyMapOpen` into Elite's binds (a timestamped backup is taken first; restart
-Elite to apply), toggles for the deck button and EDDN, a readout of current trip
-timings with a reset.
+**Settings** (SETTINGS button): journal folder (auto-detected, override only if
+you have several installs), how many top results to re-check against EDSM,
+toggles for the deck button and EDDN, and a readout of current trip timings
+with a reset.
 
 **Config** lives at `~/.config/cgbuy.json` (`$XDG_CONFIG_HOME` respected) and
 holds font size, paths, the integration toggles and accumulated

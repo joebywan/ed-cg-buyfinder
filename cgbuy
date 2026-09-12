@@ -33,6 +33,10 @@ try:
     import verify
 except ImportError:
     verify = None
+try:
+    import cg as cgstanding
+except ImportError:
+    cgstanding = None
 
 CG_STATION = "Metz Enterprise"
 CG_SYSTEM = "Ega"
@@ -122,11 +126,65 @@ def fetch_sources(commodity, max_ly, min_supply, page_size=500, max_pages=10):
 
 def sc_minutes(ls):
     """Rough supercruise time from the arrival star, in minutes.
-    Fitted by eye: ~1 min at 100 Ls, ~4 min at 10k Ls, ~8 min at 100k Ls."""
+
+    Calibration divides observed times by this curve to get sc_scale, then
+    trip_minutes multiplies it back on. Two copies of the formula would
+    silently miscalibrate if they ever drifted, so journal.py owns it and
+    this is only a fallback for running without that module.
+    """
+    if journal is not None:
+        return journal.est_sc_minutes(ls)
     return 0.25 * max(ls, 1) ** 0.3
 
 
 # Defaults used until the journal has taught us better.
+VERIFY_TOP_DEFAULT = 18    # stations re-checked against EDSM per search
+
+# Landing pad required by ship, keyed on the journal's internal name.
+# Unknown ships fall back to "L": large pads are a subset of what every
+# station offers a small ship, so guessing large can only ever be
+# over-restrictive, never strand you at a pad you cannot use.
+SHIP_PADS = {
+    # small
+    "sidewinder": "S", "eagle": "S", "hauler": "S", "adder": "S",
+    "empire_eagle": "S", "viper": "S", "cobramkiii": "S", "viper_mkiv": "S",
+    "diamondback": "S", "cobramkiv": "S", "diamondbackxl": "S",
+    "empire_courier": "S", "vulture": "S",
+    # medium
+    "asp_scout": "M", "independant_trader": "M", "asp": "M", "type6": "M",
+    "dolphin": "M", "federation_dropship": "M", "federation_dropship_mkii": "M",
+    "federation_gunship": "M", "krait_mkii": "M", "krait_light": "M",
+    "mamba": "M", "python": "M", "ferdelance": "M", "typex": "M",
+    "typex_2": "M", "typex_3": "M", "mandalay": "M", "python_nx": "M",
+    # large
+    "type7": "L", "empire_trader": "L", "orca": "L", "federation_corvette": "L",
+    "cutter": "L", "type9": "L", "type9_military": "L", "belugaliner": "L",
+    "anaconda": "L", "panthermkii": "L", "lakonminer": "L", "explorer_nx": "L",
+}
+PAD_ORDER = {"S": 0, "M": 1, "L": 2}
+
+
+def pad_for_ship(ship):
+    """Smallest pad this ship needs. Unknown -> L (safe but restrictive)."""
+    return SHIP_PADS.get((ship or "").lower(), "L")
+
+
+def station_fits(st, pad):
+    """Can a ship needing `pad` land here?
+
+    Spansh reports per-size pad counts; the old code looked only at
+    has_large_pad, which hid every medium and small station from ships that
+    could use them.
+    """
+    large = st.get("large_pads") or 0
+    medium = st.get("medium_pads") or 0
+    small = st.get("small_pads") or 0
+    if pad == "L":
+        return bool(large) or bool(st.get("has_large_pad"))
+    if pad == "M":
+        return bool(large or medium)
+    return bool(large or medium or small)
+
 EST_JUMP_MIN = 0.85        # align + charge + jump + scoop
 EST_DOCK_MIN = 3.0         # docked -> undocked, per stop
 EST_SC_SCALE = 1.0         # multiplier on the sc_minutes curve
@@ -166,7 +224,7 @@ def build_rows(p, progress=None, cal=None):
         if info and info["sell"] > 0:
             sell = info["sell"]
             for st in fetch_sources(name, p["range"], p["min_supply"]):
-                if not st.get("has_large_pad"):
+                if not station_fits(st, p.get("pad", "L")):
                     continue
                 carrier = "Carrier" in str(st.get("type", ""))
                 if carrier and not p["carriers"]:
@@ -215,7 +273,7 @@ def build_rows(p, progress=None, cal=None):
             progress(len(COMMODITIES), len(COMMODITIES), "verifying vs EDSM")
         try:
             checked, corrected, limited = verify.refresh(
-                rows, top=int(p.get("verify_top", 14)))
+                rows, top=int(p.get("verify_top", VERIFY_TOP_DEFAULT)))
             for r in rows:
                 if r.get("edsm"):
                     rescore(r, p["hold"], cal, cg_ls,
@@ -455,6 +513,9 @@ class App:
         self.cfg = load_config()
         self.entries = []
         self.copy_map = {}          # (widget name, item id) -> system name
+        self.pad = self.cfg.get("pad_override") or "L"
+        self.standing = None
+        self.ship_label = None
         # 9pt is unreadable on a 5K panel, so scale the default to the display.
         sw = root.winfo_screenwidth()
         auto = FONT_DEFAULT if sw < 2560 else (14 if sw < 3840 else 17)
@@ -596,6 +657,9 @@ class App:
         self.cg_lbl = ttk.Label(
             f, text="%s  -  %s" % (CG_STATION, CG_SYSTEM), style="Sub.TLabel")
         self.cg_lbl.pack(side="left", padx=(14, 0))
+        self.standing_lbl = ttk.Label(f, text="", style="Or.TLabel",
+                                      font=self._fonts()["bold"])
+        self.standing_lbl.pack(side="right")
 
     def _num(self, parent, label, default, width=7):
         box = ttk.Frame(parent, style="Panel.TFrame")
@@ -895,7 +959,7 @@ class App:
         row[0] += 1
         ttk.Label(win, text="Stations to check", style="Dim.TLabel").grid(
             row=row[0], column=0, sticky="w", **pad)
-        v_vtop = tk.StringVar(value=str(self.cfg.get("verify_top", 18)))
+        v_vtop = tk.StringVar(value=str(self.cfg.get("verify_top", VERIFY_TOP_DEFAULT)))
         ttk.Entry(win, textvariable=v_vtop, width=5, font=f["mono"]).grid(
             row=row[0], column=1, sticky="w", **pad)
         row[0] += 1
@@ -950,7 +1014,7 @@ class App:
             try:
                 self.cfg["verify_top"] = max(0, int(v_vtop.get().strip()))
             except ValueError:
-                self.cfg["verify_top"] = 18
+                self.cfg["verify_top"] = VERIFY_TOP_DEFAULT
             self.cfg["eddn_enabled"] = bool(self.v_eddn.get())
             save_config(self.cfg)
             if journal and self.cfg["journal_dir"]:
@@ -1041,12 +1105,68 @@ class App:
                 self.sender = eddn.Sender(self.cfg.get("eddn_seen"))
             self.watcher, self.cal = w, w.cal
             self._show_cal()
+            self._adopt_ship()
+            self.refresh_standing()
             self.root.after(3000, self._poll_journal, self._poll_token)
         except Exception as e:
             self.cal_lbl.configure(text="journal error: %s" % e)
 
     def set_status(self, text, colour=None):
         self.status.configure(text=text, foreground=colour or DIM)
+
+    def refresh_standing(self):
+        """Where you stand in the goal, from your journal + Frontier's feed."""
+        if cgstanding is None or not self.watcher or not self.watcher.dir:
+            return
+        def work():
+            try:
+                hist = cgstanding.read_history(self.watcher.dir)
+                live = next((g for g in cgstanding.fetch_live()
+                             if g.get("is_trade")), None)
+                self.q.put(("standing", cgstanding.standing(hist, live)))
+            except Exception:
+                pass
+        threading.Thread(target=work, daemon=True).start()
+
+    def _show_standing(self, st):
+        if not st:
+            return
+        self.standing = st
+        bits = ["%st delivered" % f"{st['contribution']:,}",
+                "top %s%%" % st["band"]]
+        if st["next_known"] and st["to_next"] is not None:
+            bits.append("%st to top %s%%" % (f"{st['to_next']:,}", st["next_band"]))
+        elif st.get("est_next"):
+            gap = max(0, st["est_next"] - st["contribution"])
+            bits.append("~%st to top %s%%" % (f"{gap:,}", st["next_band"]))
+        if st["hold_margin"] is not None:
+            bits.append("%st clear" % f"{st['hold_margin']:,}")
+        if st["hours_left"] and st["hours_left"] > 0:
+            d, h = divmod(int(st["hours_left"]), 24)
+            bits.append("%dd %dh left" % (d, h))
+        self.standing_lbl.configure(text="   ".join(bits))
+
+    def _adopt_ship(self):
+        """Take hold size, jump range and pad class from the ship you fly.
+
+        Three of the five search boxes are facts about the ship, previously
+        retyped by hand and silently wrong after a ship swap.
+        """
+        w = self.watcher
+        if not w or not w.ship:
+            return
+        if self.cfg.get("pad_override"):
+            self.pad = self.cfg["pad_override"]
+        else:
+            self.pad = pad_for_ship(w.ship)
+        self.ship_label = w.ship_name or w.ship
+        if not self.cfg.get("manual_params"):
+            if w.cargo_capacity:
+                self.v_hold.set(str(w.cargo_capacity))
+            if w.max_jump_range:
+                self.v_je.set("%.1f" % w.max_jump_range)
+        self.set_status("%s  -  %st hold, %s pad"
+                        % (self.ship_label, w.cargo_capacity or "?", self.pad))
 
     def _show_cal(self):
         if self.cal:
@@ -1089,6 +1209,7 @@ class App:
                 text="Docked at %s - refreshing for the next run..." % station,
                 foreground=OR)
             self.search()          # _finish() republishes state at rank 1
+            self.refresh_standing()
 
     def _save_cal(self):
         if getattr(self, "cal", None):
@@ -1111,8 +1232,9 @@ class App:
             "jump_laden": max(1.0, num(self.v_jl, 18.0)),
             "min_supply": max(0, num(self.v_ms, 200, int)),
             "carriers": bool(self.v_fc.get()),
+            "pad": self.pad,
             "verify_edsm": bool(self.cfg.get("verify_edsm", True)),
-            "verify_top": int(self.cfg.get("verify_top", 18)),
+            "verify_top": int(self.cfg.get("verify_top", VERIFY_TOP_DEFAULT)),
         }
 
     def search(self):
@@ -1158,6 +1280,8 @@ class App:
                         foreground=DIM)
                 elif kind == "done":
                     self._finish(payload)
+                elif kind == "standing":
+                    self._show_standing(payload)
                 elif kind == "eddn":
                     ok, msg = payload
                     if msg != "already sent":
