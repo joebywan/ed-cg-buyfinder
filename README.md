@@ -28,7 +28,10 @@ The tool works out where you are selling rather than asking:
 
 **Settings → DESTINATION** takes a system (with name completion), then
 `LOAD STATIONS` lists that system's markets, nearest arrival star first.
-`PREFILL FROM LIVE CG` lists the running trade goals; `DERIVE FROM MARKET`
+`CHOOSE FROM LIST` opens a filterable checklist of everything the destination
+trades — type to narrow it, click to tick, `ADD SHOWN` to take every match at
+once — so the commodity list never has to be typed out. `PREFILL FROM LIVE CG`
+lists the running trade goals; `DERIVE FROM MARKET`
 reads the market of the station you are docked at and picks out whatever it
 pays a premium for — at a goal station that recovers the list exactly, and at
 an ordinary station it finds what that place is short of.

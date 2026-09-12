@@ -1286,6 +1286,28 @@ class App:
         b_der = ttk.Button(dbtn, text="DERIVE FROM MARKET", style="Alt.TButton",
                            command=derive_from_market)
         b_der.pack(side="left", padx=6)
+
+        def choose_commodities():
+            cur = [c.strip() for c in
+                   txt_com.get("1.0", "end").replace("\n", ",").split(",")
+                   if c.strip()]
+
+            def apply(names):
+                txt_com.delete("1.0", "end")
+                txt_com.insert("1.0", ", ".join(names))
+                dest_note.configure(text="source: chosen by hand (%d)" % len(names),
+                                    foreground=None)
+
+            self.pick_commodities(v_stn.get().strip(), v_sys.get().strip(),
+                                  cur, apply)
+
+        b_pick = ttk.Button(dbtn, text="CHOOSE FROM LIST", style="Alt.TButton",
+                            command=choose_commodities)
+        b_pick.pack(side="left", padx=6)
+        Tip(b_pick, "A filterable checklist of everything the destination\n"
+                    "trades, so you do not have to type names. Type to narrow\n"
+                    "it, click to tick, ADD SHOWN to take everything matching\n"
+                    "the current filter at once.", self)
         Tip(b_der, "Works out what the station pays a premium for, so you do\n"
                    "not have to type the list.\n\n"
                    "Every commodity has a galactic average price. This reads\n"
@@ -1610,6 +1632,128 @@ class App:
         else:
             self.banner_lbl.configure(text="")
             self.banner.pack_forget()
+
+    def known_commodities(self, station, system):
+        """Everything we can name, for the picker.
+
+        The destination's own market is the useful set - it cannot buy what it
+        does not trade - but EDSM only records goods it has seen, so the local
+        Market.json (far more complete) and the current selection are folded
+        in rather than leaving anything unreachable.
+        """
+        names = set()
+        if verify is not None and station and system:
+            try:
+                import urllib.parse as _up
+                d = verify._get(verify.EDSM_MARKET.format(
+                    sys=_up.quote(system), stn=_up.quote(station)))
+                names.update(c["name"] for c in d.get("commodities", [])
+                             if c.get("name"))
+            except Exception:
+                pass
+        jd = self.watcher.dir if self.watcher else None
+        if jd:
+            try:
+                with open(os.path.join(jd, "Market.json"),
+                          encoding="utf-8", errors="replace") as fh:
+                    mk = json.load(fh)
+                for it in mk.get("Items", []):
+                    n = it.get("Name_Localised") or it.get("Name")
+                    if n and not n.startswith("$"):
+                        names.add(n)
+            except (OSError, ValueError):
+                pass
+        names.update(self.dest.get("commodities") or ())
+        return sorted(names)
+
+    def pick_commodities(self, station, system, current, on_ok):
+        """A filterable checklist, rather than a comma-separated typing test."""
+        win = tk.Toplevel(self.root)
+        win.title("Choose commodities")
+        win.configure(bg=BG)
+        win.transient(self.root)
+        f = self._fonts()
+
+        chosen = set(current or ())
+        allnames = []
+
+        head = ttk.Label(win, text="Loading...", style="Dim.TLabel")
+        head.pack(anchor="w", padx=14, pady=(12, 2))
+
+        v_filter = tk.StringVar()
+        ent = ttk.Entry(win, textvariable=v_filter, width=44, font=f["mono"])
+        ent.pack(anchor="w", padx=14)
+        ent.focus_set()
+
+        wrap = ttk.Frame(win)
+        wrap.pack(fill="both", expand=True, padx=14, pady=8)
+        lb = tk.Listbox(wrap, width=46, height=18, bg=PANEL, fg=TXT,
+                        selectbackground=SEL, selectforeground=OR,
+                        font=f["mono"], activestyle="none",
+                        highlightthickness=1, highlightbackground=LINE)
+        sb = ttk.Scrollbar(wrap, orient="vertical", command=lb.yview)
+        lb.configure(yscrollcommand=sb.set)
+        lb.pack(side="left", fill="both", expand=True)
+        sb.pack(side="right", fill="y")
+
+        def shown():
+            q = v_filter.get().strip().lower()
+            return [n for n in allnames if q in n.lower()]
+
+        def redraw(*_a):
+            lb.delete(0, "end")
+            for n in shown():
+                lb.insert("end", "%s %s" % ("[x]" if n in chosen else "[ ]", n))
+            head.configure(text="%d selected of %d  -  type to filter, click to "
+                                "toggle" % (len(chosen), len(allnames)))
+
+        def toggle(event):
+            idx = lb.nearest(event.y)
+            names = shown()
+            if 0 <= idx < len(names):
+                n = names[idx]
+                chosen.discard(n) if n in chosen else chosen.add(n)
+                top = lb.yview()[0]
+                redraw()
+                lb.yview_moveto(top)
+
+        lb.bind("<Button-1>", toggle)
+        v_filter.trace_add("write", redraw)
+
+        bar = ttk.Frame(win)
+        bar.pack(fill="x", padx=14, pady=(0, 12))
+
+        def add_shown():
+            chosen.update(shown()); redraw()
+
+        def clear_shown():
+            for n in shown():
+                chosen.discard(n)
+            redraw()
+
+        ttk.Button(bar, text="ADD SHOWN", style="Alt.TButton",
+                   command=add_shown).pack(side="left")
+        ttk.Button(bar, text="REMOVE SHOWN", style="Alt.TButton",
+                   command=clear_shown).pack(side="left", padx=6)
+        ttk.Button(bar, text="CANCEL", style="Alt.TButton",
+                   command=win.destroy).pack(side="right", padx=6)
+
+        def ok():
+            on_ok(sorted(chosen))
+            win.destroy()
+
+        ttk.Button(bar, text="USE THESE", style="Go.TButton",
+                   command=ok).pack(side="right")
+        win.bind("<Return>", lambda e: ok())
+        win.bind("<Escape>", lambda e: win.destroy())
+
+        def load():
+            found = self.known_commodities(station, system)
+            if not self.closing:
+                self.q.put(("commodities", (found, redraw, allnames)))
+
+        self._spawn(load)
+        return win
 
     def _copy_dest_system(self):
         """Put the destination system on the clipboard, ready to paste into
@@ -1954,6 +2098,10 @@ class App:
                         foreground=DIM)
                 elif kind == "done":
                     self._finish(payload)
+                elif kind == "commodities":
+                    found, redraw, allnames = payload
+                    allnames[:] = found
+                    redraw()
                 elif kind == "dest":
                     self._apply_destination(payload)
                 elif kind == "standing":
