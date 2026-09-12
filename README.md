@@ -98,9 +98,9 @@ you have several installs), how many top results to re-check against EDSM,
 toggles for the deck button and EDDN, and a readout of current trip timings
 with a reset.
 
-**Config** lives at `~/.config/cgbuy.json` (`$XDG_CONFIG_HOME` respected) and
-holds font size, paths, the integration toggles and accumulated
-calibration samples.
+**Config** lives at `~/.config/cgbuy.json` (`$XDG_CONFIG_HOME` respected) and holds font
+size, journal path, search parameters, the integration toggles, EDSM
+verification settings and accumulated calibration samples.
 
 ## Journal calibration
 
@@ -183,15 +183,3 @@ not produced targets yet.
   tkinter. Build it on the machine you will run it on.
 - **The CG is hardcoded** — station, system, and the twelve commodities are
   constants at the top of the source.
-
-## Other files
-
-- `cgbuy.py` — the original terminal version. Same scoring, prints a table;
-  `--hold --range --jump-empty --jump-laden --min-supply --top --sort
-  --carriers --mixed --json`. No calibration, no EDDN.
-- `cgbuy-web.py` — a superseded version that served the same UI over
-  `http://127.0.0.1:8731`. Kept for reference; the tkinter app replaced it.
-
-Each module also runs standalone for diagnostics: `python3 journal.py` prints
-the detected journal directory and calibration, and `python3 eddn.py`
-prints the message it would build from your current `Market.json`.

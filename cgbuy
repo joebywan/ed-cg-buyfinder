@@ -139,6 +139,12 @@ def sc_minutes(ls):
 
 # Defaults used until the journal has taught us better.
 VERIFY_TOP_DEFAULT = 18    # stations re-checked against EDSM per search
+MAX_AGE_DEFAULT = 7        # drop market data older than this many days
+
+# Age colouring. The old 21/120-day thresholds were written for casual
+# trading; during a CG a three-week-old supply figure shown in green is a lie.
+AGE_FRESH_DAYS = 2
+AGE_STALE_DAYS = 7
 
 # Landing pad required by ship, keyed on the journal's internal name.
 # Unknown ships fall back to "L": large pads are a subset of what every
@@ -289,7 +295,30 @@ def build_rows(p, progress=None, cal=None):
         except Exception as e:
             print("  ! EDSM verify failed: %s" % e, file=sys.stderr)
 
-    return rows, cg, cg_ls
+    hidden_stale = 0
+    max_age = p.get("max_age_days", MAX_AGE_DEFAULT)
+    if max_age:
+        before = len(rows)
+        fresh = []
+        for r in rows:
+            n = days_old(r.get("updated"))
+            # Unknown age is treated as stale: a row with no timestamp is not
+            # evidence of freshness.
+            if n is not None and n <= max_age:
+                fresh.append(r)
+        dropped = before - len(fresh)
+        if fresh:
+            rows = fresh
+            hidden_stale = dropped
+            if progress:
+                progress(len(COMMODITIES), len(COMMODITIES),
+                         "hid %d rows older than %dd" % (dropped, max_age))
+        elif progress:
+            # Never leave the user with an empty grid because of a filter.
+            progress(len(COMMODITIES), len(COMMODITIES),
+                     "all rows older than %dd - showing them anyway" % max_age)
+
+    return rows, cg, cg_ls, hidden_stale
 
 
 def rescore(r, hold, cal, cg_ls, jump_empty, jump_laden):
@@ -430,7 +459,8 @@ def write_state(plans, keep_index=None, advance=False):
     """
     slim = [{"station": p["station"], "system": p["system"], "ly": p["ly"],
              "ls": p["ls"], "total": p["total"], "cr_per_min": p["cr_per_min"],
-             "updated": p["updated"],
+             "updated": p["updated"], "tonnes": p["tonnes"], "short": p["short"],
+             "trip_minutes": p["trip_minutes"],
              "mix": [{"commodity": m["commodity"], "tonnes": m["tonnes"],
                       "buy": m["buy"]} for m in p["mix"]]}
             for p in plans[:8]]
@@ -494,7 +524,8 @@ def age_tag(datestr):
     n = days_old(datestr)
     if n is None:
         return "age_old"
-    return "age_ok" if n <= 21 else ("age_mid" if n <= 120 else "age_old")
+    return ("age_ok" if n <= AGE_FRESH_DAYS
+            else "age_mid" if n <= AGE_STALE_DAYS else "age_old")
 
 
 class App:
@@ -537,6 +568,7 @@ class App:
         self._controls()
         self._tabs()
         self._statusbar()
+        self._load_params()
         self._apply_col_widths()
         self._fit_window()
         self._init_journal()
@@ -685,6 +717,7 @@ class App:
         self.v_je    = self._num(row, "JUMP EMPTY", 38)
         self.v_jl    = self._num(row, "JUMP LADEN", 18)
         self.v_ms    = self._num(row, "MIN SUPPLY", 200)
+        self.v_age   = self._num(row, "MAX AGE (D)", MAX_AGE_DEFAULT, width=5)
 
         self.v_fc = tk.BooleanVar(value=False)
         cb = ttk.Frame(row, style="Panel.TFrame")
@@ -1233,13 +1266,31 @@ class App:
             "min_supply": max(0, num(self.v_ms, 200, int)),
             "carriers": bool(self.v_fc.get()),
             "pad": self.pad,
+            "max_age_days": max(0, num(self.v_age, MAX_AGE_DEFAULT, int)),
             "verify_edsm": bool(self.cfg.get("verify_edsm", True)),
             "verify_top": int(self.cfg.get("verify_top", VERIFY_TOP_DEFAULT)),
         }
 
+    PARAM_KEYS = (("hold", "v_hold"), ("range", "v_range"),
+                  ("jump_empty", "v_je"), ("jump_laden", "v_jl"),
+                  ("min_supply", "v_ms"), ("max_age_days", "v_age"))
+
+    def _save_params(self):
+        """Search boxes were reset to defaults on every launch."""
+        self.cfg["params"] = {k: getattr(self, v).get() for k, v in self.PARAM_KEYS}
+        self.cfg["manual_params"] = True
+        save_config(self.cfg)
+
+    def _load_params(self):
+        saved = self.cfg.get("params") or {}
+        for k, v in self.PARAM_KEYS:
+            if saved.get(k):
+                getattr(self, v).set(saved[k])
+
     def search(self):
         if self.busy:
             return
+        self._save_params()
         self.busy = True
         self.go.state(["disabled"])
         self.pbar["value"] = 0
@@ -1249,14 +1300,14 @@ class App:
 
     def _work(self, params):
         try:
-            rows, cg, cg_ls = build_rows(
+            rows, cg, cg_ls, hidden_stale = build_rows(
                 params, lambda d, t, n: self.q.put(("prog", (d, t, n))),
                 cal=self.cal)
             rows.sort(key=lambda r: -r["cr_per_min"])
             self.q.put(("done", {
                 "rows": rows, "mixed": build_mixed(rows, params["hold"]),
                 "cg": cg, "cg_ls": cg_ls, "params": params,
-                "fetched_at": time.time()}))
+                "hidden_stale": hidden_stale, "fetched_at": time.time()}))
         except Exception as e:
             self.q.put(("err", "%s: %s" % (type(e).__name__, e)))
 
@@ -1313,11 +1364,14 @@ class App:
         self.prices.configure(
             text="CG PAYS   " + "    ".join(
                 "%s %s" % (k, f"{d['cg'][k]['sell']:,}") for k in order))
+        hidden = d.get("hidden_stale") or 0
+        extra = ("   %d hidden as stale - raise MAX AGE to see them"
+                 % hidden) if hidden else ""
         self.status.configure(
             text="%s sources across %d commodities%s"
                  % (f"{len(d['rows']):,}", len(d["cg"]),
                     "  (cached, %s old)" % age_phrase(d.get("fetched_at"))
-                    if from_cache else ""), foreground=DIM)
+                    if from_cache else "") + extra, foreground=DIM)
         self._fill_mixed()
         self._fill_single()
         write_state(d["mixed"], keep_index=0)

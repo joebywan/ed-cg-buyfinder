@@ -60,15 +60,37 @@ def save_index(idx):
         pass
 
 
+def age_text(datestr):
+    """Days since the market was last reported, for the button face."""
+    if not datestr:
+        return "age ?"
+    try:
+        y, m, d = (int(x) for x in datestr.split("-"))
+    except (ValueError, AttributeError):
+        return "age ?"
+    import datetime
+    n = (datetime.date.today() - datetime.date(y, m, d)).days
+    return "today" if n < 1 else "%dd old" % n
+
+
 def describe(plan, idx, total):
+    # The whole mix, not the first two: a truncated list means you undercarry.
     mix = " + ".join("%dt %s" % (m["tonnes"], m["commodity"])
-                     for m in plan.get("mix", [])[:2])
+                     for m in plan.get("mix", []))
+    tonnes = plan.get("tonnes")
+    short = plan.get("short") or 0
+    load = ("%st%s" % (f"{tonnes:,}", "  (%dt short)" % short if short else "")
+            if tonnes else "")
+    trip = plan.get("trip_minutes")
     return "\n".join([
         "%s" % plan["station"],
         "%s" % plan["system"],
         mix,
-        "%.1f ly  %s Ls" % (plan["ly"], f"{plan['ls']:,}"),
-        "%.1fM cr  (%d/%d)" % (plan.get("total", 0) / 1e6, idx + 1, total),
+        load,
+        "%.1f ly  %s Ls%s" % (plan["ly"], f"{plan['ls']:,}",
+                              "  ~%dm" % round(trip) if trip else ""),
+        "%.1fM cr  %s  (%d/%d)" % (plan.get("total", 0) / 1e6,
+                                   age_text(plan.get("updated")), idx + 1, total),
     ])
 
 
