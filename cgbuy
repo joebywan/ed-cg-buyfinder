@@ -459,6 +459,7 @@ class App:
         self.root = root
         self.cfg = load_config()
         self.entries = []
+        self.copy_map = {}          # (widget name, item id) -> system name
         # 9pt is unreadable on a 5K panel, so scale the default to the display.
         sw = root.winfo_screenwidth()
         auto = FONT_DEFAULT if sw < 2560 else (14 if sw < 3840 else 17)
@@ -696,7 +697,39 @@ class App:
         t.tag_configure("head", foreground=OR, font=self._fonts()["bold"])
         t.tag_configure("child", foreground=TXT)
         t.tag_configure("muted", foreground=DIM)
+        t.bind("<ButtonRelease-1>", self._copy_clicked)
         return t
+
+    def _forget_rows(self, tree):
+        """Drop this tree's entries; ids are reused after a refill."""
+        name = str(tree)
+        for k in [k for k in self.copy_map if k[0] == name]:
+            del self.copy_map[k]
+
+    def _remember(self, tree, item, system):
+        self.copy_map[(str(tree), item)] = system
+
+    def _copy_clicked(self, event):
+        """Click a row to put its system name on the clipboard."""
+        tree = event.widget
+        item = tree.identify_row(event.y)
+        if not item:
+            return
+        # Ignore clicks on the expand/collapse arrow - that is a disclosure,
+        # not a selection.
+        if tree.identify_element(event.x, event.y) == "Treeitem.indicator":
+            return
+        system = self.copy_map.get((str(tree), item))
+        if not system:
+            return
+        try:
+            self.root.clipboard_clear()
+            self.root.clipboard_append(system)
+            self.root.update_idletasks()
+        except tk.TclError:
+            self.set_status("could not reach the clipboard", BAD)
+            return
+        self.set_status("copied  %s" % system, OR)
 
     def _tabs(self):
         nb = ttk.Notebook(self.root, padding=(16, 6, 16, 0))
@@ -734,7 +767,7 @@ class App:
         self.cal_lbl = ttk.Label(f, text="", style="Dim.TLabel")
         self.cal_lbl.pack(side="left", padx=(18, 0))
         ttk.Label(f, style="Dim.TLabel",
-                  text="trip times are estimates  -  data age = last commander report"
+                  text="click a row to copy its system  -  trip times are estimates"
                   ).pack(side="right")
 
     def _apply_col_widths(self):
@@ -1343,6 +1376,7 @@ class App:
     def _fill_mixed(self):
         t = self.t_mixed
         t.delete(*t.get_children())
+        self._forget_rows(t)
         for i, p in enumerate(self.data["mixed"][:40]):
             carrier = "  [CARRIER]" if p["carrier"] else ""
             short = ("  -  %dt short" % p["short"]) if p["short"] else ""
@@ -1355,13 +1389,15 @@ class App:
                         "%st" % f"{p['tonnes']:,}", "",
                         f"{p['total']:,}", f"{p['cr_per_min']:,}"),
                 tags=("head",) if i else ("head", "top"))
+            self._remember(t, parent, p["system"])
             for m in p["mix"]:
-                t.insert(parent, "end", values=(
+                child = t.insert(parent, "end", values=(
                     "      %s" % m["commodity"],
                     "buy %s" % f"{m['buy']:,}",
                     "%st" % f"{m['tonnes']:,}",
                     "+%s" % f"{m['profit_per_t']:,}",
                     f"{m['value']:,}", ""), tags=("child",))
+                self._remember(t, child, p["system"])
 
     def _sort_by(self, col):
         if self.sort_key == col:
@@ -1373,6 +1409,7 @@ class App:
     def _fill_single(self):
         t = self.t_single
         t.delete(*t.get_children())
+        self._forget_rows(t)
         if not self.data:
             return
         k, desc = self.sort_key, self.sort_desc
@@ -1385,13 +1422,14 @@ class App:
             tags = [age_tag(r["updated"])]
             if i % 2:
                 tags.append("odd")
-            t.insert("", "end", values=(
+            iid = t.insert("", "end", values=(
                 r["commodity"], stn, r["system"], "%.1f" % r["ly"],
                 f"{r['ls']:,}", f"{r['supply']:,}", r["loads_available"],
                 f"{r['buy']:,}", f"{r['profit_per_t']:,}",
                 "%dm" % round(r["trip_minutes"]), f"{r['cr_per_min']:,}",
                 r["t_per_min"], age_text(r["updated"]),
                 "EDSM" if r.get("edsm") else "spansh"), tags=tags)
+            self._remember(t, iid, r["system"])
 
 
 def main():
