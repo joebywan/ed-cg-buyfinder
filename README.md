@@ -12,32 +12,26 @@ Uraninite, Lepidolite, Cobalt, Rutile, Water.
 
 ## Destination
 
-The tool is not tied to one community goal. **Settings → DESTINATION** sets
-where you sell and which goods to look for, and there are two ways to fill it
-in without typing:
+The tool works out where you are selling rather than asking:
 
-- **PREFILL FROM LIVE CG** reads Frontier's own initiatives feed and lists the
-  trade goals currently running (`activityType == "tradelist"` with a commodity
-  list — combat and exploration goals are excluded). Picking one fills in the
-  station, system and its exact commodity list.
-- **DERIVE FROM MARKET** reads `Market.json` for the station you are docked at
-  and picks out whatever it pays a premium for — anything selling at ≥2.5× its
-  galactic mean price. At a CG station that recovers the goal's commodity list
-  exactly; at an ordinary station it finds what that station actually wants.
+1. **The community goal you joined.** Your journal records it — station,
+   system and expiry — and Frontier's feed supplies that goal's commodity
+   list.
+2. **A live trade goal you have not joined.** If one is running, it is shown
+   with a banner telling you to fly there and register first, because
+   deliveries made before you sign up do not count. The banner clears itself
+   the moment the journal shows you joining.
+3. **Whatever you set by hand**, which always wins and is never overwritten.
 
-Neither is required. Type a station, a system and a comma-separated commodity
-list and it works — which also makes it useful for ordinary hauling to any
-station that pays well, not just community goals.
+**Settings → DESTINATION** takes a system (with name completion), then
+`LOAD STATIONS` lists that system's markets, nearest arrival star first.
+`PREFILL FROM LIVE CG` lists the running trade goals; `DERIVE FROM MARKET`
+reads the market of the station you are docked at and picks out whatever it
+pays a premium for — at a goal station that recovers the list exactly, and at
+an ordinary station it finds what that place is short of.
 
-The Frontier feed is undocumented and unsupported, so a failure there is
-treated as normal: you get a message and the manual fields, not an error.
-
-
-**On startup** the last results are shown straight away. If they are more than
-10 minutes old a fresh search starts by itself, with the old numbers on screen
-while it runs — there is no "do you want to update?" prompt to dismiss. The
-threshold is `Auto-refresh after (min)` in Settings; set it to 0 to always
-refetch. Cached results are discarded if they were for a different destination.
+No community goal anywhere? Set a station and it works as a plain hauling
+tool.
 
 ## The idea
 

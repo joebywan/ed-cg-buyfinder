@@ -1129,12 +1129,14 @@ class TestFetchCgPrices(FakeNetTestCase):
         self.assertEqual(cgbuy.fetch_cg_prices(self.dest())["Gold"]["sell"],
                          45000)
 
-    def test_the_shipped_default_destination_still_works(self):
+    def test_the_empty_default_destination_selects_nothing(self):
+        """DEFAULT_DEST carries no commodities, so nothing is selected from
+        the market - it is a placeholder, not a usable destination."""
         self.get_result = edsm_market_doc(("Gold", 45000, 9),
                                           ("Water", 130, 4),
                                           ("Tritium", 55000, 12))
         got = cgbuy.fetch_cg_prices(cgbuy.DEFAULT_DEST)
-        self.assertEqual(sorted(got), ["Gold", "Water"])
+        self.assertEqual(got, {})
 
 
 class TestFetchCgArrivalLs(FakeNetTestCase):
@@ -1371,15 +1373,26 @@ class TestBuildRows(BuildRowsTestCase):
                           for p in self.payloads()}, {"Tritium"})
         self.assertEqual([r["commodity"] for r in rows], ["Tritium"])
 
-    def test_no_destination_falls_back_to_the_shipped_default(self):
-        self.sell = {n: 40000 for n in cgbuy.DEFAULT_DEST["commodities"]}
-        rows, _, _, _ = self.build(dest=None)
+    def test_the_shipped_default_destination_is_empty(self):
+        """No station and no commodities are shipped as defaults.
+
+        One player's community goal used to be everyone's starting point,
+        so anyone else running the tool searched around a system they had
+        nothing to do with. The destination is discovered from the journal
+        instead, and asked for only if that fails.
+        """
+        self.assertIsNone(cgbuy.DEFAULT_DEST["station"])
+        self.assertIsNone(cgbuy.DEFAULT_DEST["system"])
+        self.assertEqual(cgbuy.DEFAULT_DEST["commodities"], [])
+
+    def test_no_destination_searches_for_nothing(self):
+        """With no destination there is nothing to look up, so no requests
+        go out at all - rather than quietly querying a stale default."""
+        self.sell = {}
+        rows, _, _, _ = self.build(dest=dict(cgbuy.DEFAULT_DEST,
+                                             station="X", system="Y"))
         self.assertEqual(rows, [])
-        self.assertEqual({p["reference_system"] for p in self.payloads()},
-                         {"Ega"})
-        self.assertEqual({p["filters"]["market"][0]["name"]
-                          for p in self.payloads()},
-                         set(cgbuy.DEFAULT_DEST["commodities"]))
+        self.assertEqual(self.payloads(), [])
 
     def test_an_unknown_destination_market_is_an_error_not_an_empty_grid(self):
         self.sell = {}

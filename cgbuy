@@ -46,14 +46,12 @@ except ImportError:
 # this tool was written for so an existing install keeps working, but nothing
 # downstream assumes it - the destination travels through build_rows in the
 # params dict.
+# Deliberately empty. The destination is discovered from the journal - the
+# community goal this commander joined - and only asked for if that fails.
+# Shipping one player's goal as everyone's default was the bug this replaces.
 DEFAULT_DEST = {
-    "station": "Metz Enterprise",
-    "system": "Ega",
-    "commodities": [
-        "Palladium", "Gold", "Silver", "Bertrandite", "Indite", "Gallite",
-        "Coltan", "Uraninite", "Lepidolite", "Cobalt", "Rutile", "Water",
-    ],
-    "title": None, "expiry": None, "source": "default",
+    "station": None, "system": None, "commodities": [],
+    "title": None, "expiry": None, "source": "none",
 }
 
 # A destination station's own market gives away which goods it pays a premium
@@ -109,7 +107,13 @@ def fetch_cg_prices(dest):
     Any community-goal multiplier is already baked into what the station
     reports, so it is never applied here.
     """
-    wanted = set(dest["commodities"])
+    # A destination may legitimately be unset - discovery has not run yet, or
+    # the player has not joined a goal. That is an empty answer, not a crash.
+    if not dest or not dest.get("system") or not dest.get("station"):
+        return {}
+    wanted = set(dest.get("commodities") or ())
+    if not wanted:
+        return {}
     url = EDSM_MARKET.format(sys=urllib.parse.quote(dest["system"]),
                              stn=urllib.parse.quote(dest["station"]))
     data = get_json(url)
@@ -118,6 +122,8 @@ def fetch_cg_prices(dest):
 
 
 def fetch_cg_arrival_ls(dest):
+    if not dest or not dest.get("system") or not dest.get("station"):
+        return 0
     try:
         d = get_json(EDSM_STATIONS.format(sys=urllib.parse.quote(dest["system"])))
         for s in d.get("stations", []):
@@ -259,7 +265,11 @@ def trip_minutes(dist_ly, src_ls, cg_ls, jump_empty, jump_laden, cal=None):
 def build_rows(p, progress=None, cal=None):
     """Fetch everything and score it. `p` is the parameter dict from the UI."""
     dest = p.get("dest") or DEFAULT_DEST
-    commodities = dest["commodities"]
+    commodities = list(dest.get("commodities") or ())
+    if not dest.get("station") or not dest.get("system") or not commodities:
+        # Nothing to search for. Returning empty beats querying a stale
+        # default the player has no connection to.
+        return [], {}, 0, 0
     cg = fetch_cg_prices(dest)
     if not cg:
         raise RuntimeError("EDSM returned no market for %s - station renamed?"
@@ -675,7 +685,7 @@ class App:
         self.dest = dict(DEFAULT_DEST)
         saved = self.cfg.get("dest")
         if isinstance(saved, dict) and saved.get("station") and saved.get("commodities"):
-            self.dest.update(saved)
+            self.dest.update(saved)          # an explicit choice always wins
         self.standing = None
         self.ship_label = None
         # 9pt is unreadable on a 5K panel, so scale the default to the display.
@@ -747,6 +757,8 @@ class App:
         s.configure("PanelDim.TLabel", background=PANEL, foreground=DIM, font=MONO)
         s.configure("PanelTxt.TLabel", background=PANEL, foreground=TXT, font=MONO)
         s.configure("Or.TLabel", background=BG, foreground=OR, font=TITLE)
+        s.configure("Banner.TLabel", background="#3a2408", foreground="#ffd9a8",
+                    font=MONO_B, padding=(12, 8))
         s.configure("Sub.TLabel", background=BG, foreground=DIM, font=MONO)
 
         s.configure("TEntry", fieldbackground="#0a0908", foreground=TXT,
@@ -896,6 +908,9 @@ class App:
         self.prices.pack(anchor="w", pady=(10, 0))
 
         # maximum is set per search: the commodity count varies by destination
+        self.banner = ttk.Label(outer, text="", style="Banner.TLabel",
+                                anchor="w", wraplength=1600)
+        # packed only when there is something to say; see _set_banner
         self.pbar = ttk.Progressbar(outer, mode="determinate",
                                     maximum=max(1, len(self.dest["commodities"])))
         self.pbar.pack(fill="x", pady=(6, 0))
@@ -1372,6 +1387,7 @@ class App:
                              "expiry": self.dest.get("expiry"),
                              "source": "manual"}
                 self.cfg["dest"] = self.dest
+                self.cfg["dest_manual"] = True
                 self.cg_lbl.configure(text="%s  -  %s" % (self.dest["station"],
                                                           self.dest["system"]))
             self.cfg["journal_dir"] = v_journal.get().strip() or None
@@ -1490,6 +1506,7 @@ class App:
             self.watcher, self.cal = w, w.cal
             self._show_cal()
             self._adopt_ship()
+            self._adopt_destination()
             self.refresh_standing()
             self.root.after(3000, self._poll_journal, self._poll_token)
         except Exception as e:
@@ -1571,6 +1588,86 @@ class App:
 
     def set_status(self, text, colour=None):
         self.status.configure(text=text, foreground=colour or DIM)
+
+    def _set_banner(self, text):
+        """A call to action that stays put, rather than a status line that
+        scrolls away behind the next message."""
+        if text:
+            self.banner.configure(text=text)
+            self.banner.pack(fill="x", pady=(6, 0))
+        else:
+            self.banner.configure(text="")      # not just hidden: cleared
+            self.banner.pack_forget()
+
+    def _adopt_destination(self):
+        """Take the destination from the CG this commander joined.
+
+        Asking the user to type a station the game already knows about is
+        work the tool should be doing. A destination they set by hand is
+        never overridden.
+        """
+        if cgstanding is None or not self.watcher or not self.watcher.dir:
+            return
+        if self.cfg.get("dest_manual"):
+            return
+        if self.dest.get("station") and self.cfg.get("dest"):
+            return                              # already chosen, leave it
+
+        def work():
+            try:
+                hist = cgstanding.read_history(self.watcher.dir)
+                found, others = cgstanding.suggest_destination(
+                    hist, cgstanding.fetch_live())
+                if found and found.get("station") and not self.closing:
+                    found = dict(found, alternatives=len(others))
+                    self.q.put(("dest", found))
+            except Exception:
+                pass
+
+        self._spawn(work)
+
+    def _apply_destination(self, found):
+        if not found or not found.get("commodities"):
+            # Without a commodity list there is nothing to search for; leave
+            # the fields for the user rather than half-configuring.
+            if found:
+                self.set_status(
+                    "Joined CG: %s (%s) - no commodity list; set it in Settings"
+                    % (found["station"], found["system"]), WARN)
+            return
+        self.dest = dict(found)
+        self.cfg["dest"] = self.dest
+        save_config(self.cfg)
+        self.cg_lbl.configure(text="%s  -  %s" % (self.dest["station"],
+                                                  self.dest["system"]))
+        alts = found.get("alternatives") or 0
+        more = ("  (+%d other trade CG%s - see SETTINGS)"
+                % (alts, "" if alts == 1 else "s")) if alts else ""
+        if found.get("source", "").startswith("live CG"):
+            # Hauling for a goal you have not signed up to contributes
+            # nothing, so say what to do before they fly anywhere.
+            expiry = found.get("expiry") or ""
+            self._set_banner(
+                "NOT REGISTERED FOR THIS GOAL   ->   fly to %s in %s, dock, and "
+                "sign up at the community goal board before hauling. Deliveries "
+                "made before you register do not count.%s%s"
+                % (self.dest["station"], self.dest["system"],
+                   "   Goal ends %s." % expiry[:16] if expiry else "", more))
+            self.set_status("Showing the live CG at %s, %s - not joined yet"
+                            % (self.dest["station"], self.dest["system"]), WARN)
+            self._notify(
+                "Community goal running - you are not signed up",
+                "%s in %s\nDock there and register at the CG board first; "
+                "deliveries before that do not count."
+                % (self.dest["station"], self.dest["system"]), "normal")
+        else:
+            self._set_banner("")
+            self.set_status(
+                "Destination from your joined CG: %s, %s (%d commodities)%s"
+                % (self.dest["station"], self.dest["system"],
+                   len(self.dest["commodities"]), more))
+        if not self.busy:
+            self.search()
 
     def refresh_standing(self):
         """Where you stand in the goal, from your journal + Frontier's feed."""
@@ -1660,7 +1757,17 @@ class App:
                 pass
             self.root.after(3000, self._poll_journal, self._poll_token)
 
+    def _on_join(self, e):
+        """CommunityGoalJoin means they just registered - stop nagging."""
+        self._set_banner("")
+        self.cfg.pop("dest_manual", None)
+        self._adopt_destination()
+        self.refresh_standing()
+
     def _on_journal_event(self, e):
+        if e.get("event") in ("CommunityGoalJoin", "CommunityGoalDiscard"):
+            self._on_join(e)
+            return
         """A Market event means the game just rewrote Market.json."""
         if e.get("event") != "Market" or not self.v_eddn.get():
             return
@@ -1738,6 +1845,11 @@ class App:
     def search(self):
         if self.busy:
             return
+        if not self.dest.get("station") or not self.dest.get("commodities"):
+            self.set_status(
+                "No destination - no trade CG is running, so set a station "
+                "in SETTINGS (it works for ordinary hauling too)", WARN)
+            return
         self._save_params()
         self.busy = True
         self.go.state(["disabled"])
@@ -1785,6 +1897,8 @@ class App:
                         foreground=DIM)
                 elif kind == "done":
                     self._finish(payload)
+                elif kind == "dest":
+                    self._apply_destination(payload)
                 elif kind == "standing":
                     self._show_standing(payload)
                 elif kind == "eddn":

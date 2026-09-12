@@ -138,6 +138,74 @@ def fetch_live(timeout=20):
     return out
 
 
+def joined_goal(history, live=None):
+    """The community goal this commander has actually signed up to.
+
+    The journal records the goals you have joined, including the station and
+    system. Pairing that with Frontier's feed (matched on station+system)
+    fills in the commodity list, which the journal does not carry.
+
+    Returns a destination dict the app can use directly, or None.
+    """
+    if not history:
+        return None
+    cur = history[-1]
+    station, system = cur.get("station"), cur.get("system")
+    if not station or not system:
+        return None
+
+    commodities = []
+    for g in (live or []):
+        if not g.get("is_trade"):
+            continue
+        if (g.get("station"), g.get("system")) == (station, system):
+            commodities = list(g.get("commodities") or [])
+            break
+
+    return {
+        "station": station,
+        "system": system,
+        "commodities": commodities,
+        "title": cur.get("title"),
+        "expiry": cur.get("expiry"),
+        "source": "joined CG" if commodities else "joined CG (no commodity list)",
+    }
+
+
+def suggest_destination(history, live=None):
+    """Best destination we can work out without asking.
+
+    1. the goal this commander joined - they are already contributing to it;
+    2. failing that, a live trade goal from Frontier's feed, flagged as not
+       joined, because a player who has never opened the CG board still wants
+       to know where the hauling is;
+    3. failing that, nothing, and the user is asked.
+
+    Returns (dest_or_None, alternatives) - alternatives being the other live
+    trade goals, so the UI can offer a choice rather than silently picking.
+    """
+    live = live or []
+    trade = [g for g in live if g.get("is_trade")]
+
+    joined = joined_goal(history, live)
+    if joined and joined.get("commodities"):
+        others = [g for g in trade
+                  if (g["station"], g["system"]) != (joined["station"],
+                                                     joined["system"])]
+        return joined, others
+
+    if trade:
+        g = trade[0]
+        return {
+            "station": g["station"], "system": g["system"],
+            "commodities": list(g.get("commodities") or []),
+            "title": g.get("title"), "expiry": g.get("expiry"),
+            "source": "live CG (not joined)",
+        }, trade[1:]
+
+    return None, []
+
+
 def hours_left(expiry):
     """Hours until an expiry stamp, or None. Frontier uses naive UTC."""
     for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%SZ"):
