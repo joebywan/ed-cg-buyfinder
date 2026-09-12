@@ -30,9 +30,19 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-STATE_PATH = os.path.join(
-    os.environ.get("XDG_CONFIG_HOME", os.path.expanduser("~/.config")),
-    "cgbuy-state.json")
+def _config_dir():
+    """Must match cgbuy's _config_dir: same files, separate programs."""
+    env = os.environ.get("XDG_CONFIG_HOME")
+    if env:
+        return env
+    if sys.platform == "win32":
+        return os.environ.get("APPDATA") or os.path.expanduser("~/AppData/Roaming")
+    if sys.platform == "darwin":
+        return os.path.expanduser("~/Library/Application Support")
+    return os.path.expanduser("~/.config")
+
+
+STATE_PATH = os.path.join(_config_dir(), "cgbuy-state.json")
 
 def load_state():
     try:
@@ -100,9 +110,7 @@ def main():
     ap.add_argument("--reset", action="store_true", help="back to rank 1")
     a = ap.parse_args()
 
-    cfg_path = os.path.join(
-        os.environ.get("XDG_CONFIG_HOME", os.path.expanduser("~/.config")),
-        "cgbuy.json")
+    cfg_path = os.path.join(_config_dir(), "cgbuy.json")
     try:
         with open(cfg_path) as fh:
             if not json.load(fh).get("deck_enabled", True):

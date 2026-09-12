@@ -15,14 +15,25 @@ import os
 import statistics
 import time
 
-# Where Elite writes journals. Proton keeps them inside the game's prefix, so
-# the Steam library may be on any mounted drive.
+# Where Elite writes journals. On Windows it is a fixed spot under the user
+# profile (possibly redirected into OneDrive); under Proton it lives inside the
+# game's prefix, and the Steam library may be on any mounted drive.
+_WIN_TAIL = "Saved Games/Frontier Developments/Elite Dangerous"
+_PROTON_TAIL = ("steamapps/compatdata/359320/pfx/drive_c/users/steamuser/"
+                "Saved Games/Frontier Developments/Elite Dangerous")
+
 JOURNAL_GLOBS = [
-    "~/Saved Games/Frontier Developments/Elite Dangerous",
+    "~/" + _WIN_TAIL,
+    # OneDrive silently redirects the profile folders on many Windows setups.
+    "~/OneDrive/" + _WIN_TAIL,
+    os.path.join(os.environ.get("USERPROFILE", "~"), _WIN_TAIL),
     "~/.local/share/Steam/steamapps/compatdata/359320/pfx/drive_c/users/steamuser/Saved Games/Frontier Developments/Elite Dangerous",
     "~/.steam/steam/steamapps/compatdata/359320/pfx/drive_c/users/steamuser/Saved Games/Frontier Developments/Elite Dangerous",
     "/media/*/SteamLibrary/steamapps/compatdata/359320/pfx/drive_c/users/steamuser/Saved Games/Frontier Developments/Elite Dangerous",
     "/mnt/*/SteamLibrary/steamapps/compatdata/359320/pfx/drive_c/users/steamuser/Saved Games/Frontier Developments/Elite Dangerous",
+    # Steam libraries on other drive letters (Windows) or mounts.
+    "?:/SteamLibrary/" + _PROTON_TAIL,
+    "?:/Program Files (x86)/Steam/" + _PROTON_TAIL,
 ]
 
 
@@ -31,7 +42,11 @@ def find_journal_dir(override=None):
     if override and os.path.isdir(override):
         return override
     best, best_mtime = None, -1
+    seen = set()
     for pattern in JOURNAL_GLOBS:
+        if pattern in seen:             # USERPROFILE collapses to ~ off Windows
+            continue
+        seen.add(pattern)
         for d in glob.glob(os.path.expanduser(pattern)):
             logs = glob.glob(os.path.join(d, "Journal.*.log"))
             if not logs:

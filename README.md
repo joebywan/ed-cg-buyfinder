@@ -213,3 +213,34 @@ not produced targets yet.
   tkinter. Build it on the machine you will run it on.
 - **The CG is hardcoded** — station, system, and the twelve commodities are
   constants at the top of the source.
+
+## Windows and macOS
+
+The code is portable; only the prebuilt binary is not. `cgbuy-linux` is an ELF
+executable and PyInstaller cannot cross-compile, so a Windows `.exe` has to be
+built on Windows.
+
+**Run from source** (simplest — Python 3 from python.org includes tkinter):
+
+```
+python cgbuy
+```
+
+The file has no `.py` extension, so Windows will not associate it; invoke it
+through `python`. `cgbuy-next` works the same way.
+
+**Build an .exe:** `build.bat`, the Windows counterpart of `build.sh`.
+
+What adapts automatically:
+
+- **Journals** — `%USERPROFILE%\Saved Games\Frontier Developments\Elite Dangerous`,
+  including the OneDrive-redirected variant, plus Steam libraries on other
+  drive letters. Override it in Settings if detection misses.
+- **Config** — `%APPDATA%\cgbuy.json` on Windows, `~/Library/Application Support`
+  on macOS, `~/.config` elsewhere. `XDG_CONFIG_HOME` always wins if set.
+- **Cache** — `%LOCALAPPDATA%` / `~/Library/Caches` / `~/.cache`.
+- **Font** — first installed of DejaVu Sans Mono, Consolas, Menlo, Liberation
+  Mono, Courier New.
+
+Nothing in the tool shells out or calls a POSIX-only API, so there is no
+platform-specific behaviour beyond those paths.

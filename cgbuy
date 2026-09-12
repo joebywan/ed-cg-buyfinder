@@ -433,23 +433,60 @@ GOOD    = "#5ec27a"
 WARN    = "#e0a33a"
 BAD     = "#d05a4a"
 
-FONT_FAMILY = "DejaVu Sans Mono"
+# Monospace families in preference order. DejaVu is the Linux default,
+# Consolas ships with Windows, Menlo with macOS; the last is always present.
+FONT_CANDIDATES = ("DejaVu Sans Mono", "Consolas", "Menlo", "Liberation Mono",
+                   "Courier New", "TkFixedFont")
+
+
+def pick_font_family():
+    """First installed family from the preference list."""
+    try:
+        from tkinter import font as tkfont
+        have = {f.lower() for f in tkfont.families()}
+    except Exception:
+        return "Courier"
+    for name in FONT_CANDIDATES:
+        if name.lower() in have:
+            return name
+    return "Courier"
+
+
+FONT_FAMILY = "DejaVu Sans Mono"     # replaced at startup by pick_font_family
 FONT_MIN, FONT_MAX, FONT_DEFAULT = 7, 22, 9
 
-CONFIG_PATH = os.path.join(
-    os.environ.get("XDG_CONFIG_HOME", os.path.expanduser("~/.config")),
-    "cgbuy.json")
+def _config_dir():
+    """Per-platform config location. XDG_CONFIG_HOME always wins if set."""
+    env = os.environ.get("XDG_CONFIG_HOME")
+    if env:
+        return env
+    if sys.platform == "win32":
+        return os.environ.get("APPDATA") or os.path.expanduser("~/AppData/Roaming")
+    if sys.platform == "darwin":
+        return os.path.expanduser("~/Library/Application Support")
+    return os.path.expanduser("~/.config")
+
+
+def _cache_dir():
+    env = os.environ.get("XDG_CACHE_HOME")
+    if env:
+        return env
+    if sys.platform == "win32":
+        return (os.environ.get("LOCALAPPDATA")
+                or os.path.expanduser("~/AppData/Local"))
+    if sys.platform == "darwin":
+        return os.path.expanduser("~/Library/Caches")
+    return os.path.expanduser("~/.cache")
+
+
+CONFIG_PATH = os.path.join(_config_dir(), "cgbuy.json")
 
 # Read by cgbuy-next, the single Stream Deck button. Kept separate from the
 # config so deck software can poll it cheaply.
-STATE_PATH = os.path.join(
-    os.environ.get("XDG_CONFIG_HOME", os.path.expanduser("~/.config")),
-    "cgbuy-state.json")
+STATE_PATH = os.path.join(_config_dir(), "cgbuy-state.json")
 
 
-CACHE_PATH = os.path.join(
-    os.environ.get("XDG_CACHE_HOME", os.path.expanduser("~/.cache")),
-    "cgbuy-results.json")
+CACHE_PATH = os.path.join(_cache_dir(), "cgbuy-results.json")
 
 
 def save_cache(payload):
@@ -617,10 +654,16 @@ class App:
     ]
 
     def __init__(self, root, autosearch=True):
+        global FONT_FAMILY
+        FONT_FAMILY = pick_font_family()
         self.root = root
         self.cfg = load_config()
         self.entries = []
         self.copy_map = {}          # (widget name, item id) -> system name
+        # Worker threads outlive a destroyed root otherwise, which races the
+        # interpreter shutdown and can take the process down on quit.
+        self.closing = False
+        self.workers = []
         self.pad = self.cfg.get("pad_override") or "L"
         self.dest = dict(DEFAULT_DEST)
         saved = self.cfg.get("dest")
@@ -1365,8 +1408,21 @@ class App:
             return self.data["mixed"][idx]
         return None
 
+    def _spawn(self, fn):
+        """Start a background worker that stops touching the UI once closing."""
+        t = threading.Thread(target=fn, daemon=True)
+        self.workers = [w for w in self.workers if w.is_alive()]
+        self.workers.append(t)
+        t.start()
+        return t
+
     def _quit(self):
         self._save_cal()
+        self.closing = True
+        # Give in-flight network calls a moment to notice and return.
+        for w in list(self.workers):
+            if w.is_alive():
+                w.join(timeout=1.5)
         self.root.destroy()
 
     def bump_font(self, delta):
@@ -1429,10 +1485,11 @@ class App:
                 hist = cgstanding.read_history(self.watcher.dir)
                 live = next((g for g in cgstanding.fetch_live()
                              if g.get("is_trade")), None)
-                self.q.put(("standing", cgstanding.standing(hist, live)))
+                if not self.closing:
+                    self.q.put(("standing", cgstanding.standing(hist, live)))
             except Exception:
                 pass
-        threading.Thread(target=work, daemon=True).start()
+        self._spawn(work)
 
     def _show_standing(self, st):
         if not st:
@@ -1479,6 +1536,8 @@ class App:
             self.cal_lbl.configure(text="TIMINGS  " + self.cal.summary())
 
     def _poll_journal(self, token=None):
+        if self.closing:
+            return
         if token is not None and token != self._poll_token:
             return                      # superseded by a newer poll chain
         if self.watcher:
@@ -1502,10 +1561,11 @@ class App:
 
         def worker():
             ok, msg = self.sender.maybe_send(*args)
-            self.q.put(("eddn", (ok, msg)))
+            if not self.closing:
+                self.q.put(("eddn", (ok, msg)))
 
         # The upload can block for 20s; never run it on the UI thread.
-        threading.Thread(target=worker, daemon=True).start()
+        self._spawn(worker)
 
     def _on_docked(self, station, system):
         """Docking at the CG station means a run just ended - refresh."""
@@ -1572,8 +1632,7 @@ class App:
         self.pbar.configure(maximum=max(1, len(self.dest["commodities"])))
         self.pbar["value"] = 0
         self.status.configure(text="Starting...", foreground=DIM)
-        threading.Thread(target=self._work, args=(self._params(),),
-                         daemon=True).start()
+        self._spawn(lambda: self._work(self._params()))
 
     def _work(self, params):
         try:
@@ -1581,6 +1640,8 @@ class App:
                 params, lambda d, t, n: self.q.put(("prog", (d, t, n))),
                 cal=self.cal)
             rows.sort(key=lambda r: -r["cr_per_min"])
+            if self.closing:
+                return
             self.q.put(("done", {
                 "rows": rows, "mixed": build_mixed(rows, params["hold"]),
                 "cg": cg, "cg_ls": cg_ls, "params": params,
@@ -1590,6 +1651,8 @@ class App:
             self.q.put(("err", "%s: %s" % (type(e).__name__, e)))
 
     def _drain(self):
+        if self.closing:
+            return
         try:
             self._drain_once()
         finally:
