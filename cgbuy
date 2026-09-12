@@ -757,6 +757,7 @@ class App:
         s.configure("PanelDim.TLabel", background=PANEL, foreground=DIM, font=MONO)
         s.configure("PanelTxt.TLabel", background=PANEL, foreground=TXT, font=MONO)
         s.configure("Or.TLabel", background=BG, foreground=OR, font=TITLE)
+        s.configure("Banner.TFrame", background="#3a2408")
         s.configure("Banner.TLabel", background="#3a2408", foreground="#ffd9a8",
                     font=MONO_B, padding=(12, 8))
         s.configure("Sub.TLabel", background=BG, foreground=DIM, font=MONO)
@@ -908,9 +909,14 @@ class App:
         self.prices.pack(anchor="w", pady=(10, 0))
 
         # maximum is set per search: the commodity count varies by destination
-        self.banner = ttk.Label(outer, text="", style="Banner.TLabel",
-                                anchor="w", wraplength=1600)
-        # packed only when there is something to say; see _set_banner
+        # A dismissible notice, not a blocker: routes load either way.
+        self.banner = ttk.Frame(outer, style="Banner.TFrame")
+        self.banner_lbl = ttk.Label(self.banner, text="", style="Banner.TLabel",
+                                    anchor="w", wraplength=1500, justify="left")
+        self.banner_lbl.pack(side="left", fill="x", expand=True)
+        ttk.Button(self.banner, text="GOT IT", style="Alt.TButton",
+                   command=self._dismiss_banner).pack(side="right", padx=(12, 0))
+        self.banner_dismissed = False
         self.pbar = ttk.Progressbar(outer, mode="determinate",
                                     maximum=max(1, len(self.dest["commodities"])))
         self.pbar.pack(fill="x", pady=(6, 0))
@@ -1590,14 +1596,21 @@ class App:
         self.status.configure(text=text, foreground=colour or DIM)
 
     def _set_banner(self, text):
-        """A call to action that stays put, rather than a status line that
-        scrolls away behind the next message."""
-        if text:
-            self.banner.configure(text=text)
+        """A notice that stays put, rather than a status line that scrolls
+        away behind the next message. Dismissing it is the user's call - it
+        never gates the results."""
+        if text and not self.banner_dismissed:
+            self.banner_lbl.configure(text=text)
             self.banner.pack(fill="x", pady=(6, 0))
         else:
-            self.banner.configure(text="")      # not just hidden: cleared
+            self.banner_lbl.configure(text="")
             self.banner.pack_forget()
+
+    def _dismiss_banner(self):
+        # Session-only: a new launch while still unregistered reminds once
+        # more, which is the last useful moment to mention it.
+        self.banner_dismissed = True
+        self._set_banner("")
 
     def _adopt_destination(self):
         """Take the destination from the CG this commander joined.
@@ -1648,17 +1661,18 @@ class App:
             # nothing, so say what to do before they fly anywhere.
             expiry = found.get("expiry") or ""
             self._set_banner(
-                "NOT REGISTERED FOR THIS GOAL   ->   fly to %s in %s, dock, and "
-                "sign up at the community goal board before hauling. Deliveries "
-                "made before you register do not count.%s%s"
+                "We've found a trading community goal you'll need to register "
+                "for, at %s in %s.  Head there and sign up at the goal board - "
+                "anything you deliver before registering won't count.  "
+                "Meanwhile we're working out your best trade routes.%s%s"
                 % (self.dest["station"], self.dest["system"],
-                   "   Goal ends %s." % expiry[:16] if expiry else "", more))
-            self.set_status("Showing the live CG at %s, %s - not joined yet"
+                   "  Goal ends %s." % expiry[:16] if expiry else "", more))
+            self.set_status("Live CG at %s, %s - register there to contribute"
                             % (self.dest["station"], self.dest["system"]), WARN)
             self._notify(
-                "Community goal running - you are not signed up",
-                "%s in %s\nDock there and register at the CG board first; "
-                "deliveries before that do not count."
+                "Trading community goal found",
+                "Register at %s in %s before hauling - deliveries made before "
+                "you sign up don't count. Routes are being worked out now."
                 % (self.dest["station"], self.dest["system"]), "normal")
         else:
             self._set_banner("")
@@ -1786,12 +1800,30 @@ class App:
         # The upload can block for 20s; never run it on the UI thread.
         self._spawn(worker)
 
+    def registered(self):
+        """Has this commander actually signed up to the goal we are using?"""
+        return not str(self.dest.get("source", "")).startswith("live CG")
+
     def _on_docked(self, station, system):
         """Docking at the CG station means a run just ended - refresh."""
         self._save_cal()
-        if (station == self.dest["station"]
-                and (not system or system == self.dest["system"])
-                and not self.busy):
+        at_destination = (station == self.dest.get("station")
+                          and (not system or system == self.dest.get("system")))
+
+        if at_destination and not self.registered():
+            # They are standing at the board right now - the one moment the
+            # reminder is worth anything. Worth overriding an earlier dismissal.
+            self.banner_dismissed = False
+            self._set_banner(
+                "You're docked at %s - don't forget to register for the "
+                "community goal while you're here, or your deliveries won't "
+                "count." % station)
+            self._notify(
+                "You're at %s - register for the CG" % station,
+                "The goal board is here. Sign up now so your deliveries count.",
+                "high")
+
+        if (at_destination and not self.busy):
             self.status.configure(
                 text="Docked at %s - refreshing for the next run..." % station,
                 foreground=OR)

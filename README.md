@@ -17,10 +17,13 @@ The tool works out where you are selling rather than asking:
 1. **The community goal you joined.** Your journal records it — station,
    system and expiry — and Frontier's feed supplies that goal's commodity
    list.
-2. **A live trade goal you have not joined.** If one is running, it is shown
-   with a banner telling you to fly there and register first, because
-   deliveries made before you sign up do not count. The banner clears itself
-   the moment the journal shows you joining.
+2. **A live trade goal you have not joined.** If one is running it is used
+   anyway — routes are never withheld — with a dismissible notice explaining
+   that you need to sign up at the goal board first, since deliveries made
+   before you register do not count. Dock at that station while still
+   unregistered and it reminds you again, which is the one moment the
+   reminder is worth anything. Everything clears the moment the journal shows
+   you joining.
 3. **Whatever you set by hand**, which always wins and is never overwritten.
 
 **Settings → DESTINATION** takes a system (with name completion), then
