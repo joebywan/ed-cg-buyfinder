@@ -11,14 +11,18 @@ can never point at the commander's own files.
 """
 
 import atexit
+import contextlib
+import datetime
 import importlib.machinery
 import importlib.util
+import io
 import json
 import os
 import shutil
 import sys
 import tempfile
 import unittest
+import urllib.parse
 
 PROJECT_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -32,8 +36,10 @@ _CONFIG_SANDBOX = tempfile.mkdtemp(prefix="cgbuy-test-config-")
 os.environ["XDG_CONFIG_HOME"] = _CONFIG_SANDBOX
 atexit.register(shutil.rmtree, _CONFIG_SANDBOX, True)
 
+import cg                                                     # noqa: E402
 import eddn                                                   # noqa: E402
 import journal                                                # noqa: E402
+import verify                                                 # noqa: E402
 
 # cgbuy has no .py extension, so the normal import machinery cannot see it.
 # Importing it only defines things; main() runs under __name__ == "__main__",
@@ -49,6 +55,14 @@ _loader.exec_module(cgbuy)
 def ts(hh, mm, ss=0, day=1):
     """A journal timestamp on a fixed, DST-free winter day."""
     return "2025-01-%02dT%02d:%02d:%02dZ" % (day, hh, mm, ss)
+
+
+@contextlib.contextmanager
+def quiet_stderr():
+    """Swallow the data layer's warnings so a passing run stays readable."""
+    buf = io.StringIO()
+    with contextlib.redirect_stderr(buf):
+        yield buf
 
 
 # --------------------------------------------------------------------------
@@ -847,6 +861,1138 @@ class TestBuildMixed(unittest.TestCase):
         self.assertEqual(large["tonnes"], 784)
         self.assertGreater(large["total"], small["total"])
 
+
+# --------------------------------------------------------------------------
+# cgbuy.derive_commodities
+# --------------------------------------------------------------------------
+
+def market_item(name, mean, sell, localised=None):
+    """One Market.json Items entry, with only what derive_commodities reads."""
+    it = {"Name": name, "MeanPrice": mean, "SellPrice": sell}
+    if localised is not None:
+        it["Name_Localised"] = localised
+    return it
+
+
+class TestDeriveCommodities(unittest.TestCase):
+
+    def test_goods_paying_the_cg_multiple_are_picked(self):
+        items = [market_item("$gold_name;", 9400, 9400 * 3, "Gold")]
+        self.assertEqual(cgbuy.derive_commodities(items), ["Gold"])
+
+    def test_exactly_the_ratio_counts_as_premium(self):
+        mean = 1000
+        at = market_item("At", mean, int(mean * cgbuy.CG_PRICE_RATIO))
+        self.assertEqual(cgbuy.derive_commodities([at]), ["At"])
+
+    def test_just_under_the_ratio_is_excluded(self):
+        mean = 1000
+        under = market_item("Under", mean, int(mean * cgbuy.CG_PRICE_RATIO) - 1)
+        self.assertEqual(cgbuy.derive_commodities([under]), [])
+
+    def test_an_ordinary_market_spread_is_not_a_premium(self):
+        items = [market_item("Water", 300, 320),
+                 market_item("Cobalt", 1000, 1100)]
+        self.assertEqual(cgbuy.derive_commodities(items), [])
+
+    def test_zero_mean_price_does_not_divide_by_zero(self):
+        # limpets and salvage report MeanPrice 0 or omit it entirely
+        items = [market_item("Limpet", 0, 100),
+                 market_item("Salvage", None, 100000)]
+        self.assertEqual(cgbuy.derive_commodities(items), [])
+
+    def test_missing_keys_are_tolerated(self):
+        self.assertEqual(cgbuy.derive_commodities([{}, {"Name": "X"},
+                                                   {"MeanPrice": 100}]), [])
+
+    def test_zero_sell_price_is_not_a_premium(self):
+        self.assertEqual(
+            cgbuy.derive_commodities([market_item("Gold", 9400, 0)]), [])
+
+    def test_empty_input_returns_empty_list(self):
+        self.assertEqual(cgbuy.derive_commodities([]), [])
+        self.assertEqual(cgbuy.derive_commodities(None), [])
+
+    def test_localised_name_wins_over_the_game_symbol(self):
+        items = [market_item("$bertrandite_name;", 2000, 20000, "Bertrandite")]
+        self.assertEqual(cgbuy.derive_commodities(items), ["Bertrandite"])
+
+    def test_result_is_sorted_and_nameless_entries_are_dropped(self):
+        items = [market_item("Silver", 4700, 23000),
+                 market_item("", 1000, 10000),
+                 market_item("Gold", 9400, 45000)]
+        self.assertEqual(cgbuy.derive_commodities(items), ["Gold", "Silver"])
+
+    def test_a_cg_market_yields_only_the_premium_goods(self):
+        items = [
+            market_item("$gold_name;", 9400, 45000, "Gold"),
+            market_item("$silver_name;", 4700, 23000, "Silver"),
+            market_item("$water_name;", 120, 130, "Water"),
+            market_item("$drones_name;", 101, 100, "Limpet"),
+            market_item("$usscargoblackbox_name;", 0, 8000, "Black Box"),
+        ]
+        self.assertEqual(cgbuy.derive_commodities(items), ["Gold", "Silver"])
+
+    def test_the_real_market_fixture_is_handled(self):
+        # fake_market()'s Gold (9500 on a 9400 mean) is an ordinary spread
+        self.assertEqual(cgbuy.derive_commodities(fake_market()["Items"]), [])
+
+
+# --------------------------------------------------------------------------
+# cgbuy.pad_for_ship / cgbuy.station_fits
+# --------------------------------------------------------------------------
+
+def station(large=0, medium=0, small=0, **extra):
+    """A Spansh station result, with only what station_fits reads."""
+    st = {"large_pads": large, "medium_pads": medium, "small_pads": small}
+    st.update(extra)
+    return st
+
+
+class TestPadForShip(unittest.TestCase):
+
+    def test_known_ships_map_to_the_pad_they_need(self):
+        for ship, pad in (("sidewinder", "S"), ("cobramkiii", "S"),
+                          ("python", "M"), ("krait_mkii", "M"),
+                          ("type9", "L"), ("cutter", "L")):
+            with self.subTest(ship=ship):
+                self.assertEqual(cgbuy.pad_for_ship(ship), pad)
+
+    def test_lookup_is_case_insensitive(self):
+        # the journal spells these however it likes
+        self.assertEqual(cgbuy.pad_for_ship("Anaconda"), "L")
+        self.assertEqual(cgbuy.pad_for_ship("PYTHON"), "M")
+        self.assertEqual(cgbuy.pad_for_ship("CobraMkIII"), "S")
+
+    def test_unknown_ship_falls_back_to_large(self):
+        # over-restrictive is safe; guessing small would strand you
+        self.assertEqual(cgbuy.pad_for_ship("corsair"), "L")
+        self.assertEqual(cgbuy.pad_for_ship(""), "L")
+        self.assertEqual(cgbuy.pad_for_ship(None), "L")
+
+    def test_every_table_entry_is_a_real_pad_size(self):
+        self.assertEqual(set(cgbuy.SHIP_PADS.values()), set(cgbuy.PAD_ORDER))
+
+
+class TestStationFits(unittest.TestCase):
+
+    def test_the_pad_matrix(self):
+        cases = [
+            (station(large=2, medium=4, small=8),
+             {"L": True, "M": True, "S": True}),
+            (station(medium=4, small=8),
+             {"L": False, "M": True, "S": True}),
+            (station(small=8),
+             {"L": False, "M": False, "S": True}),
+            (station(),
+             {"L": False, "M": False, "S": False}),
+        ]
+        for st, expect in cases:
+            for pad, fits in expect.items():
+                with self.subTest(station=st, pad=pad):
+                    self.assertIs(cgbuy.station_fits(st, pad), fits)
+
+    def test_an_outpost_with_only_medium_pads_rejects_a_large_ship(self):
+        outpost = station(medium=2, small=2)
+        self.assertFalse(
+            cgbuy.station_fits(outpost, cgbuy.pad_for_ship("anaconda")))
+        self.assertTrue(
+            cgbuy.station_fits(outpost, cgbuy.pad_for_ship("python")))
+        self.assertTrue(
+            cgbuy.station_fits(outpost, cgbuy.pad_for_ship("sidewinder")))
+
+    def test_a_large_pad_takes_every_smaller_ship_too(self):
+        big = station(large=3)
+        for ship in ("anaconda", "python", "sidewinder"):
+            with self.subTest(ship=ship):
+                self.assertTrue(
+                    cgbuy.station_fits(big, cgbuy.pad_for_ship(ship)))
+
+    def test_missing_or_null_counts_are_treated_as_none(self):
+        self.assertFalse(cgbuy.station_fits({}, "L"))
+        self.assertFalse(cgbuy.station_fits({"large_pads": None}, "L"))
+        self.assertFalse(cgbuy.station_fits({"medium_pads": None}, "M"))
+
+    def test_legacy_has_large_pad_flag_admits_a_large_ship(self):
+        # Spansh's older per-station field, kept so a result carrying no
+        # per-size counts is not dropped for the ship it was reported for.
+        self.assertTrue(cgbuy.station_fits({"has_large_pad": True}, "L"))
+        self.assertFalse(cgbuy.station_fits({"has_large_pad": False}, "L"))
+
+    def test_has_large_pad_alone_admits_every_ship(self):
+        """A large pad physically accepts any ship, so a result carrying only
+        the legacy flag must be visible to all three sizes. It previously
+        counted on the "L" branch alone, hiding such stations from exactly the
+        smaller ships that could most easily use them."""
+        st = {"has_large_pad": True}
+        for pad in ("L", "M", "S"):
+            self.assertTrue(cgbuy.station_fits(st, pad),
+                            "large pad should admit a %s ship" % pad)
+
+
+# --------------------------------------------------------------------------
+# the data layer: cgbuy.fetch_cg_prices, fetch_cg_arrival_ls, fetch_sources
+# --------------------------------------------------------------------------
+
+def days_ago(n):
+    """An ISO date n whole days before today."""
+    return (datetime.date.today() - datetime.timedelta(days=n)).isoformat()
+
+
+class FakeNetTestCase(unittest.TestCase):
+    """Base for anything that reaches the data layer.
+
+    cgbuy.post_json and cgbuy.get_json are swapped for fakes that return
+    canned dicts and record what was asked, so nothing here can open a socket
+    even if the code under test grows a new call. Set `get_result` /
+    `post_result` to a dict, or to a callable for per-request answers.
+    """
+
+    def setUp(self):
+        self.gets = []
+        self.posts = []
+        self.get_result = {}
+        self.post_result = {"results": []}
+        self.patch(cgbuy, "get_json", self.fake_get)
+        self.patch(cgbuy, "post_json", self.fake_post)
+
+    def patch(self, mod, name, fn):
+        old = getattr(mod, name)
+        setattr(mod, name, fn)
+        self.addCleanup(setattr, mod, name, old)
+
+    def fake_get(self, url, timeout=45):
+        self.gets.append(url)
+        r = self.get_result
+        return r(url) if callable(r) else r
+
+    def fake_post(self, url, payload, timeout=60):
+        self.posts.append((url, payload))
+        r = self.post_result
+        return r(url, payload) if callable(r) else r
+
+    def payloads(self):
+        return [p for _, p in self.posts]
+
+
+def edsm_market_doc(*entries):
+    """An EDSM stations/market response. Entries are (name, sell, demand)."""
+    return {"commodities": [{"name": n, "sellPrice": s, "demand": d,
+                             "buyPrice": 0, "stock": 0}
+                            for n, s, d in entries]}
+
+
+class TestFetchCgPrices(FakeNetTestCase):
+
+    def dest(self, **kw):
+        d = {"station": "Metz Enterprise", "system": "Ega",
+             "commodities": ["Gold", "Silver"]}
+        d.update(kw)
+        return d
+
+    def test_only_the_destination_commodities_survive(self):
+        self.get_result = edsm_market_doc(("Gold", 45000, 900000),
+                                          ("Silver", 23000, 500000),
+                                          ("Water", 130, 4000),
+                                          ("Tritium", 55000, 12))
+        got = cgbuy.fetch_cg_prices(self.dest())
+        self.assertEqual(sorted(got), ["Gold", "Silver"])
+        self.assertEqual(got["Gold"], {"sell": 45000, "demand": 900000})
+        self.assertEqual(got["Silver"], {"sell": 23000, "demand": 500000})
+
+    def test_the_url_names_the_configured_station_and_system(self):
+        self.get_result = edsm_market_doc()
+        cgbuy.fetch_cg_prices(self.dest(station="Jameson Memorial",
+                                        system="Shinrarta Dezhra"))
+        self.assertEqual(len(self.gets), 1)
+        url = self.gets[0]
+        self.assertIn("systemName=Shinrarta%20Dezhra", url)
+        self.assertIn("stationName=Jameson%20Memorial", url)
+        self.assertNotIn("Ega", url)
+        self.assertNotIn("Metz", url)
+
+    def test_a_market_holding_none_of_our_goods_returns_empty(self):
+        self.get_result = edsm_market_doc(("Tritium", 55000, 12))
+        self.assertEqual(cgbuy.fetch_cg_prices(self.dest()), {})
+
+    def test_an_empty_commodity_list_selects_nothing(self):
+        self.get_result = edsm_market_doc(("Gold", 45000, 900000))
+        self.assertEqual(cgbuy.fetch_cg_prices(self.dest(commodities=[])), {})
+
+    def test_a_response_without_commodities_returns_empty(self):
+        self.get_result = {}
+        self.assertEqual(cgbuy.fetch_cg_prices(self.dest()), {})
+
+    def test_prices_pass_through_untouched(self):
+        # the CG multiplier is already in what the station reports
+        self.get_result = edsm_market_doc(("Gold", 45000, 900000))
+        self.assertEqual(cgbuy.fetch_cg_prices(self.dest())["Gold"]["sell"],
+                         45000)
+
+    def test_the_shipped_default_destination_still_works(self):
+        self.get_result = edsm_market_doc(("Gold", 45000, 9),
+                                          ("Water", 130, 4),
+                                          ("Tritium", 55000, 12))
+        got = cgbuy.fetch_cg_prices(cgbuy.DEFAULT_DEST)
+        self.assertEqual(sorted(got), ["Gold", "Water"])
+
+
+class TestFetchCgArrivalLs(FakeNetTestCase):
+
+    DEST = {"station": "Metz Enterprise", "system": "Ega",
+            "commodities": ["Gold"]}
+
+    def test_the_matching_stations_distance_is_returned(self):
+        self.get_result = {"stations": [
+            {"name": "Somewhere Else", "distanceToArrival": 90000},
+            {"name": "Metz Enterprise", "distanceToArrival": 331},
+        ]}
+        self.assertEqual(cgbuy.fetch_cg_arrival_ls(self.DEST), 331)
+        self.assertIn("systemName=Ega", self.gets[0])
+
+    def test_an_unknown_station_gives_zero(self):
+        self.get_result = {"stations": [{"name": "Other",
+                                         "distanceToArrival": 12}]}
+        self.assertEqual(cgbuy.fetch_cg_arrival_ls(self.DEST), 0)
+
+    def test_a_null_distance_gives_zero(self):
+        self.get_result = {"stations": [{"name": "Metz Enterprise",
+                                         "distanceToArrival": None}]}
+        self.assertEqual(cgbuy.fetch_cg_arrival_ls(self.DEST), 0)
+
+    def test_a_failed_lookup_gives_zero_rather_than_raising(self):
+        def boom(url):
+            raise OSError("EDSM down")
+        self.get_result = boom
+        self.assertEqual(cgbuy.fetch_cg_arrival_ls(self.DEST), 0)
+
+
+def spansh_results(n, first=1.0, step=1.0, prefix="Src"):
+    """n Spansh station results at steadily increasing distances."""
+    return {"results": [{"name": "%s %d" % (prefix, i),
+                         "system_name": "Sys %d" % i,
+                         "distance": first + i * step}
+                        for i in range(n)]}
+
+
+class TestFetchSources(FakeNetTestCase):
+
+    def test_the_payload_carries_the_reference_system_it_was_given(self):
+        # The refactor bug: this read a module-level CG_SYSTEM while the
+        # signature said otherwise, so every search measured from Ega.
+        self.post_result = spansh_results(1)
+        cgbuy.fetch_sources("Gold", 40, 100, "Shinrarta Dezhra")
+        url, payload = self.posts[0]
+        self.assertEqual(url, cgbuy.SPANSH_SEARCH)
+        self.assertEqual(payload["reference_system"], "Shinrarta Dezhra")
+
+    def test_two_searches_do_not_share_one_reference_system(self):
+        self.post_result = spansh_results(1)
+        cgbuy.fetch_sources("Gold", 40, 100, "Sol")
+        cgbuy.fetch_sources("Gold", 40, 100, "Colonia")
+        self.assertEqual([p["reference_system"] for p in self.payloads()],
+                         ["Sol", "Colonia"])
+
+    def test_the_filters_carry_the_commodity_radius_and_min_supply(self):
+        self.post_result = spansh_results(1)
+        cgbuy.fetch_sources("Bertrandite", 55, 700, "Sol", page_size=250)
+        p = self.payloads()[0]
+        self.assertEqual(p["filters"]["distance"]["value"], [0, 55])
+        market = p["filters"]["market"][0]
+        self.assertEqual(market["name"], "Bertrandite")
+        self.assertEqual(market["supply"]["value"][0], 700)
+        self.assertEqual(p["size"], 250)
+        self.assertEqual(p["page"], 0)
+
+    def test_a_short_page_ends_the_walk(self):
+        self.post_result = spansh_results(3)
+        out = cgbuy.fetch_sources("Gold", 40, 1, "Sol", page_size=10)
+        self.assertEqual(len(out), 3)
+        self.assertEqual(len(self.posts), 1)
+
+    def test_full_pages_are_followed_until_one_comes_up_short(self):
+        pages = [spansh_results(10, first=1.0), spansh_results(10, first=11.0),
+                 spansh_results(4, first=21.0)]
+        self.post_result = lambda url, p: pages[p["page"]]
+        out = cgbuy.fetch_sources("Gold", 40, 1, "Sol", page_size=10)
+        self.assertEqual(len(out), 24)
+        self.assertEqual([p["page"] for p in self.payloads()], [0, 1, 2])
+
+    def test_results_running_past_the_radius_stop_the_walk(self):
+        # sorted by distance, so once the page ends beyond max_ly there is
+        # nothing nearer left to find
+        self.post_result = spansh_results(10, first=35.0, step=1.0)
+        out = cgbuy.fetch_sources("Gold", 40, 1, "Sol", page_size=10)
+        self.assertEqual(len(self.posts), 1)
+        self.assertEqual(len(out), 10)
+
+    def test_a_page_still_inside_the_radius_is_followed(self):
+        self.post_result = spansh_results(10, first=1.0, step=0.5)
+        cgbuy.fetch_sources("Gold", 40, 1, "Sol", page_size=10, max_pages=2)
+        self.assertEqual(len(self.posts), 2)
+
+    def test_max_pages_caps_the_walk(self):
+        self.post_result = spansh_results(10, first=1.0, step=0.1)
+        out = cgbuy.fetch_sources("Gold", 40, 1, "Sol", page_size=10,
+                                  max_pages=3)
+        self.assertEqual(len(self.posts), 3)
+        self.assertEqual(len(out), 30)
+
+    def test_an_empty_first_page_is_not_an_index_error(self):
+        self.post_result = {"results": []}
+        self.assertEqual(
+            cgbuy.fetch_sources("Gold", 40, 1, "Sol", page_size=10), [])
+
+    def test_a_response_without_results_is_empty(self):
+        self.post_result = {}
+        self.assertEqual(cgbuy.fetch_sources("Gold", 40, 1, "Sol"), [])
+
+    def test_a_dropped_connection_keeps_what_was_already_fetched(self):
+        pages = [spansh_results(10, first=1.0)]
+
+        def flaky(url, p):
+            if p["page"] >= len(pages):
+                raise OSError("connection reset")
+            return pages[p["page"]]
+
+        self.post_result = flaky
+        with quiet_stderr() as err:
+            out = cgbuy.fetch_sources("Gold", 40, 1, "Sol", page_size=10)
+        self.assertEqual(len(out), 10)
+        self.assertIn("Gold", err.getvalue())
+
+
+# --------------------------------------------------------------------------
+# cgbuy.build_rows
+# --------------------------------------------------------------------------
+
+def source_station(name="Alpha Hub", system="Sys A", commodity="Gold",
+                   buy=9000, supply=600, distance=12.0, ls=250, age_days=0,
+                   stype="Coriolis Starport", large=2, medium=4, small=8):
+    """A Spansh station result with one commodity, as build_rows reads it."""
+    return {"name": name, "system_name": system, "distance": distance,
+            "distance_to_arrival": ls, "type": stype,
+            "large_pads": large, "medium_pads": medium, "small_pads": small,
+            "market_updated_at": days_ago(age_days) + " 04:00:00",
+            "market": [{"commodity": commodity, "buy_price": buy,
+                        "supply": supply}]}
+
+
+class BuildRowsTestCase(FakeNetTestCase):
+    """build_rows with EDSM and Spansh both faked.
+
+    `sell` is the destination market, `sources` the Spansh answer per
+    commodity. EDSM verification is off unless a test turns it on.
+    """
+
+    DEST = {"station": "Metz Enterprise", "system": "Ega",
+            "commodities": ["Gold", "Silver"], "source": "test"}
+
+    def setUp(self):
+        super().setUp()
+        self.sell = {"Gold": 45000, "Silver": 23000}
+        self.arrival_ls = 300
+        self.sources = {}
+        self.get_result = self.fake_edsm
+        self.post_result = self.fake_spansh
+
+    def fake_edsm(self, url):
+        if "stations/market" in url:
+            return {"commodities": [
+                {"name": n, "sellPrice": s, "demand": 900000, "buyPrice": 0,
+                 "stock": 0} for n, s in self.sell.items()]}
+        return {"stations": [{"name": self.DEST["station"],
+                              "distanceToArrival": self.arrival_ls}]}
+
+    def fake_spansh(self, url, payload):
+        if payload["page"] > 0:
+            return {"results": []}
+        name = payload["filters"]["market"][0]["name"]
+        return {"results": list(self.sources.get(name, []))}
+
+    def params(self, **kw):
+        p = {"dest": self.DEST, "range": 40, "min_supply": 100, "hold": 100,
+             "jump_empty": 30.0, "jump_laden": 25.0, "carriers": False,
+             "pad": "L", "verify_edsm": False, "max_age_days": 0}
+        p.update(kw)
+        return p
+
+    def build(self, **kw):
+        return cgbuy.build_rows(self.params(**kw))
+
+
+class TestBuildRows(BuildRowsTestCase):
+
+    def test_a_row_is_scored_for_every_stocked_commodity(self):
+        self.sources = {
+            "Gold": [source_station(commodity="Gold", buy=9000, supply=600)],
+            "Silver": [source_station(name="Beta Ring", system="Sys B",
+                                      commodity="Silver", buy=3000,
+                                      supply=40)],
+        }
+        rows, prices, cg_ls, hidden = self.build()
+        self.assertEqual(sorted(r["commodity"] for r in rows),
+                         ["Gold", "Silver"])
+        by = {r["commodity"]: r for r in rows}
+        self.assertEqual(by["Gold"]["profit_per_t"], 45000 - 9000)
+        self.assertEqual(by["Gold"]["load"], 100)          # hold-capped
+        self.assertEqual(by["Gold"]["trip_profit"], 100 * 36000)
+        self.assertEqual(by["Silver"]["load"], 40)         # supply-capped
+        self.assertEqual(by["Silver"]["station"], "Beta Ring")
+        self.assertEqual(sorted(prices), ["Gold", "Silver"])
+        self.assertEqual(cg_ls, 300)
+        self.assertEqual(hidden, 0)
+
+    def test_the_four_tuple_shape(self):
+        self.sources = {"Gold": [source_station()]}
+        out = self.build()
+        self.assertEqual(len(out), 4)
+        rows, prices, cg_ls, hidden = out
+        self.assertIsInstance(rows, list)
+        self.assertIsInstance(prices, dict)
+        self.assertIsInstance(hidden, int)
+
+    def test_the_destination_from_p_is_used_end_to_end(self):
+        dest = {"station": "Jameson Memorial", "system": "Shinrarta Dezhra",
+                "commodities": ["Tritium"]}
+        self.sell = {"Tritium": 60000}
+        self.sources = {"Tritium": [source_station(commodity="Tritium",
+                                                   buy=40000)]}
+        rows, _, _, _ = self.build(dest=dest)
+        self.assertTrue(any("stationName=Jameson%20Memorial" in u
+                            for u in self.gets))
+        self.assertTrue(any("systemName=Shinrarta%20Dezhra" in u
+                            for u in self.gets))
+        # every Spansh search measured from the configured system...
+        self.assertEqual({p["reference_system"] for p in self.payloads()},
+                         {"Shinrarta Dezhra"})
+        # ...and only the configured commodities were searched at all
+        self.assertEqual({p["filters"]["market"][0]["name"]
+                          for p in self.payloads()}, {"Tritium"})
+        self.assertEqual([r["commodity"] for r in rows], ["Tritium"])
+
+    def test_no_destination_falls_back_to_the_shipped_default(self):
+        self.sell = {n: 40000 for n in cgbuy.DEFAULT_DEST["commodities"]}
+        rows, _, _, _ = self.build(dest=None)
+        self.assertEqual(rows, [])
+        self.assertEqual({p["reference_system"] for p in self.payloads()},
+                         {"Ega"})
+        self.assertEqual({p["filters"]["market"][0]["name"]
+                          for p in self.payloads()},
+                         set(cgbuy.DEFAULT_DEST["commodities"]))
+
+    def test_an_unknown_destination_market_is_an_error_not_an_empty_grid(self):
+        self.sell = {}
+        with self.assertRaises(RuntimeError) as caught:
+            self.build()
+        self.assertIn("Metz Enterprise", str(caught.exception))
+
+    def test_a_commodity_the_destination_does_not_buy_is_never_searched(self):
+        self.sell = {"Gold": 45000, "Silver": 0}
+        self.sources = {"Gold": [source_station()],
+                        "Silver": [source_station(commodity="Silver")]}
+        rows, _, _, _ = self.build()
+        self.assertEqual([r["commodity"] for r in rows], ["Gold"])
+        self.assertEqual({p["filters"]["market"][0]["name"]
+                          for p in self.payloads()}, {"Gold"})
+
+    def test_stations_too_small_for_the_ship_are_dropped(self):
+        self.sources = {"Gold": [
+            source_station(name="Coriolis", large=2, medium=4, small=8),
+            source_station(name="Outpost", system="Sys B",
+                           large=0, medium=2, small=2),
+        ]}
+        big, _, _, _ = self.build(pad="L")
+        self.assertEqual([r["station"] for r in big], ["Coriolis"])
+        med, _, _, _ = self.build(pad="M")
+        self.assertEqual(sorted(r["station"] for r in med),
+                         ["Coriolis", "Outpost"])
+
+    def test_the_pad_comes_from_the_ship_the_commander_flies(self):
+        self.sources = {"Gold": [source_station(name="Outpost", large=0,
+                                                medium=2, small=2)]}
+        anaconda, _, _, _ = self.build(pad=cgbuy.pad_for_ship("anaconda"))
+        python, _, _, _ = self.build(pad=cgbuy.pad_for_ship("python"))
+        self.assertEqual(anaconda, [])
+        self.assertEqual([r["station"] for r in python], ["Outpost"])
+
+    def test_carriers_are_excluded_unless_asked_for(self):
+        self.sources = {"Gold": [
+            source_station(name="Static", stype="Coriolis Starport"),
+            source_station(name="K7Q-BQL", system="Sys B",
+                           stype="Drake-Class Carrier"),
+        ]}
+        without, _, _, _ = self.build(carriers=False)
+        self.assertEqual([r["station"] for r in without], ["Static"])
+        with_, _, _, _ = self.build(carriers=True)
+        self.assertEqual(sorted(r["station"] for r in with_),
+                         ["K7Q-BQL", "Static"])
+        carrier = next(r for r in with_ if r["station"] == "K7Q-BQL")
+        self.assertTrue(carrier["carrier"])
+
+    def test_rows_with_no_profit_are_dropped(self):
+        self.sources = {"Gold": [
+            source_station(name="Cheap", buy=9000),
+            source_station(name="Dear", system="Sys B", buy=45000),
+            source_station(name="Dearer", system="Sys C", buy=90000),
+        ]}
+        rows, _, _, _ = self.build()
+        self.assertEqual([r["station"] for r in rows], ["Cheap"])
+
+    def test_rows_with_no_supply_or_no_price_are_dropped(self):
+        self.sources = {"Gold": [
+            source_station(name="Stocked", supply=600),
+            source_station(name="Empty", system="Sys B", supply=0),
+            source_station(name="Priceless", system="Sys C", buy=0),
+        ]}
+        rows, _, _, _ = self.build()
+        self.assertEqual([r["station"] for r in rows], ["Stocked"])
+
+    def test_a_station_not_selling_the_searched_commodity_is_dropped(self):
+        odd = source_station(name="Odd", commodity="Water")
+        self.sources = {"Gold": [odd]}
+        rows, _, _, _ = self.build()
+        self.assertEqual(rows, [])
+
+    def test_results_beyond_the_radius_are_dropped(self):
+        self.sources = {"Gold": [
+            source_station(name="Near", distance=12.0),
+            source_station(name="Far", system="Sys B", distance=41.0),
+        ]}
+        rows, _, _, _ = self.build(range=40)
+        self.assertEqual([r["station"] for r in rows], ["Near"])
+
+    def test_derived_figures_are_consistent(self):
+        self.sources = {"Gold": [source_station(buy=9000, supply=250,
+                                                distance=12.0, ls=250)]}
+        rows, _, cg_ls, _ = self.build(hold=100)
+        r = rows[0]
+        self.assertEqual(r["profit_per_t"], 36000)
+        self.assertEqual(r["load"], 100)
+        self.assertEqual(r["loads_available"], 2.5)
+        self.assertEqual(r["ly"], 12.0)
+        self.assertEqual(r["ls"], 250)
+        self.assertEqual(r["updated"], days_ago(0))
+        mins = cgbuy.trip_minutes(12.0, 250, cg_ls, 30.0, 25.0, None)
+        self.assertEqual(r["trip_minutes"], round(mins, 1))
+        self.assertEqual(r["cr_per_min"], round(100 * 36000 / mins))
+
+    def test_progress_is_reported_once_per_commodity(self):
+        self.sources = {"Gold": [source_station()]}
+        seen = []
+        cgbuy.build_rows(self.params(), progress=lambda *a: seen.append(a))
+        self.assertEqual(sorted(s[2] for s in seen), ["Gold", "Silver"])
+        self.assertTrue(all(s[1] == 2 for s in seen))
+
+
+class TestBuildRowsAgeFilter(BuildRowsTestCase):
+
+    def stations_of_ages(self, *ages):
+        self.sources = {"Gold": [
+            source_station(name="St %d" % i, system="Sys %d" % i, age_days=a)
+            for i, a in enumerate(ages)]}
+
+    def test_stale_rows_are_hidden_and_counted(self):
+        self.stations_of_ages(0, 1, 10, 30)
+        rows, _, _, hidden = self.build(max_age_days=7)
+        self.assertEqual(sorted(r["updated"] for r in rows),
+                         sorted([days_ago(1), days_ago(0)]))
+        self.assertEqual(hidden, 2)
+
+    def test_the_boundary_day_is_kept(self):
+        self.stations_of_ages(7, 8)
+        rows, _, _, hidden = self.build(max_age_days=7)
+        self.assertEqual([r["updated"] for r in rows], [days_ago(7)])
+        self.assertEqual(hidden, 1)
+
+    def test_a_row_with_no_timestamp_counts_as_stale(self):
+        self.stations_of_ages(0)
+        undated = source_station(name="Undated", system="Sys Z")
+        undated["market_updated_at"] = None
+        self.sources["Gold"].append(undated)
+        rows, _, _, hidden = self.build(max_age_days=7)
+        self.assertEqual([r["station"] for r in rows], ["St 0"])
+        self.assertEqual(hidden, 1)
+
+    def test_the_filter_never_empties_the_grid(self):
+        # a stale answer beats no answer at all
+        self.stations_of_ages(30, 60)
+        rows, _, _, hidden = self.build(max_age_days=7)
+        self.assertEqual(len(rows), 2)
+        self.assertEqual(hidden, 0)
+
+    def test_a_zero_max_age_disables_the_filter(self):
+        self.stations_of_ages(0, 400)
+        rows, _, _, hidden = self.build(max_age_days=0)
+        self.assertEqual(len(rows), 2)
+        self.assertEqual(hidden, 0)
+
+    def test_the_default_max_age_applies_when_p_says_nothing(self):
+        self.stations_of_ages(0, 30)
+        p = self.params()
+        del p["max_age_days"]
+        rows, _, _, hidden = cgbuy.build_rows(p)
+        self.assertEqual(cgbuy.MAX_AGE_DEFAULT, 7)
+        self.assertEqual([r["updated"] for r in rows], [days_ago(0)])
+        self.assertEqual(hidden, 1)
+
+
+# --------------------------------------------------------------------------
+# verify.refresh
+# --------------------------------------------------------------------------
+
+def vrow(commodity="Gold", station="Alpha Hub", system="Sys A", supply=530,
+         buy=9000, cr_per_min=1000, updated="2025-01-01"):
+    """A build_rows()-shaped row, with only what verify.refresh reads."""
+    return {"commodity": commodity, "station": station, "system": system,
+            "supply": supply, "buy": buy, "sell": 45000,
+            "profit_per_t": 45000 - buy, "cr_per_min": cr_per_min,
+            "updated": updated}
+
+
+class VerifyTestCase(unittest.TestCase):
+    """verify with EDSM replaced by canned dicts.
+
+    verify._get is the only door to the network, so replacing it is enough;
+    the module cache is cleared either side so one test's answers can never
+    leak into the next.
+    """
+
+    def setUp(self):
+        verify._cache.clear()
+        self.addCleanup(verify._cache.clear)
+        self.urls = []
+        self.systems = {}        # system -> {station: market timestamp}
+        self.markets = {}        # (sys, stn) -> {commodity: (buy, stock)}
+        self.limit_after = None  # raise RateLimited from this request on
+        old = verify._get
+        verify._get = self.fake_verify_get
+        self.addCleanup(setattr, verify, "_get", old)
+
+    # deliberately not called fake_get: a test case can inherit both this and
+    # FakeNetTestCase, and two fakes answering to one name would silently
+    # point verify at Spansh's stand-in.
+    def fake_verify_get(self, url, timeout=25):
+        self.urls.append(url)
+        if self.limit_after is not None and len(self.urls) > self.limit_after:
+            raise verify.RateLimited("EDSM rate limit")
+        q = urllib.parse.parse_qs(urllib.parse.urlparse(url).query)
+        sysname = q["systemName"][0]
+        station = q.get("stationName", [None])[0]
+        if station is None:
+            return {"stations": [
+                {"name": n, "updateTime": {"market": t}}
+                for n, t in self.systems.get(sysname, {}).items()]}
+        market = self.markets.get((sysname, station), {})
+        return {"commodities": [
+            {"name": c, "buyPrice": buy, "stock": stock,
+             "sellPrice": 0, "demand": 0}
+            for c, (buy, stock) in market.items()]}
+
+    def edsm_has(self, system, station, stamp="2025-06-01 09:00:00", **goods):
+        self.systems.setdefault(system, {})[station] = stamp
+        self.markets[(system, station)] = goods
+
+
+class TestVerifyRefresh(VerifyTestCase):
+
+    def test_supply_and_buy_price_are_corrected(self):
+        # the case that motivated the module: Spansh said 530t, EDSM 18t
+        self.edsm_has("Sys A", "Alpha Hub", Gold=(9100, 18))
+        rows = [vrow(supply=530, buy=9000)]
+        checked, corrected, limited = verify.refresh(rows)
+        self.assertEqual((checked, corrected, limited), (1, 1, False))
+        self.assertEqual(rows[0]["supply"], 18)
+        self.assertEqual(rows[0]["buy"], 9100)
+        self.assertTrue(rows[0]["edsm"])
+
+    def test_the_row_timestamp_becomes_the_edsm_market_time(self):
+        self.edsm_has("Sys A", "Alpha Hub", stamp="2025-06-01 09:00:00",
+                      Gold=(9100, 18))
+        rows = [vrow()]
+        verify.refresh(rows)
+        self.assertEqual(rows[0]["updated"], "2025-06-01")
+
+    def test_figures_that_already_agree_are_not_counted_as_corrections(self):
+        self.edsm_has("Sys A", "Alpha Hub", Gold=(9000, 530))
+        rows = [vrow(supply=530, buy=9000)]
+        checked, corrected, limited = verify.refresh(rows)
+        self.assertEqual((checked, corrected, limited), (1, 0, False))
+        self.assertTrue(rows[0]["edsm"])
+
+    def test_a_station_edsm_has_never_seen_is_left_alone_and_flagged(self):
+        self.edsm_has("Sys A", "Alpha Hub", Gold=(9100, 18))
+        rows = [vrow(station="Alpha Hub"),
+                vrow(station="Ghost Dock", system="Sys A", supply=999,
+                     buy=1234, cr_per_min=500)]
+        verify.refresh(rows)
+        ghost = rows[1]
+        self.assertFalse(ghost["edsm"])
+        self.assertEqual(ghost["supply"], 999)
+        self.assertEqual(ghost["buy"], 1234)
+        self.assertEqual(ghost["updated"], "2025-01-01")
+
+    def test_a_station_without_our_commodity_is_not_marked(self):
+        self.edsm_has("Sys A", "Alpha Hub", Silver=(3000, 400))
+        rows = [vrow(commodity="Gold", supply=530)]
+        checked, corrected, _ = verify.refresh(rows)
+        self.assertEqual((checked, corrected), (1, 0))
+        self.assertFalse(rows[0]["edsm"])
+        self.assertEqual(rows[0]["supply"], 530)
+
+    def test_only_the_top_rows_are_checked(self):
+        for i in range(3):
+            self.edsm_has("Sys %d" % i, "St %d" % i, Gold=(9100, 18))
+        rows = [vrow(station="St %d" % i, system="Sys %d" % i,
+                     cr_per_min=100 * i) for i in range(3)]
+        checked, _, _ = verify.refresh(rows, top=1)
+        self.assertEqual(checked, 1)
+        # the best-paying row is the one that gets the accurate number
+        self.assertEqual([r["edsm"] for r in rows], [False, False, True])
+
+    def test_stations_are_ranked_by_credits_per_minute_not_input_order(self):
+        for i in range(3):
+            self.edsm_has("Sys %d" % i, "St %d" % i, Gold=(9100, 18))
+        rows = [vrow(station="St 0", system="Sys 0", cr_per_min=10),
+                vrow(station="St 1", system="Sys 1", cr_per_min=90),
+                vrow(station="St 2", system="Sys 2", cr_per_min=50)]
+        verify.refresh(rows, top=2)
+        self.assertEqual([r["edsm"] for r in rows], [False, True, True])
+
+    def test_every_row_at_a_checked_station_is_corrected(self):
+        self.edsm_has("Sys A", "Alpha Hub", Gold=(9100, 18), Silver=(3100, 7))
+        rows = [vrow(commodity="Gold"), vrow(commodity="Silver", buy=3000)]
+        checked, corrected, _ = verify.refresh(rows, top=1)
+        self.assertEqual(checked, 1)
+        self.assertEqual(corrected, 2)
+        self.assertEqual([r["supply"] for r in rows], [18, 7])
+
+    def test_edsm_older_than_spansh_is_not_worth_a_request(self):
+        self.edsm_has("Sys A", "Alpha Hub", stamp="2024-12-01 09:00:00",
+                      Gold=(9100, 18))
+        rows = [vrow(updated="2025-01-01", supply=530)]
+        checked, corrected, _ = verify.refresh(rows)
+        self.assertEqual((checked, corrected), (0, 0))
+        self.assertFalse(rows[0]["edsm"])
+        self.assertEqual(rows[0]["supply"], 530)
+        self.assertEqual(len(self.urls), 1)       # the system list, no market
+
+    def test_the_same_day_is_still_worth_a_request(self):
+        self.edsm_has("Sys A", "Alpha Hub", stamp="2025-01-01 22:00:00",
+                      Gold=(9100, 18))
+        checked, _, _ = verify.refresh([vrow(updated="2025-01-01")])
+        self.assertEqual(checked, 1)
+
+    def test_rate_limiting_is_reported_not_swallowed(self):
+        # an empty answer and a throttled one must not look the same
+        self.edsm_has("Sys A", "Alpha Hub", Gold=(9100, 18))
+        self.limit_after = 0
+        rows = [vrow(supply=530)]
+        checked, corrected, limited = verify.refresh(rows)
+        self.assertTrue(limited)
+        self.assertEqual((checked, corrected), (0, 0))
+        self.assertFalse(rows[0]["edsm"])
+        self.assertEqual(rows[0]["supply"], 530)
+
+    def test_rate_limiting_partway_keeps_what_was_already_corrected(self):
+        for i in range(3):
+            self.edsm_has("Sys %d" % i, "St %d" % i, Gold=(9100, 18))
+        self.limit_after = 2          # system list + one market, then no more
+        rows = [vrow(station="St %d" % i, system="Sys %d" % i,
+                     cr_per_min=100 - i) for i in range(3)]
+        checked, corrected, limited = verify.refresh(rows)
+        self.assertTrue(limited)
+        self.assertEqual(checked, 1)
+        self.assertEqual([r["edsm"] for r in rows], [True, False, False])
+
+    def test_the_request_budget_caps_the_work(self):
+        for i in range(3):
+            self.edsm_has("Sys %d" % i, "St %d" % i, Gold=(9100, 18))
+        rows = [vrow(station="St %d" % i, system="Sys %d" % i,
+                     cr_per_min=100 - i) for i in range(3)]
+        checked, _, limited = verify.refresh(rows, budget=2)
+        self.assertEqual(checked, 1)          # 1 system list + 1 market
+        self.assertFalse(limited)
+
+    def test_one_system_is_listed_once_for_several_stations(self):
+        self.edsm_has("Sys A", "St 0", Gold=(9100, 18))
+        self.edsm_has("Sys A", "St 1", Gold=(9200, 20))
+        rows = [vrow(station="St 0", system="Sys A", cr_per_min=90),
+                vrow(station="St 1", system="Sys A", cr_per_min=80)]
+        checked, _, _ = verify.refresh(rows)
+        self.assertEqual(checked, 2)
+        lists = [u for u in self.urls if "stationName" not in u]
+        self.assertEqual(len(lists), 1)
+
+    def test_no_rows_is_safe(self):
+        self.assertEqual(verify.refresh([]), (0, 0, False))
+
+    def test_a_broken_station_does_not_stop_the_rest(self):
+        self.edsm_has("Sys A", "Good", Gold=(9100, 18))
+        self.edsm_has("Sys B", "Bad", Gold=(9100, 18))
+        real_get = verify._get
+
+        def flaky(url, timeout=25):
+            if "Bad" in url:
+                raise OSError("connection reset")
+            return real_get(url, timeout)
+
+        verify._get = flaky
+        rows = [vrow(station="Bad", system="Sys B", cr_per_min=99),
+                vrow(station="Good", system="Sys A", cr_per_min=50)]
+        checked, corrected, limited = verify.refresh(rows)
+        self.assertEqual((checked, corrected, limited), (1, 1, False))
+        self.assertEqual([r["edsm"] for r in rows], [False, True])
+
+    def test_progress_is_reported(self):
+        self.edsm_has("Sys A", "Alpha Hub", Gold=(9100, 18))
+        seen = []
+        verify.refresh([vrow()], progress=lambda done, total: seen.append(
+            (done, total)))
+        self.assertEqual(seen, [(1, 1)])
+
+
+# --------------------------------------------------------------------------
+# cgbuy.build_rows against a faked EDSM verification pass
+# --------------------------------------------------------------------------
+
+class TestBuildRowsVerify(BuildRowsTestCase, VerifyTestCase):
+    """Both halves faked at once: Spansh discovers, EDSM corrects."""
+
+    def setUp(self):
+        BuildRowsTestCase.setUp(self)
+        VerifyTestCase.setUp(self)
+
+    def test_edsm_corrects_supply_and_the_row_is_rescored(self):
+        self.sources = {"Gold": [source_station(name="Alpha Hub",
+                                                system="Sys A",
+                                                buy=9000, supply=600)]}
+        self.edsm_has("Sys A", "Alpha Hub", stamp=days_ago(0) + " 09:00:00",
+                      Gold=(9100, 18))
+        rows, _, _, _ = self.build(verify_edsm=True, max_age_days=0)
+        self.assertEqual(len(rows), 1)
+        r = rows[0]
+        self.assertTrue(r["edsm"])
+        self.assertEqual(r["supply"], 18)
+        self.assertEqual(r["buy"], 9100)
+        self.assertEqual(r["profit_per_t"], 45000 - 9100)
+        self.assertEqual(r["load"], 18)                 # supply, not the hold
+        self.assertEqual(r["trip_profit"], 18 * (45000 - 9100))
+
+    def test_a_station_edsm_says_is_empty_drops_out(self):
+        self.sources = {"Gold": [
+            source_station(name="Alpha Hub", system="Sys A", supply=600),
+            source_station(name="Beta Ring", system="Sys B", supply=500)]}
+        self.edsm_has("Sys A", "Alpha Hub", stamp=days_ago(0) + " 09:00:00",
+                      Gold=(9100, 0))
+        self.edsm_has("Sys B", "Beta Ring", stamp=days_ago(0) + " 09:00:00",
+                      Gold=(9100, 400))
+        rows, _, _, _ = self.build(verify_edsm=True, max_age_days=0)
+        self.assertEqual([r["station"] for r in rows], ["Beta Ring"])
+
+    def test_verification_is_skipped_when_switched_off(self):
+        self.sources = {"Gold": [source_station(name="Alpha Hub",
+                                                system="Sys A", supply=600)]}
+        self.edsm_has("Sys A", "Alpha Hub", Gold=(9100, 18))
+        rows, _, _, _ = self.build(verify_edsm=False, max_age_days=0)
+        self.assertEqual(rows[0]["supply"], 600)
+        self.assertEqual(self.urls, [])
+
+    def test_a_rate_limited_pass_leaves_the_spansh_figures_in_place(self):
+        self.sources = {"Gold": [source_station(name="Alpha Hub",
+                                                system="Sys A", supply=600)]}
+        self.edsm_has("Sys A", "Alpha Hub", Gold=(9100, 18))
+        self.limit_after = 0
+        rows, _, _, _ = self.build(verify_edsm=True, max_age_days=0)
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["supply"], 600)
+        self.assertFalse(rows[0]["edsm"])
+
+    def test_a_failing_verifier_does_not_lose_the_search(self):
+        self.sources = {"Gold": [source_station(name="Alpha Hub",
+                                                system="Sys A", supply=600)]}
+
+        def boom(url, timeout=25):
+            raise RuntimeError("EDSM exploded")
+
+        verify._get = boom
+        with quiet_stderr():
+            rows, _, _, _ = self.build(verify_edsm=True, max_age_days=0)
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["supply"], 600)
+
+
+# --------------------------------------------------------------------------
+# cg.band_brackets / cg.standing
+# --------------------------------------------------------------------------
+
+def cg_sample(contribution, band, when="2025-01-01T12:00:00Z", **kw):
+    """One CommunityGoal sample as cg.read_history would have produced it."""
+    h = {"ts": when, "cgid": 727, "title": "Ega Mining Initiative",
+         "station": "Metz Enterprise", "system": "Ega", "expiry": None,
+         "contribution": contribution, "band": band, "total": 1000000,
+         "contributors": 5000, "tier": 4, "top_tier": "Tier 8", "bonus": 0,
+         "in_top_rank": False}
+    h.update(kw)
+    return h
+
+
+class TestBandBrackets(unittest.TestCase):
+
+    def history(self, *pairs):
+        return [cg_sample(c, b) for c, b in pairs]
+
+    def test_a_crossing_brackets_the_threshold(self):
+        h = self.history((100, 100), (500, 75), (900, 75), (1200, 50))
+        self.assertEqual(cg.band_brackets(h),
+                         {75: (100, 500), 50: (900, 1200)})
+
+    def test_a_band_never_crossed_is_absent_not_invented(self):
+        br = cg.band_brackets(self.history((100, 100), (500, 75)))
+        self.assertEqual(list(br), [75])
+        for never in (10, 25, 50):
+            self.assertNotIn(never, br)
+
+    def test_input_order_does_not_matter(self):
+        pairs = [(1200, 50), (100, 100), (900, 75), (500, 75)]
+        self.assertEqual(cg.band_brackets(self.history(*pairs)),
+                         {75: (100, 500), 50: (900, 1200)})
+
+    def test_a_single_sample_brackets_nothing(self):
+        self.assertEqual(cg.band_brackets(self.history((500, 75))), {})
+
+    def test_an_empty_history_gives_no_brackets(self):
+        self.assertEqual(cg.band_brackets([]), {})
+
+    def test_samples_missing_a_contribution_or_band_are_ignored(self):
+        h = [cg_sample(100, 100), cg_sample(None, 75), cg_sample(500, None),
+             cg_sample(900, 75)]
+        self.assertEqual(cg.band_brackets(h), {75: (100, 900)})
+
+    def test_a_band_that_gets_worse_is_not_recorded_as_a_crossing(self):
+        # bands drift as others deliver; only improvements bracket a threshold
+        h = self.history((100, 50), (500, 75), (900, 75))
+        self.assertEqual(cg.band_brackets(h), {})
+
+    def test_the_latest_crossing_of_a_band_wins(self):
+        h = self.history((100, 100), (500, 75), (600, 100), (900, 75))
+        self.assertEqual(cg.band_brackets(h)[75], (600, 900))
+
+    def test_a_zero_contribution_sample_is_kept(self):
+        h = self.history((0, 100), (500, 75))
+        self.assertEqual(cg.band_brackets(h), {75: (0, 500)})
+
+
+class TestStanding(unittest.TestCase):
+
+    def test_an_empty_history_has_no_standing(self):
+        self.assertIsNone(cg.standing([]))
+        self.assertIsNone(cg.standing([], {"qty": 5}))
+
+    def test_the_last_sample_is_the_current_one(self):
+        h = [cg_sample(100, 100), cg_sample(1800, 50)]
+        s = cg.standing(h)
+        self.assertEqual(s["contribution"], 1800)
+        self.assertEqual(s["band"], 50)
+        self.assertEqual(s["title"], "Ega Mining Initiative")
+        self.assertEqual(s["station"], "Metz Enterprise")
+        self.assertEqual(s["system"], "Ega")
+
+    def test_the_next_band_is_the_one_above(self):
+        for band, nxt in ((100, 75), (75, 50), (50, 25), (25, 10)):
+            with self.subTest(band=band):
+                s = cg.standing([cg_sample(100, band)])
+                self.assertEqual(s["next_band"], nxt)
+
+    def test_the_best_band_has_no_next(self):
+        self.assertIsNone(cg.standing([cg_sample(100, 10)])["next_band"])
+
+    def test_hold_margin_is_measured_from_where_the_band_was_entered(self):
+        h = [cg_sample(100, 100), cg_sample(500, 75), cg_sample(900, 75),
+             cg_sample(1200, 50), cg_sample(2000, 50)]
+        s = cg.standing(h)
+        self.assertEqual(s["brackets"][50], (900, 1200))
+        self.assertEqual(s["hold_margin"], 2000 - 1200)
+
+    def test_hold_margin_is_unknown_when_the_band_was_never_seen_crossed(self):
+        s = cg.standing([cg_sample(2000, 50)])
+        self.assertIsNone(s["hold_margin"])
+        self.assertEqual(s["brackets"], {})
+
+    def test_to_next_uses_the_measured_bracket_when_there_is_one(self):
+        # dropping back a band as others deliver is ordinary; the earlier
+        # crossing still tells us where the boundary was
+        h = [cg_sample(100, 100), cg_sample(500, 75), cg_sample(900, 75),
+             cg_sample(1200, 50), cg_sample(2500, 25), cg_sample(1800, 50)]
+        s = cg.standing(h)
+        self.assertEqual(s["band"], 50)
+        self.assertEqual(s["next_band"], 25)
+        self.assertTrue(s["next_known"])
+        self.assertEqual(s["brackets"][25], (1800, 2500))
+        self.assertEqual(s["to_next"], 2500 - 1800)
+
+    def test_to_next_never_goes_negative(self):
+        h = [cg_sample(100, 100), cg_sample(500, 75), cg_sample(900, 75),
+             cg_sample(1200, 50), cg_sample(2500, 25), cg_sample(9000, 50)]
+        s = cg.standing(h)
+        self.assertTrue(s["next_known"])
+        self.assertEqual(s["to_next"], 0)
+
+    def test_an_unobserved_threshold_is_not_reported_as_known(self):
+        h = [cg_sample(100, 100), cg_sample(500, 75), cg_sample(900, 75),
+             cg_sample(1200, 50)]
+        s = cg.standing(h)
+        self.assertEqual(s["next_band"], 25)
+        self.assertFalse(s["next_known"])
+        self.assertIsNone(s["to_next"])
+
+    def test_the_unobserved_threshold_is_extrapolated_from_the_crossings(self):
+        h = [cg_sample(100, 100), cg_sample(500, 75), cg_sample(900, 75),
+             cg_sample(1200, 50)]
+        s = cg.standing(h)
+        mids = {b: (lo + hi) / 2.0 for b, (lo, hi) in s["brackets"].items()}
+        self.assertEqual(s["est_next"], int(mids[50] * (mids[50] / mids[75])))
+        self.assertGreater(s["est_next"], s["contribution"])
+
+    def test_one_bracket_is_too_little_to_extrapolate_from(self):
+        h = [cg_sample(100, 100), cg_sample(500, 75)]
+        self.assertIsNone(cg.standing(h)["est_next"])
+
+    def test_the_rate_comes_from_the_recent_samples(self):
+        h = [cg_sample(1000, 50, when="2025-01-01T12:00:00Z"),
+             cg_sample(2000, 50, when="2025-01-01T14:00:00Z")]
+        self.assertAlmostEqual(cg.standing(h)["rate_per_hour"], 500.0)
+
+    def test_a_single_sample_has_no_rate(self):
+        self.assertIsNone(cg.standing([cg_sample(1000, 50)])["rate_per_hour"])
+
+    def test_live_figures_win_over_the_journals_snapshot(self):
+        h = [cg_sample(1000, 50, total=800000)]
+        s = cg.standing(h, {"qty": 950000, "target_qty": 2000000,
+                            "expiry": "2099-01-01 00:00:00"})
+        self.assertEqual(s["total"], 950000)
+        self.assertEqual(s["target"], 2000000)
+        self.assertGreater(s["hours_left"], 0)
+
+    def test_without_a_live_feed_the_journal_total_is_used(self):
+        s = cg.standing([cg_sample(1000, 50, total=800000)])
+        self.assertEqual(s["total"], 800000)
+        self.assertIsNone(s["target"])
+        self.assertIsNone(s["hours_left"])
+
+    def test_the_journal_expiry_is_used_when_the_feed_is_silent(self):
+        s = cg.standing([cg_sample(1000, 50, expiry="2099-01-01T00:00:00Z")])
+        self.assertGreater(s["hours_left"], 0)
+
+    def test_the_brackets_are_handed_to_the_ui(self):
+        h = [cg_sample(100, 100), cg_sample(500, 75), cg_sample(900, 75),
+             cg_sample(1200, 50)]
+        s = cg.standing(h)
+        self.assertEqual(s["brackets"], cg.band_brackets(h))
+        self.assertEqual(s["as_of"], h[-1]["ts"])
+        self.assertEqual(s["tier"], 4)
+        self.assertEqual(s["top_tier"], "Tier 8")
+        self.assertEqual(s["contributors"], 5000)
 
 # --------------------------------------------------------------------------
 # plot.read_bind / plot.keys_in_use

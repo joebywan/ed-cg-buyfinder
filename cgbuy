@@ -216,11 +216,14 @@ def station_fits(st, pad):
     has_large_pad, which hid every medium and small station from ships that
     could use them.
     """
-    large = st.get("large_pads") or 0
+    # A large pad physically accepts any ship, so the legacy flag has to
+    # count toward every size - not just "L", which hid such stations from
+    # the smaller ships that could most easily use them.
+    large = (st.get("large_pads") or 0) or (1 if st.get("has_large_pad") else 0)
     medium = st.get("medium_pads") or 0
     small = st.get("small_pads") or 0
     if pad == "L":
-        return bool(large) or bool(st.get("has_large_pad"))
+        return bool(large)
     if pad == "M":
         return bool(large or medium)
     return bool(large or medium or small)
@@ -563,6 +566,34 @@ def age_tag(datestr):
         return "age_old"
     return ("age_ok" if n <= AGE_FRESH_DAYS
             else "age_mid" if n <= AGE_STALE_DAYS else "age_old")
+
+
+class Tip:
+    """Hover help. tkinter has no tooltips, and a settings dialog full of
+    unexplained jargon is worse than one with fewer options."""
+
+    def __init__(self, widget, text, app):
+        self.widget, self.text, self.app, self.win = widget, text, app, None
+        widget.bind("<Enter>", self._show, add="+")
+        widget.bind("<Leave>", self._hide, add="+")
+        widget.bind("<ButtonPress>", self._hide, add="+")
+
+    def _show(self, _e=None):
+        if self.win or not self.text:
+            return
+        x = self.widget.winfo_rootx() + 12
+        y = self.widget.winfo_rooty() + self.widget.winfo_height() + 6
+        self.win = tk.Toplevel(self.widget)
+        self.win.wm_overrideredirect(True)
+        self.win.wm_geometry("+%d+%d" % (x, y))
+        tk.Label(self.win, text=self.text, justify="left", bg="#1c1610",
+                 fg=TXT, font=self.app._fonts()["mono"], relief="solid",
+                 borderwidth=1, padx=10, pady=7, wraplength=520).pack()
+
+    def _hide(self, _e=None):
+        if self.win:
+            self.win.destroy()
+            self.win = None
 
 
 class App:
@@ -1027,19 +1058,81 @@ class App:
             (journal.find_journal_dir() if journal else "")
 
         section("DESTINATION")
-        ttk.Label(win, text="Where you sell", style="Dim.TLabel").grid(
-            row=row[0], column=0, sticky="w", **pad)
-        dbox = ttk.Frame(win)
-        dbox.grid(row=row[0], column=1, sticky="w", **pad)
-        v_stn = tk.StringVar(value=self.dest["station"])
         v_sys = tk.StringVar(value=self.dest["system"])
-        ttk.Entry(dbox, textvariable=v_stn, width=26, font=f["mono"]).pack(side="left")
-        ttk.Label(dbox, text="  in  ", style="Dim.TLabel").pack(side="left")
-        ttk.Entry(dbox, textvariable=v_sys, width=24, font=f["mono"]).pack(side="left")
+        v_stn = tk.StringVar(value=self.dest["station"])
+
+        # 1. system, with autocomplete
+        lbl_sys = ttk.Label(win, text="1. System", style="Dim.TLabel")
+        lbl_sys.grid(row=row[0], column=0, sticky="w", **pad)
+        cb_sys = ttk.Combobox(win, textvariable=v_sys, width=34, font=f["mono"])
+        cb_sys.grid(row=row[0], column=1, sticky="w", **pad)
+        Tip(lbl_sys, "The system you sell in. Type two or more letters and\n"
+                     "matching system names are offered from Spansh.", self)
         row[0] += 1
 
-        ttk.Label(win, text="Commodities", style="Dim.TLabel").grid(
-            row=row[0], column=0, sticky="nw", **pad)
+        # 2. station, listed from that system
+        lbl_stn = ttk.Label(win, text="2. Station", style="Dim.TLabel")
+        lbl_stn.grid(row=row[0], column=0, sticky="w", **pad)
+        stn_box = ttk.Frame(win)
+        stn_box.grid(row=row[0], column=1, sticky="w", **pad)
+        cb_stn = ttk.Combobox(stn_box, textvariable=v_stn, width=34, font=f["mono"])
+        cb_stn.pack(side="left")
+        Tip(lbl_stn, "Where you dock to sell. Pick the system first and press\n"
+                     "LOAD STATIONS to list the ones with a commodity market,\n"
+                     "nearest arrival star first. You can also just type it.", self)
+        stn_note = ttk.Label(stn_box, text="", style="Dim.TLabel")
+        stn_note.pack(side="left", padx=(10, 0))
+        row[0] += 1
+
+        station_meta = {}
+
+        def load_stations():
+            sysname = v_sys.get().strip()
+            if not sysname:
+                stn_note.configure(text="type a system first", foreground=WARN)
+                return
+            stn_note.configure(text="loading...", foreground=None)
+            win.update_idletasks()
+            found = verify.market_stations(sysname) if verify else []
+            if not found:
+                stn_note.configure(text="no markets found in %s" % sysname,
+                                   foreground=WARN)
+                return
+            station_meta.clear()
+            labels = []
+            for st in found:
+                lab = "%s  -  %s, %s Ls" % (st["name"], st["type"],
+                                            f"{int(st['ls']):,}")
+                labels.append(lab)
+                station_meta[lab] = st
+            cb_stn.configure(values=labels)
+            stn_note.configure(text="%d markets" % len(found), foreground=None)
+
+        def station_chosen(_e=None):
+            """Combobox values carry type/distance; keep only the name."""
+            meta = station_meta.get(v_stn.get())
+            if meta:
+                v_stn.set(meta["name"])
+
+        cb_stn.bind("<<ComboboxSelected>>", station_chosen)
+
+        def suggest(_e=None):
+            if not verify:
+                return
+            names = verify.suggest_systems(v_sys.get())
+            cb_sys.configure(values=names)
+
+        cb_sys.bind("<KeyRelease>", lambda e: self.root.after(400, suggest))
+
+        ttk.Button(win, text="LOAD STATIONS", style="Alt.TButton",
+                   command=load_stations).grid(row=row[0], column=1,
+                                               sticky="w", padx=14)
+        row[0] += 1
+
+        lbl_com = ttk.Label(win, text="3. Commodities", style="Dim.TLabel")
+        lbl_com.grid(row=row[0], column=0, sticky="nw", **pad)
+        Tip(lbl_com, "What to haul there. Comma separated, and editable at any\n"
+                     "time - the two buttons below just save you typing.", self)
         txt_com = tk.Text(win, width=54, height=4, bg=PANEL, fg=TXT,
                           insertbackground=OR, font=f["mono"], relief="flat",
                           highlightthickness=1, highlightbackground=LINE)
@@ -1123,10 +1216,29 @@ class App:
                                      % (mk["StationName"], len(found), CG_PRICE_RATIO),
                                 foreground=None)
 
-        ttk.Button(dbtn, text="PREFILL FROM LIVE CG", style="Alt.TButton",
-                   command=prefill_from_cg).pack(side="left")
-        ttk.Button(dbtn, text="DERIVE FROM MARKET", style="Alt.TButton",
-                   command=derive_from_market).pack(side="left", padx=6)
+        b_cg = ttk.Button(dbtn, text="PREFILL FROM LIVE CG", style="Alt.TButton",
+                          command=prefill_from_cg)
+        b_cg.pack(side="left")
+        Tip(b_cg, "Lists the trade community goals running right now, straight\n"
+                  "from Frontier. Pick one and it fills in all three fields\n"
+                  "above. Combat and exploration goals are not shown - they\n"
+                  "have nothing to haul.", self)
+
+        b_der = ttk.Button(dbtn, text="DERIVE FROM MARKET", style="Alt.TButton",
+                           command=derive_from_market)
+        b_der.pack(side="left", padx=6)
+        Tip(b_der, "Works out what the station pays a premium for, so you do\n"
+                   "not have to type the list.\n\n"
+                   "Every commodity has a galactic average price. This reads\n"
+                   "the market of the station you are DOCKED AT and picks\n"
+                   "anything selling for %.1fx that average or more.\n\n"
+                   "At a community goal station that finds the goal's\n"
+                   "commodities exactly - they all sell at a flat 3x.\n"
+                   "At an ordinary station it finds whatever that place is\n"
+                   "short of and pays well for.\n\n"
+                   "Needs you to have docked there and opened the commodity\n"
+                   "market, which is when the game writes the file it reads."
+                   % CG_PRICE_RATIO, self)
         row[0] += 1
 
         section("ELITE DANGEROUS")

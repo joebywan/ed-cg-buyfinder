@@ -175,3 +175,48 @@ if __name__ == "__main__":
     m = station_market("Scorpii Sector FM-V b2-7", "Lovell Sanctuary")
     for c in ("Gold", "Silver"):
         print(" ", c, m.get(c))
+
+
+# --------------------------------------------------------------------------
+# lookups for the destination picker
+# --------------------------------------------------------------------------
+
+SPANSH_SYSTEMS = ("https://spansh.co.uk/api/systems/field_values/"
+                  "system_names?q={q}")
+
+
+def suggest_systems(prefix, limit=12):
+    """System names matching a typed prefix. [] on any failure."""
+    prefix = (prefix or "").strip()
+    if len(prefix) < 2:
+        return []
+    try:
+        d = _get(SPANSH_SYSTEMS.format(q=urllib.parse.quote(prefix)), timeout=12)
+    except Exception:
+        return []
+    vals = d.get("values") if isinstance(d, dict) else d
+    return list(vals or [])[:limit]
+
+
+def market_stations(system):
+    """Stations in a system that actually have a commodity market.
+
+    Returns dicts with name, type, arrival distance and how recently the
+    market was reported, so the picker can show what it is choosing between.
+    """
+    try:
+        d = _get(EDSM_STATIONS.format(sys=urllib.parse.quote(system)), timeout=20)
+    except Exception:
+        return []
+    out = []
+    for s in d.get("stations", []) or []:
+        if not s.get("haveMarket"):
+            continue
+        out.append({
+            "name": s.get("name", "?"),
+            "type": s.get("type") or "?",
+            "ls": s.get("distanceToArrival") or 0,
+            "updated": ((s.get("updateTime") or {}).get("market") or "")[:10],
+        })
+    out.sort(key=lambda x: x["ls"])
+    return out
