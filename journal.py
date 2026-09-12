@@ -202,7 +202,10 @@ class JournalWatcher:
             with open(self.path, encoding="utf-8", errors="replace") as fh:
                 fh.seek(self.pos)
                 for line in fh:
-                    self._handle(line, live=True)
+                    try:
+                        self._handle(line, live=True)
+                    except Exception:
+                        continue        # never let one line stop the tail
                 self.pos = fh.tell()
         except OSError:
             pass
@@ -215,6 +218,10 @@ class JournalWatcher:
         try:
             e = json.loads(line)
         except (json.JSONDecodeError, ValueError):
+            return False
+        if not isinstance(e, dict):
+            # A truncated journal can leave a line that parses but is not an
+            # event object; .get() below would raise on it.
             return False
         ev, ts = e.get("event"), parse_ts(e.get("timestamp"))
         learned = False

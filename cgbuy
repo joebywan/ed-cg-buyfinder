@@ -433,9 +433,25 @@ class App:
         s.configure("TEntry", fieldbackground="#0a0908", foreground=TXT,
                     insertcolor=OR, bordercolor=LINE, lightcolor=LINE,
                     darkcolor=LINE, borderwidth=1)
-        s.configure("TCheckbutton", background=PANEL, foreground=TXT, font=MONO)
-        s.map("TCheckbutton", background=[("active", PANEL)],
-              foreground=[("active", OR)])
+        # ttk's indicator is a fixed-size element, so it has to be scaled
+        # explicitly or it stays tiny next to a large font on a HiDPI panel.
+        ind = int(self.fs * 1.5) + 4
+        s.configure("TCheckbutton", background=PANEL, foreground=TXT, font=MONO,
+                    indicatorsize=ind, indicatormargin=(0, 0, 8, 0),
+                    indicatorbackground="#0a0908",
+                    indicatorforeground=OR, padding=(0, 3),
+                    focuscolor=PANEL, bordercolor=LINE,
+                    lightcolor=LINE, darkcolor=LINE)
+        s.map("TCheckbutton",
+              background=[("active", PANEL)],
+              foreground=[("active", OR)],
+              # clam ignores the configured indicator colour for the plain
+              # unselected state, so it has to be mapped explicitly too.
+              indicatorbackground=[("disabled", "#241b13"),
+                                   ("selected", OR),
+                                   ("active", "#2a2118"),
+                                   ("!selected", "#0a0908")],
+              indicatorforeground=[("selected", "#140c05")])
 
         s.configure("Step.TButton", background="#2a2118", foreground=OR,
                     font=MONO_B, borderwidth=0, padding=(2, 2))
