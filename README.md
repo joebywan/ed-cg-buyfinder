@@ -38,12 +38,20 @@ first. Neither is code-signed, so Windows SmartScreen will warn on first run
 ```
 git clone https://github.com/joebywan/ed-cg-buyfinder
 cd ed-cg-buyfinder
-python cgbuy
+python cgbuy                  # searches immediately
+python cgbuy --no-autosearch  # open without hitting the APIs
 ```
 
-Building your own binary: `./build.sh` on Linux, `build.bat` on Windows.
-PyInstaller cannot cross-compile, so each has to be built on the OS it targets
-— which is what the CI matrix does.
+Stdlib only — no pip installs. tkinter is `python3-tk` on Debian/Ubuntu/Mint;
+Python from python.org already includes it. It needs a desktop session and
+exits with a clear message if there is no display. The file has no `.py`
+extension, so on Windows run it through `python` rather than double-clicking.
+
+Building your own binary: `./build.sh` on Linux, `build.bat` on Windows. Each
+creates a `.venv`, installs PyInstaller into it (the only step that needs
+network) and produces a single file with Python bundled. PyInstaller cannot
+cross-compile, so each has to be built on the OS it targets — which is what
+the CI matrix does.
 
 ## What you are looking at
 
@@ -110,35 +118,13 @@ the same station's single-commodity number.
 
 Scoring: `cr_per_min = (tonnes loaded × profit per tonne) / estimated round-trip
 minutes`. The round trip is jumps out (empty range) + jumps back (laden range) +
-supercruise/approach at both ends + two dock cycles.
+supercruise/approach at both ends + two departures (pad to first jump) + two
+station turnarounds.
 
-Filters applied when collecting sources: large landing pad required, supply and
-buy price must be positive, profit must be positive, and the station must be
-inside the radius. Fleet carriers are excluded unless you tick the box.
-
-## Install and run
-
-**The app** (`./cgbuy`, a tkinter desktop app, no `.py` extension):
-
-```
-./cgbuy                  # searches immediately
-./cgbuy --no-autosearch  # open without hitting the APIs
-```
-
-Needs Python 3 with tkinter (`python3-tk` on Debian/Ubuntu/Mint) and a desktop
-session. Stdlib only — no pip installs, no network at install time. It will exit
-with a clear message if there is no display.
-
-**A standalone binary:**
-
-```
-./build.sh
-```
-
-Creates a `.venv`, installs PyInstaller from PyPI (the only time the build needs
-network), and produces `./cgbuy-linux` — a single file with Python bundled. It
-still needs the system's tkinter and glibc, so the binary is Linux-specific and
-not portable across distro generations.
+Filters applied when collecting sources: a landing pad your ship fits, supply
+and buy price must be positive, profit must be positive, the station must be
+inside the radius, and the market data must be newer than MAX AGE. Fleet
+carriers are excluded unless you tick the box.
 
 ## The two views
 
@@ -153,7 +139,7 @@ value over the trip estimate. Top 40 stations, first five expanded.
 
 | Column | Meaning |
 | --- | --- |
-| `LY` | distance from Ega |
+| `LY` | distance from the destination system |
 | `LS` | arrival distance of the source station from its star |
 | `SUPPLY` | tonnes on offer |
 | `LOADS` | how many full holds that supply covers |
@@ -162,7 +148,7 @@ value over the trip estimate. Top 40 stations, first five expanded.
 | `TRIP` | estimated round-trip minutes |
 | `CR/MIN` | credits per minute for a single-commodity run |
 | `T/MIN` | tonnes per minute — use this if you care about CG rank rather than credits |
-| `DATA` | how long ago a commander last reported this market; green ≤21 days, amber ≤120, red beyond |
+| `DATA` | how long ago a commander last reported this market; green ≤2 days, amber ≤7, red beyond — a CG drains supply fast |
 
 The header line shows what the CG currently pays for each commodity (the CG
 multiplier is already baked into the EDSM price — the tool does not apply it).
@@ -170,7 +156,9 @@ multiplier is already baked into the EDSM price — the tool does not apply it).
 ## Interface
 
 Inputs across the top: hold size, radius (30 ly), jump range empty and laden,
-minimum supply (200), and a fleet-carrier toggle. Enter or SEARCH runs it.
+minimum supply (200), max data age (7 days), and a fleet-carrier toggle. Enter
+or SEARCH runs it. Rows older than the max age are hidden and the status bar
+says how many; if every row is older, they are shown anyway.
 
 Hold and the two jump ranges are marked `*` and locked while your journal can
 see a ship — they are the ship's, not yours to guess at. Hover one to see
@@ -182,9 +170,13 @@ rescales everything — fonts, row heights, column widths, and the window itself
 and the choice is saved.
 
 **Settings** (SETTINGS button): journal folder (auto-detected, override only if
-you have several installs), how many top results to re-check against EDSM,
-toggles for the deck button and EDDN, and a readout of current trip timings
-with a reset.
+you have several installs), the destination, how many minutes cached results
+count as fresh (10), how many top results to re-check against EDSM (18),
+toggles for desktop notifications and EDDN, and a readout of current trip
+timings with a reset.
+
+On startup the last results are shown straight away; if they are older than
+the freshness window a new search runs behind them without asking.
 
 **Config** lives at `~/.config/cgbuy.json` (`$XDG_CONFIG_HOME` respected) and holds font
 size, journal path, search parameters, the integration toggles, EDSM
@@ -192,18 +184,21 @@ verification settings and accumulated calibration samples.
 
 ## Journal calibration
 
-The shipped trip model is guesswork: 0.85 min per jump, 3 min docked, and a
-supercruise curve (`0.25 × Ls^0.3`) fitted by eye. The app tails your Elite
-journals and replaces those guesses with what actually happens to you:
+The shipped trip model is guesswork: 0.85 min per jump, 1.8 min from the pad to
+the first jump, and a supercruise curve (`0.25 × Ls^0.3`) fitted by eye. The app
+tails your Elite journals and replaces those guesses with what actually happens
+to you:
 
 - **jump cycle** — FSDJump to FSDJump, counted only when 15–300s apart, so a stop
   mid-route is not charged as jump time
+- **departure** — Undocked to the first FSDJump: launch, clear mass lock, align,
+  charge
 - **arrival leg** — FSDJump to Docked, i.e. supercruise plus approach plus
   docking, paired with the station's arrival Ls to scale the supercruise curve
-- **dock time** — Docked to Undocked, counted separately so nothing is
-  double-counted
-- **supercruise** — SupercruiseEntry to exit, when the game logs it; the arrival
-  leg is the fallback because it is journalled far more reliably
+
+**Station time is not calibrated.** Docked to Undocked cannot tell trading apart
+from making a cup of tea, so the trip model uses a fixed 2-minute turnaround.
+The median stop is still collected and shown in the timings readout.
 
 Each measurement needs **at least 3 samples** before it is used at all, and the
 value is a median, so one 500,000 Ls outlier cannot swing it. Until then the
@@ -211,8 +206,8 @@ estimate stands, and the status bar says `estimate (n=…)`. On first run it
 back-fills from your last six journal files. It keeps the most recent 200
 samples of each kind in the config.
 
-Docking at Metz Enterprise triggers an automatic re-search — the run just ended,
-so the next one gets fresh data.
+Docking at the destination station triggers an automatic re-search — the run
+just ended, so the next one gets fresh data.
 
 ## EDDN sharing
 
@@ -230,27 +225,6 @@ against the schema before sending, and each market snapshot is sent at most once
 Everything this tool reads came from someone else doing this, which is the
 argument for turning it on.
 
-
-to **a single button in your existing deck software** (OpenDeck or anything
-device, and does not replace your setup.
-
-From an OpenDeck flatpak button:
-
-```
-```
-
-Each press reads the ranked target list the app publishes to
-`~/.config/cgbuy-state.json`, prints the current target, then
-advances the index so the next press moves you on. It prints the station,
-system, mix, distance and value on stdout, so deck software that renders command
-output shows it on the button face.
-
-```
-```
-
-It respects the `deck_enabled` toggle in the config and reports if the app has
-not produced targets yet.
-
 ## Limitations
 
 - **Trip times are estimates.** Even calibrated, they are medians of your past
@@ -260,27 +234,12 @@ not produced targets yet.
   fast during a CG, and a station showing 40,000t three weeks ago may be empty.
   Watch the DATA column; it is coloured for exactly this reason.
 - **Fleet carriers move and reprice.** Off by default for that reason.
-- **`cgbuy-linux` is glibc/Linux-specific** and still depends on the system's
-  tkinter. Build it on the machine you will run it on.
-- **The CG is hardcoded** — station, system, and the twelve commodities are
-  constants at the top of the source.
+- **`cgbuy-linux` is glibc-specific** and is built on a current Ubuntu runner,
+  so it may not start on an older distro. Run from source or build it locally
+  if so.
+- **No macOS binary.** The code runs there from source; nothing builds one.
 
 ## Windows and macOS
-
-The code is portable; only the prebuilt binary is not. `cgbuy-linux` is an ELF
-executable and PyInstaller cannot cross-compile, so a Windows `.exe` has to be
-built on Windows.
-
-**Run from source** (simplest — Python 3 from python.org includes tkinter):
-
-```
-python cgbuy
-```
-
-The file has no `.py` extension, so Windows will not associate it; invoke it
-through `python` as above rather than double-clicking it.
-
-**Build an .exe:** `build.bat`, the Windows counterpart of `build.sh`.
 
 What adapts automatically:
 
@@ -293,8 +252,8 @@ What adapts automatically:
 - **Font** — first installed of DejaVu Sans Mono, Consolas, Menlo, Liberation
   Mono, Courier New.
 
-Nothing in the tool shells out or calls a POSIX-only API, so there is no
-platform-specific behaviour beyond those paths.
+Beyond those paths, the only platform-specific code is
+[notifications](#notifications), which call each OS's own notifier.
 
 ## Antivirus false positives
 
