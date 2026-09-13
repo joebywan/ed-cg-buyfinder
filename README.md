@@ -1,5 +1,8 @@
 # cgbuy
 
+[![build](https://github.com/joebywan/ed-cg-buyfinder/actions/workflows/build.yml/badge.svg)](https://github.com/joebywan/ed-cg-buyfinder/actions/workflows/build.yml)
+[![virustotal](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fjoebywan%2Fed-cg-buyfinder%2Fmain%2F.github%2Fbadges%2Fvirustotal.json)](#antivirus-false-positives)
+
 Finds the best places to **buy** for an Elite Dangerous community goal, ranked
 by credits per minute of round trip — not by profit per tonne, because a rich
 station 40 minutes away loses to a decent one 15 minutes away.

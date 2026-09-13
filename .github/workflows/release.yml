@@ -165,9 +165,22 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           TAG: v${{ needs.tag.outputs.version }}
         run: |
-          SUMMARY=$(python3 .github/scripts/vt_scan.py cgbuy-windows.exe cgbuy-linux)
+          SUMMARY=$(python3 .github/scripts/vt_scan.py --badge=.github/badges/virustotal.json cgbuy-windows.exe cgbuy-linux)
           # Empty means no VT_API_KEY configured; nothing to append.
           [ -n "$SUMMARY" ] || exit 0
           gh release view "$TAG" --json body --jq .body > body.md
           printf '%s\n' "$SUMMARY" >> body.md
           gh release edit "$TAG" --notes-file body.md
+      - name: Commit the refreshed badge to main
+        env:
+          TAG: v${{ needs.tag.outputs.version }}
+        run: |
+          git add .github/badges/virustotal.json
+          # Nothing staged means the count did not move, or there was no scan.
+          git diff --cached --quiet && exit 0
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "VirusTotal badge: $TAG"
+          # The tag job pushed a version bump after this job's checkout.
+          git pull --rebase origin main
+          git push origin HEAD:main

@@ -86,7 +86,7 @@ def scan(path, key):
 def summarise(name, digest, attrs, note):
     link = f"https://www.virustotal.com/gui/file/{digest}"
     if attrs is None:
-        return (f"| `{name}` | [pending]({link}) | — | {note} |", [])
+        return (f"| `{name}` | [pending]({link}) | — | {note} |", [], None)
     stats = attrs.get("last_analysis_stats", {})
     bad = stats.get("malicious", 0) + stats.get("suspicious", 0)
     total = sum(v for k, v in stats.items() if k != "timeout")
@@ -95,7 +95,7 @@ def summarise(name, digest, attrs, note):
         for engine, r in (attrs.get("last_analysis_results") or {}).items()
         if r.get("category") in ("malicious", "suspicious")
     )
-    return (f"| `{name}` | [{bad}/{total}]({link}) | `{digest[:16]}…` | {note} |", flagged)
+    return (f"| `{name}` | [{bad}/{total}]({link}) | `{digest[:16]}…` | {note} |", flagged, (bad, total))
 
 
 def main():
@@ -104,14 +104,27 @@ def main():
         print("VT_API_KEY not set - skipping the VirusTotal scan.", file=sys.stderr)
         return 0
 
+    args = [a for a in sys.argv[1:] if not a.startswith("--badge=")]
+    badge = next((a.split("=", 1)[1] for a in sys.argv[1:] if a.startswith("--badge=")), None)
     rows, all_flagged = [], {}
-    for path in sys.argv[1:]:
+    for path in args:
         try:
+            badge_path = badge
             digest, attrs, note = scan(path, key)
-            row, flagged = summarise(os.path.basename(path), digest, attrs, note)
+            row, flagged, ratio = summarise(os.path.basename(path), digest, attrs, note)
             rows.append(row)
             if flagged:
                 all_flagged[os.path.basename(path)] = flagged
+            if badge_path and ratio and os.path.basename(path).endswith(".exe"):
+                bad, total = ratio
+                # Blue rather than red: a non-zero count here is the expected
+                # state for an unsigned one-file build, not a failure. The badge
+                # links to the explanation so the number is never context-free.
+                with open(badge_path, "w") as fh:
+                    json.dump({"schemaVersion": 1,
+                               "label": "virustotal",
+                               "message": f"{bad}/{total}",
+                               "color": "brightgreen" if bad == 0 else "informational"}, fh)
         except Exception as e:                      # noqa: BLE001 - never fail a release
             print(f"VirusTotal scan of {path} failed: {e}", file=sys.stderr)
             rows.append(f"| `{os.path.basename(path)}` | scan failed | — | {e} |")
