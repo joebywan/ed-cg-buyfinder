@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-cgbuy - buy-location finder for the Ega / Metz Enterprise community goal.
+cgbuy - buy-location finder for Elite Dangerous community goals.
 
 A native desktop app (tkinter). Single file, stdlib only - just run it.
 
@@ -53,6 +53,13 @@ DEFAULT_DEST = {
     "station": None, "system": None, "commodities": [],
     "title": None, "expiry": None, "source": "none",
 }
+
+
+def window_title(dest):
+    """Title bar text: the place results are ranked against, if there is one."""
+    d = dest or {}
+    place = ", ".join(p for p in (d.get("station"), d.get("system")) if p)
+    return "CG Buy Finder - %s" % place if place else "CG Buy Finder"
 
 # A destination station's own market gives away which goods it pays a premium
 # for: a CG sells at a fixed multiple of galactic mean price, far above any
@@ -718,7 +725,7 @@ class App:
         self.sort_desc = True
         self.busy = False
 
-        root.title("CG Buy Finder - Ega")
+        self._update_title()
         _apply_icon(root)
         root.configure(bg=BG)
         root.geometry("1480x860")
@@ -1472,6 +1479,7 @@ class App:
                 self.cfg["dest_manual"] = True
                 self.cg_lbl.configure(text="%s  -  %s" % (self.dest["station"],
                                                           self.dest["system"]))
+                self._update_title()
             self.cfg["journal_dir"] = v_journal.get().strip() or None
             self.cfg["notifications"] = bool(self.v_notify.get())
             self.cfg["verify_edsm"] = bool(self.v_verify.get())
@@ -1582,6 +1590,13 @@ class App:
             self.root.after(3000, self._poll_journal, self._poll_token)
         except Exception as e:
             self.cal_lbl.configure(text="journal error: %s" % e)
+
+    def _update_title(self):
+        text = window_title(self.dest)
+        if notify is None:
+            self.root.title(text)
+        else:
+            notify.set_base_title(self.root, text)
 
     def _notify(self, title, body, urgency="normal"):
         if notify is None or not self.cfg.get("notifications", True):
@@ -1859,6 +1874,7 @@ class App:
         save_config(self.cfg)
         self.cg_lbl.configure(text="%s  -  %s" % (self.dest["station"],
                                                   self.dest["system"]))
+        self._update_title()
         alts = found.get("alternatives") or 0
         more = ("  (+%d other trade CG%s - see SETTINGS)"
                 % (alts, "" if alts == 1 else "s")) if alts else ""

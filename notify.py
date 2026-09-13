@@ -113,6 +113,16 @@ def _mark_title(root, title):
     root.bind("<Button-1>", clear, add="+")
 
 
+def set_base_title(root, text):
+    """Retitle the window, and make it what a cleared marker restores.
+
+    _mark_title remembers the first title it saw; without this, clearing a
+    marker after the destination changed would put the old place back.
+    """
+    root._cgbuy_base_title = text
+    root.title(text)
+
+
 if __name__ == "__main__":
     print("platform :", sys.platform)
     print("notify-send:", _have("notify-send"))

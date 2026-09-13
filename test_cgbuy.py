@@ -39,6 +39,7 @@ atexit.register(shutil.rmtree, _CONFIG_SANDBOX, True)
 import cg                                                     # noqa: E402
 import eddn                                                   # noqa: E402
 import journal                                                # noqa: E402
+import notify                                                 # noqa: E402
 import verify                                                 # noqa: E402
 
 # cgbuy has no .py extension, so the normal import machinery cannot see it.
@@ -2231,6 +2232,64 @@ BINDS_XML = """<?xml version="1.0" encoding="UTF-8"?>
   </Unbound>
 </Root>
 """
+
+
+class TestWindowTitle(unittest.TestCase):
+
+    def test_names_the_destination_station_and_system(self):
+        self.assertEqual(
+            cgbuy.window_title({"station": "Metz Enterprise", "system": "Ega"}),
+            "CG Buy Finder - Metz Enterprise, Ega")
+
+    def test_no_destination_names_no_place(self):
+        self.assertEqual(cgbuy.window_title(dict(cgbuy.DEFAULT_DEST)),
+                         "CG Buy Finder")
+        self.assertEqual(cgbuy.window_title(None), "CG Buy Finder")
+
+    def test_a_system_alone_is_still_worth_showing(self):
+        self.assertEqual(cgbuy.window_title({"station": None, "system": "Ega"}),
+                         "CG Buy Finder - Ega")
+
+
+class FakeRoot:
+    """Just enough of a Tk root for notify's title handling."""
+
+    def __init__(self):
+        self._title = ""
+        self.handlers = []
+
+    def title(self, text=None):
+        if text is None:
+            return self._title
+        self._title = text
+
+    def bind(self, _event, fn, add=None):
+        self.handlers.append(fn)
+
+    def focus(self):
+        for fn in list(self.handlers):
+            fn()
+
+
+class TestBaseTitle(unittest.TestCase):
+
+    def test_clearing_a_marker_restores_the_renamed_title(self):
+        root = FakeRoot()
+        notify.set_base_title(root, "CG Buy Finder - A")
+        notify._mark_title(root, "news")
+        self.assertEqual(root.title(), "* news - CG Buy Finder - A")
+        notify.set_base_title(root, "CG Buy Finder - B")
+        self.assertEqual(root.title(), "CG Buy Finder - B")
+        root.focus()
+        self.assertEqual(root.title(), "CG Buy Finder - B")
+
+    def test_a_marker_after_a_rename_wraps_the_new_title(self):
+        root = FakeRoot()
+        notify.set_base_title(root, "CG Buy Finder - A")
+        notify._mark_title(root, "first")
+        notify.set_base_title(root, "CG Buy Finder - B")
+        notify._mark_title(root, "second")
+        self.assertEqual(root.title(), "* second - CG Buy Finder - B")
 
 
 if __name__ == "__main__":
