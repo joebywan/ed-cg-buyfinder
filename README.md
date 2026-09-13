@@ -31,7 +31,9 @@ current in place.
 
 Take `cgbuy-linux` or `cgbuy-windows.exe`. On Linux, `chmod +x cgbuy-linux`
 first. Neither is code-signed, so Windows SmartScreen will warn on first run
-("More info" → "Run anyway").
+("More info" → "Run anyway"). Some antivirus engines, currently including
+Microsoft Defender, flag the Windows build — see
+[Antivirus false positives](#antivirus-false-positives).
 
 **Or run from source** — Python 3 with tkinter, nothing else:
 
@@ -257,12 +259,18 @@ Beyond those paths, the only platform-specific code is
 
 ## Antivirus false positives
 
-A handful of engines flag the Windows binary. As of the 2026-09-12 snapshot,
-VirusTotal put it at 11/70, and the detections are generic:
-`Gen:Variant.Application.Tedy`, `BehavesLike.Win64.Injector`. Eight of those
-eleven are the same BitDefender engine under OEM licence, so they are one
-verdict wearing eight badges. Microsoft, Kaspersky, ESET, Sophos, CrowdStrike,
-SentinelOne, Symantec and Malwarebytes all read it as clean.
+A handful of engines flag the Windows binary; the Linux one scans clean. At
+v1.3, VirusTotal put `cgbuy-windows.exe` at 14/75 — the badge above and each
+release's notes carry the current count and the names of the flagging engines.
+Several of those (eScan, GData, Emsisoft, Arcabit, VIPRE, ALYac) license
+BitDefender's engine, so one verdict appears under several names. Kaspersky,
+ESET, Sophos, CrowdStrike, SentinelOne and Symantec did not flag it.
+
+**Microsoft Defender does, as of v1.3**, and that matters more than the count:
+on Windows it can block or quarantine the download rather than just warn. The
+detection has been submitted to Microsoft for review. Until it is cleared, run
+from source, or check the hash and then allow the file from Windows Security's
+Protection history.
 
 The cause is the packaging, not the code. `--onefile` appends a ~12 MB
 compressed archive to a small stub; at runtime the stub unpacks CPython, Tcl/Tk
