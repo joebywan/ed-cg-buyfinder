@@ -8,7 +8,9 @@ cd "$(dirname "$0")"
 .venv/bin/python -m pip install --quiet --upgrade pip pyinstaller
 
 cp cgbuy build_src.py
+# sco_table.json is opened, not imported, so PyInstaller has to be told.
 .venv/bin/pyinstaller --onefile --name cgbuy-linux --clean --noconfirm \
+    --add-data "$PWD/sco_table.json:." \
     --distpath dist --workpath .build --specpath .build build_src.py
 mv -f dist/cgbuy-linux ./cgbuy-linux
 rm -rf build_src.py .build dist

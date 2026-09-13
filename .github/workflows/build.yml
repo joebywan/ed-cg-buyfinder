@@ -65,7 +65,12 @@ jobs:
           if [ -n "${{ matrix.icon }}" ]; then
             ICON_FLAG="--icon=$(python -c "import os,sys; print(os.path.abspath(sys.argv[1]))" "${{ matrix.icon }}")"
           fi
-          pyinstaller --onefile --name cgbuy --clean --noconfirm --windowed $ICON_FLAG --distpath dist --workpath .build --specpath .build build_src.py
+          # PyInstaller bundles what cgbuy imports, not files a module opens:
+          # without this sco_table.json is missing and every hull reads as
+          # an estimate. Absolute for the same --specpath reason as the icon;
+          # os.pathsep because a Windows path already contains a colon.
+          DATA_FLAG="--add-data=$(python -c "import os; print(os.path.abspath('sco_table.json') + os.pathsep + '.')")"
+          pyinstaller --onefile --name cgbuy --clean --noconfirm --windowed $ICON_FLAG $DATA_FLAG --distpath dist --workpath .build --specpath .build build_src.py
       - name: Smoke test
         shell: bash
         run: |

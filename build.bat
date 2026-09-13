@@ -11,7 +11,7 @@ if not exist .venv (
 
 copy /y cgbuy build_src.py >nul
 .venv\Scripts\pyinstaller --onefile --name cgbuy --clean --noconfirm ^
-    --windowed --icon="%~dp0icon.ico" --distpath dist --workpath .build --specpath .build build_src.py || goto :err
+    --windowed --icon="%~dp0icon.ico" --add-data "%~dp0sco_table.json;." --distpath dist --workpath .build --specpath .build build_src.py || goto :err
 
 move /y dist\cgbuy.exe cgbuy.exe >nul
 del build_src.py

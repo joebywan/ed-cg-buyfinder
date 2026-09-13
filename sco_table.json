@@ -1,0 +1,19 @@
+{
+  "_comment": "When to cut supercruise overcharge, per hull. Expressed as a RANGE TO RUN, not a countdown: cut when range to target (Ls) >= a * speed(c)^p. Both numbers are on the HUD panel. A countdown does not work because braking distance grows far more slowly than speed - the observations exclude any exponent above 0.84, so the seconds-to-target needed at 2,000c is a fraction of what it is at 70c. Measured with tools/scocap.py; see tools/README.md.",
+  "fallback": {
+    "law": {"a": 30.0, "p": 0.5},
+    "note": "The Panther's law, for want of a measured one. Any other hull is a guess: nothing lighter has been tested and mass is the obvious thing that would move it."
+  },
+  "ships": {
+    "panthermkii": {
+      "drive": "int_hyperdrive_overcharge_size7_class5",
+      "unladen_mass": 1676.5,
+      "law": {"a": 30.0, "p": 0.5},
+      "source": "measured",
+      "samples": 9,
+      "measured": "2026-09-13",
+      "bracket": {"speed_c": 70, "overshot_at_ls": 172, "clean_at_ls": 273},
+      "note": "Nine captured approaches over 357 Ls and 5,394 Ls legs plus one commander report at 35,000 Ls. The boundary is pinned only near 70c, between a cut at 172 Ls that overshot and looped and a cut at 273 Ls that arrived clean. Above that speed there is no recorded overshoot, so the exponent is bounded above (0.84) but not below, and p=0.5 is a safety choice among the admissible fits: a constant distance fits equally well, the two diverge fivefold by 2,000c, and being wrong toward p=0.5 wastes seconds while being wrong toward a constant overshoots. One deliberate overshoot at high speed would settle it. Laden and empty not separated: 21 laden against 4 light arrivals showed no detectable difference, on a test that could barely detect one."
+    }
+  }
+}

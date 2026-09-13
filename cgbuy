@@ -41,6 +41,14 @@ try:
     import notify
 except ImportError:
     notify = None
+try:
+    import status
+except ImportError:
+    status = None
+try:
+    import sco_model
+except ImportError:
+    sco_model = None
 
 # Where you sell, and what that place pays well for. Defaults to the goal
 # this tool was written for so an existing install keeps working, but nothing
@@ -1070,6 +1078,8 @@ class App:
         f.grid(row=4, column=0, sticky="ew")
         # Pack the right-hand hint FIRST so the status text yields to it
         # instead of overlapping when it grows.
+        self.sco_lbl = ttk.Label(f, style="Or.TLabel", text="")
+        self.sco_lbl.pack(side="right", padx=(0, 18))
         ttk.Label(f, style="Dim.TLabel",
                   text="click a row to copy its system  -  trip times are "
                        "estimates").pack(side="right")
@@ -1448,6 +1458,12 @@ class App:
             row=row[0], column=1, sticky="w", **pad)
         row[0] += 1
 
+        sco_txt = self._sco_line()
+        if sco_txt:
+            ttk.Label(win, text=sco_txt, style="Dim.TLabel").grid(
+                row=row[0], column=1, sticky="w", padx=14)
+            row[0] += 1
+
         def reset_cal():
             if journal:
                 self.cal = journal.Calibration()
@@ -1565,6 +1581,7 @@ class App:
         self.watcher = None
         self.cal = None
         self.sender = None
+        self.statusw = None
         if journal is None:
             self.cal_lbl.configure(text="journal module not found")
             self._lock_ship_boxes(None)  # nothing to read: the boxes are yours
@@ -1579,15 +1596,22 @@ class App:
             w.prime()
             w.on_docked = self._on_docked
             w.on_event = self._on_journal_event
+            w.on_approach = self._on_approach
+            # Status.json is the only source for whether the overcharge was
+            # running, and it has to be sampled far faster than the journal:
+            # a burn can be over in four seconds.
+            self.statusw = status.StatusWatcher(w.dir) if status else None
             if eddn:
                 self.sender = eddn.Sender(self.cfg.get("eddn_seen"))
             self.watcher, self.cal = w, w.cal
             self._show_cal()
+            self._show_sco()
             self._adopt_ship()
             self._measure_cycle()
             self._adopt_destination()
             self.refresh_standing()
             self.root.after(3000, self._poll_journal, self._poll_token)
+            self.root.after(250, self._poll_status, self._poll_token)
         except Exception as e:
             self.cal_lbl.configure(text="journal error: %s" % e)
 
@@ -2124,6 +2148,34 @@ class App:
         if self.cal:
             self.cal_lbl.configure(text="TIMINGS  " + self.cal.summary())
 
+    def _sco_line(self):
+        """The braking law as a speed -> range table.
+
+        Not a countdown and not one number: the range needed grows with speed,
+        so what the cockpit wants is a short table to match against the two
+        figures already on the HUD panel.
+        """
+        if sco_model is None:
+            return ""
+        ship = self.watcher.ship if self.watcher else None
+        t = sco_model.terms(ship)
+        rows = sco_model.plan(ship)
+        return ("CUT SCO with this much range left (%s)   " % t["source"]
+                + "   ".join("%dc: %.0f Ls" % (v, d) for v, d in rows))
+
+    def _show_sco(self):
+        """Put the cut on the status bar, where it is read before undocking."""
+        if sco_model is None or not hasattr(self, "sco_lbl"):
+            return
+        ship = self.watcher.ship if self.watcher else None
+        t = sco_model.terms(ship)
+        rows = sco_model.plan(ship, speeds=(70, 250, 1000))
+        self.sco_lbl.configure(
+            text="cut SCO at %s%s Ls left"
+                 % ("" if t["source"] == "measured" else "~",
+                    " / ".join("%.0f" % d for _, d in rows))
+                 + "  (70/250/1000c)")
+
     def _poll_journal(self, token=None):
         if self.closing:
             return
@@ -2136,6 +2188,37 @@ class App:
             except Exception:
                 pass
             self.root.after(3000, self._poll_journal, self._poll_token)
+
+    def _poll_status(self, token=None):
+        if self.closing:
+            return
+        if token is not None and token != self._poll_token:
+            return
+        if self.statusw:
+            try:
+                self.statusw.poll()
+            except Exception:
+                pass
+        self.root.after(250, self._poll_status, self._poll_token)
+
+    def _on_approach(self, ls, start, drop, station):
+        """An approach finished: pair its clock with how the drive was flown.
+
+        Recorded whether or not the overcharge was used - a zero-burn approach
+        is a data point, and the one the short legs may well be won with.
+        """
+        if not self.statusw or not self.cal:
+            return
+        if not self.statusw.observed(start):
+            return          # the app started mid-approach; a zero burn here
+                            # would be indistinguishable from a good one
+        lit = self.statusw.first_lit(start, drop)
+        self.cal.add_sco_sample(ls, drop - start,
+                                self.statusw.seconds_between(start, drop),
+                                None if lit is None else lit - start,
+                                self.watcher.ship if self.watcher else None)
+        self._save_cal()
+        self._show_cal()
 
     def _on_join(self, e):
         """CommunityGoalJoin means they just registered - stop nagging."""
@@ -2351,6 +2434,7 @@ class App:
         self.cg_lbl.configure(text="%s  -  %s  -  %s Ls from arrival"
                               % (self.dest["station"], self.dest["system"],
                                  f"{d['cg_ls']:,.0f}"))
+        self._show_sco()
         order = sorted(d["cg"], key=lambda k: -d["cg"][k]["sell"])
         self.prices.configure(
             text="CG PAYS   " + "    ".join(
