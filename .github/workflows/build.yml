@@ -33,9 +33,11 @@ jobs:
           - os: ubuntu-latest
             artifact: cgbuy-linux
             built: dist/cgbuy
+            icon: ""
           - os: windows-latest
             artifact: cgbuy-windows.exe
             built: dist/cgbuy.exe
+            icon: "icon.ico"
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -57,7 +59,13 @@ jobs:
         shell: bash
         run: |
           python -c "import shutil; shutil.copy('cgbuy', 'build_src.py')"
-          pyinstaller --onefile --name cgbuy --clean --noconfirm --windowed --distpath dist --workpath .build --specpath .build build_src.py
+          # PyInstaller resolves a relative --icon against --specpath, not the
+          # working directory, so hand it an absolute path.
+          ICON_FLAG=""
+          if [ -n "${{ matrix.icon }}" ]; then
+            ICON_FLAG="--icon=$(python -c "import os,sys; print(os.path.abspath(sys.argv[1]))" "${{ matrix.icon }}")"
+          fi
+          pyinstaller --onefile --name cgbuy --clean --noconfirm --windowed $ICON_FLAG --distpath dist --workpath .build --specpath .build build_src.py
       - name: Smoke test
         shell: bash
         run: |

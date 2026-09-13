@@ -719,6 +719,7 @@ class App:
         self.busy = False
 
         root.title("CG Buy Finder - Ega")
+        _apply_icon(root)
         root.configure(bg=BG)
         root.geometry("1480x860")
         root.minsize(1000, 600)
@@ -2411,6 +2412,78 @@ class App:
                 r["t_per_min"], age_text(r["updated"]),
                 "EDSM" if r.get("edsm") else "spansh"), tags=tags)
             self._remember(t, iid, r["system"])
+
+
+# Window icon, embedded so the one-file build stays genuinely one file.
+# Tk 8.6 reads PNG from base64 directly.
+ICON_PNG_B64 = (
+    "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"
+    "AABJRU5ErkJggg=="
+)
+
+
+def _apply_icon(root):
+    """Best-effort window icon. A missing icon must never stop the app."""
+    try:
+        import base64 as _b64
+        img = tk.PhotoImage(data=_b64.b64decode(ICON_PNG_B64))
+        root.iconphoto(True, img)
+        root._icon_ref = img          # Tk does not keep its own reference
+    except Exception:
+        pass
 
 
 VERSION = "1.1"

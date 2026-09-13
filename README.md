@@ -13,6 +13,13 @@ It reads your journal to know which goal you joined, what ship you are flying
 and how long your jumps actually take, then discovers candidate markets through
 Spansh and re-checks the best of them against EDSM, which is days fresher.
 
+The point is to stop bouncing between a dozen Inara tabs. Check a commodity,
+note the station, check another, go back and refresh the first because the data
+has moved, work out which of the two is actually closer, lose track of the
+third, start again — arithmetic done in your head between page loads.
+All of that belongs in one pane: a single window, a single ranked list, kept
+current in place.
+
 ## Install
 
 **Download a binary** — no Python needed:
