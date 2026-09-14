@@ -2907,21 +2907,55 @@ class TestParseTsIsUtc(unittest.TestCase):
 
 
 class TestBuildsBundleTheScoTable(unittest.TestCase):
-    """PyInstaller follows imports, not open() calls. Without --add-data the
-    binaries ship no sco_table.json, and even a measured hull reads as an
-    estimate."""
+    """Both packagers follow imports, not open() calls. Told nothing, they ship
+    no sco_table.json and even a measured hull reads as an estimate.
+
+    Linux builds with PyInstaller and Windows with Nuitka, which spell the same
+    instruction differently, so either flag counts -- what matters is that no
+    build script forgets the table."""
 
     BUILDS = (".github/workflows/build.yml", ".github/workflows/release.yml",
               "build.sh", "build.bat")
+    DATA_FLAGS = ("--add-data", "--include-data-files")
 
     def test_every_build_adds_the_table_as_data(self):
         for name in self.BUILDS:
             with open(os.path.join(PROJECT_DIR, name), encoding="utf-8") as fh:
                 text = fh.read()
             with self.subTest(build=name):
-                self.assertIn("--add-data", text)
+                self.assertTrue(
+                    any(flag in text for flag in self.DATA_FLAGS),
+                    f"{name} passes neither {' nor '.join(self.DATA_FLAGS)}")
                 self.assertIn("sco_table.json", text)
 
+
+
+class TestWindowsIsNotBuiltAsOneFile(unittest.TestCase):
+    """The Windows build must stay a standalone folder.
+
+    Measured on one commit: PyInstaller one-file 7/75 on VirusTotal, Nuitka
+    one-file 15/75, Nuitka standalone 0/75. It is the startup self-extraction
+    that engines score, not the code, so --onefile on the Windows side would
+    silently hand back every detection this project spent a release removing.
+    Linux keeps --onefile: it scans clean there and one file is a nicer
+    download."""
+
+    WINDOWS_BUILDS = (".github/workflows/build.yml",
+                      ".github/workflows/release.yml", "build.bat")
+
+    def _read(self, name):
+        with open(os.path.join(PROJECT_DIR, name), encoding="utf-8") as fh:
+            return fh.read()
+
+    def test_windows_builds_pass_standalone(self):
+        for name in self.WINDOWS_BUILDS:
+            with self.subTest(build=name):
+                self.assertIn("--standalone", self._read(name))
+
+    def test_build_bat_never_packs_one_file(self):
+        # The workflows legitimately contain --onefile for the Linux job, so
+        # only build.bat, which is Windows-only, can be checked outright.
+        self.assertNotIn("--onefile", self._read("build.bat"))
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

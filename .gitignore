@@ -7,4 +7,7 @@ build_src.py
 cgbuy-linux
 # built artefacts belong in Releases, never in the repo
 *.exe
-cgbuy-windows.exe
+cgbuy-windows/
+nuitka/
+*.zip
+*.tar.gz

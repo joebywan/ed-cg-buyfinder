@@ -29,18 +29,25 @@ current in place.
 | [Latest release](https://github.com/joebywan/ed-cg-buyfinder/releases/latest) | stable, version-tagged |
 | [Snapshot](https://github.com/joebywan/ed-cg-buyfinder/releases/tag/snapshot) | rebuilt on every push to `main` |
 
-Every asset carries its version — `cgbuy-v1.4-linux`, `cgbuy-v1.4-windows.exe`
-and so on — so a second download never lands as `cgbuy-linux(1)`. On Windows,
-take the `.exe`.
+Every asset carries its version — `cgbuy-v1.5-windows.zip`, `cgbuy-v1.5-linux`
+and so on — so a second download never lands as `cgbuy-linux(1)`.
 
-On Linux, take the `.tar.gz` and `tar -xzf cgbuy-v*-linux.tar.gz` — the binary
-comes out executable. The loose binary next to it is the same thing
-without the wrapper, and a plain download of that one needs `chmod +x` first,
-because a GitHub release asset cannot record the execute bit.
+**Windows** — take the `.zip`, extract the whole folder, run `cgbuy.exe` from
+inside it. It is a folder rather than a single `.exe` on purpose: the
+self-extracting one-file format is what antivirus engines were flagging, and
+dropping it took the Windows build from 7/75 on VirusTotal to 0/75. The cost is
+that `cgbuy.exe` needs the DLLs beside it, so move the folder, not the exe.
+`README-FIRST.txt` in the zip says as much for anyone who skips this page.
+The download is about the same size as the old single file (~12 MB); it is
+~33 MB once extracted.
 
-Neither binary is code-signed, so Windows SmartScreen will warn on first run
-("More info" → "Run anyway"). Some antivirus engines, currently including
-Microsoft Defender, flag the Windows build — see
+**Linux** — take the `.tar.gz` and `tar -xzf cgbuy-v*-linux.tar.gz`; the binary
+comes out executable. The loose binary next to it is the same thing without the
+wrapper, and a plain download of that one needs `chmod +x` first, because a
+GitHub release asset cannot record the execute bit.
+
+Neither build is code-signed, so Windows SmartScreen will warn on first run
+("More info" → "Run anyway") — see
 [Antivirus false positives](#antivirus-false-positives).
 
 **Or run from source** — Python 3 with tkinter, nothing else:
@@ -359,26 +366,40 @@ Beyond those paths, the only platform-specific code is
 
 ## Antivirus false positives
 
-A handful of engines flag the Windows binary; the Linux one scans clean. At
-v1.3, VirusTotal put the Windows build at 14/75 — the badge above and each
-release's notes carry the current count and the names of the flagging engines.
-Several of those (eScan, GData, Emsisoft, Arcabit, VIPRE, ALYac) license
-BitDefender's engine, so one verdict appears under several names. Kaspersky,
-ESET, Sophos, CrowdStrike, SentinelOne and Symantec did not flag it.
+Both downloads currently scan clean on VirusTotal — zero detections for
+Windows and Linux alike. That was not true before v1.5, and the history is
+worth keeping, because the fix was not a code change.
 
-**Microsoft Defender does, as of v1.3**, and that matters more than the count:
-on Windows it can block or quarantine the download rather than just warn. The
-detection has been submitted to Microsoft for review. Until it is cleared, run
-from source, or check the hash and then allow the file from Windows Security's
-Protection history.
+Up to v1.4 the Windows download was a PyInstaller `--onefile` build, and a
+handful of engines flagged it — 14/75 at v1.3, 7/75 at v1.4, **Microsoft
+Defender among them**, which matters more than the count because Defender can
+quarantine a download rather than just warn about it.
 
-The cause is the packaging, not the code. `--onefile` appends a ~12 MB
-compressed archive to a small stub; at runtime the stub unpacks CPython, Tcl/Tk
-and the extension modules to a temporary directory and executes from there.
-A high-entropy blob glued to an unsigned executable that then self-extracts and
-runs is, to a heuristic, indistinguishable from a dropper. Every PyInstaller
-one-file build in the world trips the same wires.
+The cause was the packaging. `--onefile` appends a ~12 MB compressed archive to
+a small stub; at runtime the stub unpacks CPython, Tcl/Tk and the extension
+modules to a temporary directory and executes from there. A high-entropy blob
+glued to an unsigned executable that then self-extracts and runs is, to a
+heuristic, indistinguishable from a dropper.
 
+Three builds from one commit, scanned minutes apart, isolate the variable:
+
+| Build | Detections |
+|---|---|
+| PyInstaller one-file | 7/75 |
+| Nuitka one-file | 15/75 |
+| Nuitka standalone folder | 0/75 |
+
+The complete Windows zip, DLLs and all, scans clean too, not just the exe
+inside it.
+
+Compiling to C rather than bundling an interpreter made it *worse*, because
+Nuitka's one-file mode extracts at startup too. It is the extraction step the
+engines score, not the language, and not the code. Removing it — shipping a
+folder — cleared every detection including Defender's. The same reasoning is
+why there is no Go rewrite: Go would land near zero for exactly this reason,
+and so does the Python, at the price of a build flag rather than 4,400 lines.
+
+If you would rather not take that on trust:
 If you would rather not take that on trust:
 
 - **Run from source** — `python cgbuy`. No binary, no packaging, and the source
@@ -388,16 +409,18 @@ If you would rather not take that on trust:
 - **Read the sandbox report** rather than the score. The relevant question is
   what it did: contacted hosts, files written, processes spawned.
 
-The binary is not code-signed, and will not be. A certificate is a recurring
+Neither build is code-signed, and neither will be. A certificate is a recurring
 annual cost and this is a free tool written for its author's own use; sharing it
-is a courtesy. Signing would likely quiet the heuristics, but not at that price.
+is a courtesy. Signing would also quiet SmartScreen, which shipping a folder
+does not, but not at that price.
 
-False positives are reported to the vendors as they come up. Beyond that, the
-options above are the answer: run from source, check the hash, read the sandbox
-report — or don't run it. All three are reasonable.
+Detections can come back — heuristics change, and an unsigned binary from a
+small project has no reputation to fall back on. If one does, the options above
+are the answer: run from source, check the hash, read the sandbox report — or
+don't run it. All three are reasonable.
 
 Every release scans itself. After a version is published, CI submits both
-binaries to VirusTotal and appends the detection counts, hashes and the names
+downloads to VirusTotal and appends the detection counts, hashes and the names
 of any flagging engines to the release notes. The numbers are a point-in-time
 reading and the links show the current verdict — but it means anyone forwarded
 an alarming-looking scan link finds the same figures already on the download

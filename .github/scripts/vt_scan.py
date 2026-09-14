@@ -115,7 +115,10 @@ def main():
             rows.append(row)
             if flagged:
                 all_flagged[os.path.basename(path)] = flagged
-            if badge_path and ratio and os.path.basename(path).endswith(".exe"):
+            # The badge tracks the Windows download, which is the one that
+            # ever had detections. Matched on the name rather than on ".exe"
+            # so it survived the move from a one-file exe to a zipped folder.
+            if badge_path and ratio and "windows" in os.path.basename(path):
                 bad, total = ratio
                 # Blue rather than red: a non-zero count here is the expected
                 # state for an unsigned one-file build, not a failure. The badge
@@ -141,8 +144,8 @@ def main():
         for name, engines in all_flagged.items():
             out.append(f"Flagged `{name}`: {', '.join(engines)}.")
         out += ["",
-                "Generic detections on PyInstaller one-file builds are expected here and are "
-                "explained in [Antivirus false positives](../../#antivirus-false-positives). "
+                "These are generic heuristic detections, not a verdict on what the code does; "
+                "see [Antivirus false positives](../../#antivirus-false-positives). "
                 "Run from source if you would rather not take that on trust."]
     print("\n".join(out))
     return 0

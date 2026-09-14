@@ -1,0 +1,2 @@
+# Shipped inside the Windows zip and opened in Notepad, so it needs CRLF.
+packaging/README-FIRST.txt text eol=crlf

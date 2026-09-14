@@ -68,23 +68,15 @@ jobs:
           git push origin HEAD:main
           git push origin "v$V"
 
-  build:
+  # Linux and Windows no longer share a build. PyInstaller one-file is fine on
+  # Linux -- it scans clean and a single file is the nicer download -- but on
+  # Windows the self-extracting stub is what antivirus engines flag, so that
+  # side is compiled with Nuitka and shipped as a folder instead. Measured on
+  # one commit: PyInstaller one-file 7/75, Nuitka one-file 15/75, Nuitka
+  # standalone 0/75. The stub is the variable, not the compiler.
+  build-linux:
     needs: tag
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: ubuntu-latest
-            # The version goes in the filename so a download never lands as
-            # cgbuy-linux(1); suffix is the invariant half of that name.
-            suffix: linux
-            built: dist/cgbuy
-            icon: ""
-          - os: windows-latest
-            suffix: windows.exe
-            built: dist/cgbuy.exe
-            icon: "icon.ico"
-    runs-on: ${{ matrix.os }}
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
@@ -92,59 +84,97 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Linux tkinter
-        if: runner.os == 'Linux'
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq python3-tk
+      - run: sudo apt-get update -qq && sudo apt-get install -y -qq python3-tk
       - name: Install PyInstaller
         run: python -m pip install --quiet --upgrade pip pyinstaller
-      # --windowed matches build.bat: without it the Windows build is a console
-      # subsystem binary and every user gets a stray console window behind the
-      # GUI. It is ignored on Linux.
       - name: Build
-        shell: bash
         run: |
           python -c "import shutil; shutil.copy('cgbuy', 'build_src.py')"
-          # PyInstaller resolves a relative --icon against --specpath, not the
-          # working directory, so hand it an absolute path.
-          ICON_FLAG=""
-          if [ -n "${{ matrix.icon }}" ]; then
-            ICON_FLAG="--icon=$(python -c "import os,sys; print(os.path.abspath(sys.argv[1]))" "${{ matrix.icon }}")"
-          fi
           # PyInstaller bundles what cgbuy imports, not files a module opens:
-          # without this sco_table.json is missing and every hull reads as
-          # an estimate. Absolute for the same --specpath reason as the icon;
-          # os.pathsep because a Windows path already contains a colon.
+          # without this sco_table.json is missing and every hull reads as an
+          # estimate. Absolute because PyInstaller resolves relative paths
+          # against --specpath, not the working directory.
           DATA_FLAG="--add-data=$(python -c "import os; print(os.path.abspath('sco_table.json') + os.pathsep + '.')")"
-          pyinstaller --onefile --name cgbuy --clean --noconfirm --windowed $ICON_FLAG $DATA_FLAG --distpath dist --workpath .build --specpath .build build_src.py
+          pyinstaller --onefile --name cgbuy --clean --noconfirm --windowed $DATA_FLAG \
+            --distpath dist --workpath .build --specpath .build build_src.py
       - name: Smoke test, and check it reports the released version
-        shell: bash
         run: |
-          # --windowed leaves the Windows build without a console of its own;
-          # its stdout is a valid handle here only because this capture pipes it.
-          OUT=$("${{ matrix.built }}" --version)
+          OUT=$(dist/cgbuy --version)
           echo "$OUT"
           echo "$OUT" | grep -q "${{ needs.tag.outputs.version }}" \
             || { echo "::error::binary reports '$OUT', expected ${{ needs.tag.outputs.version }}"; exit 1; }
-      - name: Name the binary after the release
-        shell: bash
-        run: mv "${{ matrix.built }}" "cgbuy-v${{ needs.tag.outputs.version }}-${{ matrix.suffix }}"
       # A GitHub release asset carries no POSIX mode: the execute bit is lost
       # on upload and again on download, so the raw binary always needs a
       # chmod. tar does store the mode, so ship a tarball as well and the
       # extracted binary is runnable straight away.
-      - name: Tarball the Linux binary, execute bit intact
-        if: runner.os == 'Linux'
+      - name: Package
         run: |
           BIN="cgbuy-v${{ needs.tag.outputs.version }}-linux"
+          mv dist/cgbuy "$BIN"
           chmod +x "$BIN"
           tar -czf "$BIN.tar.gz" "$BIN"
       - uses: actions/upload-artifact@v4
         with:
-          name: cgbuy-v${{ needs.tag.outputs.version }}-${{ matrix.suffix }}
-          path: cgbuy-v${{ needs.tag.outputs.version }}-${{ matrix.suffix }}*
+          name: cgbuy-v${{ needs.tag.outputs.version }}-linux
+          path: cgbuy-v${{ needs.tag.outputs.version }}-linux*
+
+  build-windows:
+    needs: tag
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: v${{ needs.tag.outputs.version }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install Nuitka
+        run: python -m pip install --quiet --upgrade pip nuitka
+      # --standalone, not --onefile: onefile unpacks to a temp dir at startup
+      # and that is the behaviour engines score, whichever tool produces it.
+      # --windows-console-mode=disable is what --windowed was for PyInstaller;
+      # without it every user gets a stray console window behind the GUI.
+      - name: Build
+        shell: bash
+        run: |
+          python -c "import shutil; shutil.copy('cgbuy', 'build_src.py')"
+          python -m nuitka --standalone --assume-yes-for-downloads \
+            --enable-plugin=tk-inter --windows-console-mode=disable \
+            --windows-icon-from-ico=icon.ico \
+            --include-data-files=sco_table.json=sco_table.json \
+            --output-dir=nuitka --output-filename=cgbuy.exe build_src.py
+      - name: Smoke test, and check it reports the released version
+        shell: bash
+        run: |
+          OUT=$(nuitka/build_src.dist/cgbuy.exe --version)
+          echo "$OUT"
+          echo "$OUT" | grep -q "${{ needs.tag.outputs.version }}" \
+            || { echo "::error::binary reports '$OUT', expected ${{ needs.tag.outputs.version }}"; exit 1; }
+      # The zip holds a folder rather than loose files, so extracting it cannot
+      # spray DLLs across someone's Downloads. README-FIRST.txt goes in beside
+      # the exe because the one thing people will get wrong is dragging
+      # cgbuy.exe out on its own, which leaves its DLLs behind.
+      - name: Package
+        shell: bash
+        run: |
+          DIR="cgbuy-v${{ needs.tag.outputs.version }}-windows"
+          mv nuitka/build_src.dist "$DIR"
+          # Notepad is the default handler and the .gitattributes eol=crlf rule
+          # cannot be trusted to have survived checkout, so force CRLF here
+          # rather than shipping a file that opens as one long line. The \r*
+          # makes it idempotent whichever way the checkout landed.
+          sed "s/@VERSION@/v${{ needs.tag.outputs.version }}/" packaging/README-FIRST.txt \
+            | sed 's/\r*$/\r/' > "$DIR/README-FIRST.txt"
+          7z a -tzip -mx=9 "$DIR.zip" "$DIR" > /dev/null
+          ls -lh "$DIR.zip"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cgbuy-v${{ needs.tag.outputs.version }}-windows.zip
+          path: cgbuy-v${{ needs.tag.outputs.version }}-windows.zip
 
   publish:
-    needs: [tag, build]
+    needs: [tag, build-linux, build-windows]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
@@ -157,19 +187,22 @@ jobs:
           body: |
             ${{ inputs.notes }}
 
+            * `cgbuy-v${{ needs.tag.outputs.version }}-windows.zip` — Windows x86-64.
+              Extract the whole folder and run `cgbuy.exe` from inside it;
+              `README-FIRST.txt` in the zip says the same thing at length.
             * `cgbuy-v${{ needs.tag.outputs.version }}-linux.tar.gz` — Linux x86-64, extracts ready to run
-            * `cgbuy-v${{ needs.tag.outputs.version }}-linux` — the same binary, unpacked (needs `chmod +x`)
-            * `cgbuy-v${{ needs.tag.outputs.version }}-windows.exe` — Windows x86-64
+            * `cgbuy-v${{ needs.tag.outputs.version }}-linux` — the same binary, loose (needs `chmod +x`)
 
             Neither binary is signed and neither will be; Windows SmartScreen
-            will warn on first run. Some antivirus engines flag PyInstaller
-            one-file builds generically — see
+            will warn on first run. The Windows build ships as a folder rather
+            than a single file because the self-extracting one-file format was
+            what antivirus engines flagged — see
             [Antivirus false positives](../../#antivirus-false-positives),
             or run from source: `python cgbuy`.
           files: |
+            cgbuy-v${{ needs.tag.outputs.version }}-windows.zip
             cgbuy-v${{ needs.tag.outputs.version }}-linux
             cgbuy-v${{ needs.tag.outputs.version }}-linux.tar.gz
-            cgbuy-v${{ needs.tag.outputs.version }}-windows.exe
 
   virustotal:
     # Scans what was actually published and appends the verdict to the release,
@@ -195,7 +228,7 @@ jobs:
           V="${{ needs.tag.outputs.version }}"
           # The tarball is the same bytes as the loose binary, so scanning it
           # too would only spend quota on a duplicate verdict.
-          SUMMARY=$(python3 .github/scripts/vt_scan.py --badge=.github/badges/virustotal.json "cgbuy-v$V-windows.exe" "cgbuy-v$V-linux")
+          SUMMARY=$(python3 .github/scripts/vt_scan.py --badge=.github/badges/virustotal.json "cgbuy-v$V-windows.zip" "cgbuy-v$V-linux")
           # Empty means no VT_API_KEY configured; nothing to append.
           [ -n "$SUMMARY" ] || exit 0
           gh release view "$TAG" --json body --jq .body > body.md
