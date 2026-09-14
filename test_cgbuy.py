@@ -2099,63 +2099,85 @@ class TestShipIdentity(WatcherTestCase):
         self.assertEqual(cgbuy.pad_for_ship("nosuchship"), "L")
 
 
-class TestRealCycleMinutes(unittest.TestCase):
-    """journal.real_cycle_minutes - what a run actually costs."""
+class TestRunMinutes(unittest.TestCase):
+    """journal.run_minutes - a run measured as the part you actually fly."""
 
-    STN = "Metz Enterprise"
+    CG, SRC = "Metz Enterprise", "Lovell Sanctuary"
 
-    def docks(self, *minutes_apart, **kw):
-        """Dock events at the destination, each N minutes after the last."""
-        station = kw.get("station", self.STN)
-        t, out = 1_700_000_000.0, [(station, 1_700_000_000.0)]
-        for m in minutes_apart:
-            t += m * 60.0
-            out.append((station, t))
+    def log(self, *runs):
+        """Pad events for a series of runs.
+
+        Each run is (pad at the CG, out, pad at the source, back) in minutes,
+        so a lazy afternoon and a tight one differ only in the first number.
+        """
+        t, out = 1_700_000_000.0, []
+        for pad, there, srcpad, back in runs:
+            out.append(("dock", self.CG, t))
+            t += pad * 60
+            out.append(("undock", self.CG, t))
+            t += there * 60
+            out.append(("dock", self.SRC, t))
+            t += srcpad * 60
+            out.append(("undock", self.SRC, t))
+            t += back * 60
+        out.append(("dock", self.CG, t))
         return out
 
-    def test_a_run_is_the_gap_between_two_docks(self):
-        mins, runs = journal.real_cycle_minutes(self.docks(20, 22, 21), self.STN)
-        self.assertEqual((mins, runs), (21, 3))
+    def test_a_run_is_the_flying_plus_a_turnaround_at_each_end(self):
+        mins, runs = journal.run_minutes(
+            self.log((1, 5, 1, 6), (1, 5, 1, 6), (1, 5, 1, 6)), self.CG)
+        self.assertEqual((mins, runs), (15, 3))      # 11 flying + 2 + 2
+
+    def test_an_hour_on_the_pad_does_not_make_a_slow_run(self):
+        # The exact case that read as 102 minutes: same flying, tea break.
+        tight = self.log((1, 5, 1, 6), (1, 5, 1, 6), (1, 5, 1, 6))
+        afk = self.log((88, 5, 1, 6), (1, 5, 1, 6), (57, 5, 1, 6))
+        self.assertEqual(journal.run_minutes(tight, self.CG),
+                         journal.run_minutes(afk, self.CG))
+
+    def test_time_parked_at_the_source_is_not_flying_either(self):
+        mins, _runs = journal.run_minutes(
+            self.log((1, 5, 22, 6), (1, 5, 22, 6), (1, 5, 22, 6)), self.CG)
+        self.assertEqual(mins, 15)
 
     def test_too_few_runs_to_have_an_answer(self):
-        self.assertEqual(journal.real_cycle_minutes(self.docks(20, 22), self.STN),
-                         (None, 0))
-
-    def test_other_stations_are_not_this_run(self):
-        docks = self.docks(20, 22, 21) + self.docks(5, 5, 5, station="Elsewhere")
-        mins, runs = journal.real_cycle_minutes(docks, self.STN)
-        self.assertEqual((mins, runs), (21, 3))
-
-    def test_a_session_break_is_not_a_four_hour_run(self):
-        mins, runs = journal.real_cycle_minutes(
-            self.docks(20, 900, 22, 21), self.STN)
-        self.assertEqual((mins, runs), (21, 3))
+        self.assertEqual(
+            journal.run_minutes(self.log((1, 5, 1, 6), (1, 5, 1, 6)), self.CG),
+            (None, 0))
 
     def test_only_the_last_six_runs_count(self):
-        # Six slow runs yesterday, six tight ones since: the answer is the
-        # tight ones. This is the whole point of the window.
-        docks = self.docks(40, 40, 40, 40, 40, 40, 20, 20, 20, 20, 20, 20)
-        mins, runs = journal.real_cycle_minutes(docks, self.STN)
-        self.assertEqual((mins, runs), (20, 6))
-
-    def test_the_window_is_adjustable(self):
-        docks = self.docks(40, 40, 40, 20, 20, 20)
-        self.assertEqual(journal.real_cycle_minutes(docks, self.STN, window=3),
-                         (20, 3))
-        self.assertEqual(journal.real_cycle_minutes(docks, self.STN, window=99),
-                         (30, 6))
+        slow = [(1, 20, 1, 20)] * 6
+        fast = [(1, 5, 1, 6)] * 6
+        mins, runs = journal.run_minutes(self.log(*(slow + fast)), self.CG)
+        self.assertEqual((mins, runs), (15, 6))
 
     def test_tightening_up_moves_the_figure_within_a_few_runs(self):
-        was = journal.real_cycle_minutes(self.docks(*([40] * 6)), self.STN)[0]
-        # Three tight runs after a slow session already pull the median down;
-        # you do not have to fly a whole evening to see the ETA respond.
-        now = journal.real_cycle_minutes(
-            self.docks(*([40] * 6 + [20] * 3)), self.STN)[0]
-        self.assertEqual(was, 40)
+        slow = [(1, 20, 1, 20)] * 6
+        was = journal.run_minutes(self.log(*slow), self.CG)[0]
+        now = journal.run_minutes(
+            self.log(*(slow + [(1, 5, 1, 6)] * 3)), self.CG)[0]
+        self.assertEqual(was, 44)
         self.assertLess(now, was)
 
+    def test_leaving_the_pad_and_coming_straight_back_is_not_a_run(self):
+        log = self.log((1, 5, 1, 6), (1, 5, 1, 6), (1, 5, 1, 6))
+        t = log[-1][2]
+        log += [("undock", self.CG, t + 60), ("dock", self.CG, t + 180)]
+        mins, runs = journal.run_minutes(log, self.CG)
+        self.assertEqual((mins, runs), (15, 3))     # the repair is not counted
+
+    def test_logging_out_in_supercruise_is_a_session_break(self):
+        log = self.log((1, 5, 1, 6), (1, 5, 1, 6), (1, 5, 1, 6),
+                       (1, 5, 1, 600), (1, 5, 1, 6))
+        mins, runs = journal.run_minutes(log, self.CG)
+        self.assertEqual((mins, runs), (15, 4))     # the 10-hour leg is dropped
+
+    def test_the_turnaround_matches_whatever_the_model_prices_it_at(self):
+        log = self.log(*([(1, 5, 1, 6)] * 3))
+        self.assertEqual(journal.run_minutes(log, self.CG, turnaround=0)[0], 11)
+
     def test_no_docks_at_all(self):
-        self.assertEqual(journal.real_cycle_minutes([], self.STN), (None, 0))
+        self.assertEqual(journal.run_minutes([], self.CG), (None, 0))
 
 
 class TestLadenJumpRange(unittest.TestCase):

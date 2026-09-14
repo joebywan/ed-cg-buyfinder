@@ -1978,16 +1978,15 @@ class App:
     def _run_minutes(self):
         """How long a run takes, and where that figure came from.
 
-        What you have actually been flying beats what the route model says
-        you could fly. The model measures focused travel - it cannot see the
-        market screen you sat on - so it reads as a floor, and an ETA built
-        on a floor is one you never hit. The model stands in only until
-        enough runs have been flown to have a median.
+        What you have actually been flying beats what the route model thinks
+        you will. Both measure the same shape - time in flight, plus a flat
+        two minutes at each pad - so the measured one simply knows more, and
+        the model stands in only until there are enough runs for a median.
         """
         if self.real_cycle:
-            return self.real_cycle, ("the median of your last %d run%s"
-                                     % (self.real_cycle_runs,
-                                        "" if self.real_cycle_runs == 1 else "s"))
+            return self.real_cycle, (
+                "the median of your last %d,\nflying time plus a two-minute "
+                "turnaround at each end" % self.real_cycle_runs)
         top = (self.data or {}).get("mixed") or []
         mins = top[0]["trip_minutes"] if top else None
         return mins, ("the route plus a two-minute turnaround\nat each end")
@@ -2055,12 +2054,12 @@ class App:
                 line = "Based on %.0f min a run: %s." % (mins, basis)
                 top = (self.data or {}).get("mixed") or []
                 plan = top[0]["trip_minutes"] if top else None
-                # Only worth saying when the two disagree enough to explain
-                # the ETA; a run inside the model's margin needs no footnote.
-                if self.real_cycle and plan and self.real_cycle > plan * 1.15:
-                    line += ("\nThe route itself is %.0f min, so about %.0f of "
-                             "those\nminutes are spent not flying it."
-                             % (plan, self.real_cycle - plan))
+                # Worth saying only when the two disagree enough to explain
+                # the ETA, in either direction: flying it faster than the
+                # model expects is the more satisfying half of that.
+                if (self.real_cycle and plan
+                        and abs(self.real_cycle - plan) > plan * 0.15):
+                    line += "\nThe route model says %.0f min." % plan
                 detail.append(line)
             detail.append("You are %.0f%% of the way from top %s%% to top %s%%."
                           % (pct, st["band"], st["next_band"]))
@@ -2090,11 +2089,11 @@ class App:
 
     def _measure_cycle(self):
         """How long a run really takes you, as opposed to how long the
-        travel model says it should."""
+        travel model says it should. Flying only - see journal.run_minutes."""
         if journal is None or not self.watcher:
             return
-        self.real_cycle, self.real_cycle_runs = journal.real_cycle_minutes(
-            self.watcher.dest_docks, self.dest.get("station"))
+        self.real_cycle, self.real_cycle_runs = journal.run_minutes(
+            self.watcher.dock_log, self.dest.get("station"))
 
     def _adopt_ship(self):
         """Take hold size, jump ranges and pad class from the ship you fly.

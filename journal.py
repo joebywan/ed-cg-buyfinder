@@ -243,29 +243,45 @@ class Calibration:
         return "  |  ".join(bits)
 
 
-def real_cycle_minutes(docks, station, min_samples=3, window=6):
-    """Median time between consecutive docks at `station` - a whole run as
-    actually flown. Returns (minutes, runs counted), or (None, 0).
+def run_minutes(log, station, min_samples=3, window=6, turnaround=2.0):
+    """Median run as actually flown: pad to pad at `station`, counting only
+    the part spent flying, plus a flat `turnaround` at each end.
 
-    The calibrated trip model measures focused travel: its sanity windows
-    reject long station stays so one overnight AFK cannot poison it. That
-    makes it a floor, not a forecast. This is the other number - what a run
-    really costs you, distractions included.
+    Returns (minutes, runs counted), or (None, 0).
 
-    Only the last `window` runs count. A commander who tightens up their
-    loop wants to watch the figure fall, and a median over every run of the
-    last three sessions would take a whole evening to notice. Six is enough
-    for the median to shrug off one interdiction and short enough that two
-    good runs move it.
+    Wall-clock dock-to-dock was the obvious measure and the wrong one. Time
+    parked is not piloting, and Docked -> Undocked cannot tell restocking
+    from making a cup of tea, so an hour on the pad turned a 14-minute run
+    into a 102-minute one and the estimate built on it was useless. The trip
+    model already takes this view - it prices every stop at a flat two
+    minutes - so measuring the same shape keeps the two comparable, and the
+    figure moves when the flying does.
 
-    Anything over four hours is treated as a session break rather than a run.
+    A run needs a stop somewhere else in the middle: undocking and docking
+    again at the same pad is a repair, not a round trip.
+
+    Anything over four hours of flight is a session break - a log-out in
+    supercruise - rather than a very slow run.
     """
-    times = sorted(t for stn, t in docks if stn == station)
-    gaps = [(b - a) / 60.0 for a, b in zip(times, times[1:])
-            if 0 < (b - a) / 60.0 <= 240]
-    if len(gaps) < min_samples:
+    marks = [i for i, (kind, stn, _t) in enumerate(log)
+             if kind == "dock" and stn == station]
+    runs = []
+    for a, b in zip(marks, marks[1:]):
+        leg, out, elsewhere = None, 0.0, False
+        for kind, stn, t in log[a:b + 1]:
+            if kind == "undock":
+                leg = t
+            elif kind == "dock":
+                if stn != station:
+                    elsewhere = True
+                if leg is not None and t > leg:
+                    out += (t - leg) / 60.0
+                leg = None
+        if elsewhere and 0 < out <= 240:
+            runs.append(out + 2 * turnaround)
+    if len(runs) < min_samples:
         return None, 0
-    recent = gaps[-window:]
+    recent = runs[-window:]
     return statistics.median(recent), len(recent)
 
 
@@ -323,7 +339,7 @@ class JournalWatcher:
         self.unladen_mass = None
         self.fuel_capacity = None
         self.best_laden_jump = None     # longest jump actually made with cargo
-        self.dest_docks = []            # times docked at the destination
+        self.dock_log = []              # ("dock"|"undock", station, ts)
         self._cargo = None
         self.horizons = None
         self.odyssey = None
@@ -354,6 +370,11 @@ class JournalWatcher:
             return None
         logs = glob.glob(os.path.join(self.dir, "Journal.*.log"))
         return max(logs, key=os.path.getmtime) if logs else None
+
+    def _log_dock(self, kind, station, ts):
+        """Pad events, newest last. Two hundred is a few sessions of runs."""
+        self.dock_log.append((kind, station, ts))
+        del self.dock_log[:-200]
 
     def prime(self, backfill_files=6):
         """Learn from history once, before live tailing starts."""
@@ -510,8 +531,7 @@ class JournalWatcher:
             self._approach_start = self._drop_ts = None
             self._arrived_at = None
             if ts:
-                self.dest_docks.append((self.station, ts))
-                del self.dest_docks[:-80]
+                self._log_dock("dock", self.station, ts)
             if live and self.on_docked:
                 self.on_docked(self.station, self.system)
         elif ev == "Undocked":
@@ -520,6 +540,8 @@ class JournalWatcher:
                 if 20 <= dt <= 1800:
                     self.cal._add(self.cal.dock_secs, dt)
                     learned = True
+            if ts:
+                self._log_dock("undock", self.station, ts)
             self._dock_at, self.docked = None, False
             self._undocked_at = ts
         elif ev == "Loadout":

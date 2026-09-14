@@ -276,13 +276,21 @@ samples of each kind in the config.
 Docking at the destination station triggers an automatic re-search — the run
 just ended, so the next one gets fresh data.
 
-**The reward-tier ETA uses your real runs, not the model.** The trip model
-measures focused travel — it cannot see the market screen you sat on — so it is
-a floor, and an ETA built on a floor is one you never hit. Once four docks at
-the CG station are on record, the `% to next tier` tooltip plans on the median
-of your **last six runs**, dock to dock, with gaps over four hours discarded as
-session breaks. Tighten your loop and the estimate follows within two or three
-runs; until there are enough runs to have a median, the model stands in.
+**The reward-tier ETA uses your real runs, not the model.** Once three runs are
+on record, the `% to next tier` tooltip plans on the median of your **last six**,
+and the model only stands in until then.
+
+A run is measured pad to pad at the CG station, but counts only the part you
+spend **flying**, plus a flat two minutes at each end — the same two minutes the
+trip model prices a stop at. Time parked is not piloting: `Docked → Undocked`
+cannot tell restocking from making a cup of tea, and wall-clock dock-to-dock
+turned a 14-minute run into a 102-minute one every time its commander stood up.
+A run also has to include a stop somewhere else, so leaving the pad and coming
+straight back is a repair, not a round trip, and over four hours in flight is a
+log-out in supercruise rather than a very slow run.
+
+The upshot is a number that moves when your flying does: tighten the loop and
+the estimate follows within two or three runs.
 
 ## EDDN sharing
 
