@@ -9,7 +9,7 @@ User-Agent that lies about its version is rude to the APIs besides. The
 release workflow rewrites the line below and nothing else.
 """
 
-VERSION = "1.6"
+VERSION = "1.7"
 
 # What Spansh, EDSM and Frontier see. EDDN gets softwareName/softwareVersion
 # as separate header fields instead - see eddn.py.
