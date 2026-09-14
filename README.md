@@ -83,7 +83,7 @@ header — click once for high-to-low, again to reverse it. Or switch to
 ![All sources](screenshots/02-all-sources.png)
 
 `SRC` says whether a row was verified against EDSM or is still Spansh's
-figure, and `DATA` is colour-coded by age — stale supply is the single
+figure, and `AGE` is colour-coded — stale supply is the single
 biggest cause of a wasted trip.
 
 Click any row to copy its system to the clipboard.
@@ -147,14 +147,18 @@ carriers are excluded unless you tick the box.
 ## The two views
 
 **BEST MIXED LOADS** — one expandable row per station, ranked by cr/min until
-you click another header. The station row carries `SYSTEM`, `LY`, `LS`, `DATA`,
-the `TONNES` the station can actually fill and the `SHORT` it cannot, then the
-plan's `VALUE` (tonnes × profit/t, summed) and `CR/MIN` (that value over the
-trip estimate). Expanding it shows each commodity in the mix under `TONNES`,
-`BUY` and `PROFIT/T`. `BUY` and `PROFIT/T` belong to those commodities rather
-than to the station, so those two headers do not sort; every other one does.
-Whatever the order, the best cr/min plan keeps its highlight, so re-sorting
-never loses it. Top 40 stations, first five expanded.
+you click another header. The columns read where it is, then what it pays, then
+what makes up the load: `SYSTEM`, `LY`, `STATION`, `LS`, `AGE`, then `CR/MIN`
+(the plan's value over the trip estimate) and `VALUE` (tonnes × profit/t,
+summed), then `TONNES`, `BUY` and `PROFIT/T`.
+
+`TONNES` is what the station can actually fill, so a figure below your hold is a
+station that cannot fill it. Expanding a row puts each commodity in the mix in
+the `STATION` column, with its own `TONNES`, `BUY`, `PROFIT/T` and `VALUE`.
+`BUY` and `PROFIT/T` belong to those commodities rather than to the station, so
+those two headers do not sort; every other one does. Whatever the order, the
+best cr/min plan keeps its highlight, so re-sorting never loses it. Top 40
+stations, first five expanded.
 
 **ALL SOURCES** — one row per commodity-at-station, click any header to sort.
 
@@ -169,7 +173,7 @@ never loses it. Top 40 stations, first five expanded.
 | `TRIP` | estimated round-trip minutes |
 | `CR/MIN` | credits per minute for a single-commodity run |
 | `T/MIN` | tonnes per minute — use this if you care about CG rank rather than credits |
-| `DATA` | how long ago a commander last reported this market; green ≤2 days, amber ≤7, red beyond — a CG drains supply fast |
+| `AGE` | how long ago a commander last reported this market; green ≤2 days, amber ≤7, red beyond — a CG drains supply fast |
 
 The header line shows what the CG currently pays for each commodity (the CG
 multiplier is already baked into the EDSM price — the tool does not apply it).
@@ -341,7 +345,7 @@ argument for turning it on.
   approach are not modelled.
 - **Market data is only as fresh as the last commander to visit.** Supply drains
   fast during a CG, and a station showing 40,000t three weeks ago may be empty.
-  Watch the DATA column; it is coloured for exactly this reason.
+  Watch the AGE column; it is coloured for exactly this reason.
 - **Fleet carriers move and reprice.** Off by default for that reason.
 - **The Linux binary is glibc-specific** and is built on a current Ubuntu runner,
   so it may not start on an older distro. Run from source or build it locally

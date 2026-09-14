@@ -717,22 +717,26 @@ class App:
         ("loads_available", "LOADS", 60, "e"), ("buy", "BUY", 78, "e"),
         ("profit_per_t", "PROFIT/T", 86, "e"), ("trip_minutes", "TRIP", 56, "e"),
         ("cr_per_min", "CR/MIN", 92, "e"), ("t_per_min", "T/MIN", 62, "e"),
-        ("updated", "DATA", 78, "e"), ("src", "SRC", 52, "e"),
+        ("updated", "AGE", 78, "e"), ("src", "SRC", 52, "e"),
     ]
 
+    # Where it is, then what it pays, then what makes up the load. The
+    # commodity rows under a station live in the STATION column, which is why
+    # it is titled for both.
     MIXED_COLS = [
-        ("station", "STATION / LOAD", 300, "w"),
-        ("system", "SYSTEM", 190, "w"), ("ly", "LY", 56, "e"),
-        ("ls", "LS", 78, "e"), ("updated", "DATA", 78, "e"),
-        ("tonnes", "TONNES", 90, "e"), ("short", "SHORT", 70, "e"),
+        # LY is padded past what the number needs: right-aligned against a
+        # left-aligned station name, a tight column reads as one word.
+        ("system", "SYSTEM", 190, "w"), ("ly", "LY", 76, "e"),
+        ("station", "STATION / LOAD", 300, "w"), ("ls", "LS", 78, "e"),
+        ("updated", "AGE", 78, "e"), ("cr_per_min", "CR/MIN", 120, "e"),
+        ("total", "VALUE", 140, "e"), ("tonnes", "TONNES", 90, "e"),
         ("buy", "BUY", 90, "e"), ("profit_per_t", "PROFIT/T", 100, "e"),
-        ("total", "VALUE", 140, "e"), ("cr_per_min", "CR/MIN", 120, "e"),
     ]
     # BUY and PROFIT/T belong to the commodities inside a load, not to the
     # station row, so sorting stations by them would order the table on
     # numbers that are not in the rows being moved.
     MIXED_SORTABLE = ("station", "system", "ly", "ls", "updated", "tonnes",
-                      "short", "total", "cr_per_min")
+                      "total", "cr_per_min")
 
     def __init__(self, root, autosearch=True):
         global FONT_FAMILY
@@ -2530,21 +2534,24 @@ class App:
                        reverse=desc)[:40]
         for i, p in enumerate(plans):
             carrier = "  [CARRIER]" if p["carrier"] else ""
+            # A station that cannot fill the hold shows it in TONNES: you
+            # know what you are flying, so a shortfall column only repeated
+            # the subtraction.
             parent = t.insert(
                 "", "end", open=(i < 5),
-                values=("%d. %s%s" % (i + 1, p["station"], carrier),
-                        p["system"], "%.1f" % p["ly"], f"{p['ls']:,}",
-                        age_text(p["updated"]), "%st" % f"{p['tonnes']:,}",
-                        ("%st" % f"{p['short']:,}") if p["short"] else "",
-                        "", "", f"{p['total']:,}", f"{p['cr_per_min']:,}"),
+                values=(p["system"], "%.1f" % p["ly"],
+                        "%d. %s%s" % (i + 1, p["station"], carrier),
+                        f"{p['ls']:,}", age_text(p["updated"]),
+                        f"{p['cr_per_min']:,}", f"{p['total']:,}",
+                        "%st" % f"{p['tonnes']:,}", "", ""),
                 tags=("head", "top") if p is best else ("head",))
             self._remember(t, parent, p["system"])
             for m in p["mix"]:
                 child = t.insert(parent, "end", values=(
-                    "      %s" % m["commodity"], "", "", "", "",
-                    "%st" % f"{m['tonnes']:,}", "", f"{m['buy']:,}",
-                    "+%s" % f"{m['profit_per_t']:,}",
-                    f"{m['value']:,}", ""), tags=("child",))
+                    "", "", "      %s" % m["commodity"], "", "", "",
+                    f"{m['value']:,}", "%st" % f"{m['tonnes']:,}",
+                    f"{m['buy']:,}", "+%s" % f"{m['profit_per_t']:,}"),
+                    tags=("child",))
                 self._remember(t, child, p["system"])
 
     def _sort_mixed(self, col):
