@@ -837,6 +837,26 @@ def row(commodity, station, system, supply, profit, buy=1000, minutes=20.0,
             "updated": updated}
 
 
+class TestAgeShort(unittest.TestCase):
+    """cgbuy.age_short - the title line's compact clock."""
+
+    def at(self, secs):
+        return cgbuy.age_short(__import__("time").time() - secs)
+
+    def test_reads_like_the_age_column(self):
+        self.assertEqual(self.at(30), "30s")
+        self.assertEqual(self.at(600), "10m")
+        self.assertEqual(self.at(7200), "2h")
+        self.assertEqual(self.at(3 * 86400), "3d")
+
+    def test_a_missing_stamp_is_not_a_crash(self):
+        self.assertEqual(cgbuy.age_short(None), "?")
+        self.assertEqual(cgbuy.age_short("never"), "?")
+
+    def test_the_future_is_not_negative(self):
+        self.assertEqual(self.at(-500), "0s")
+
+
 class TestBuildMixed(unittest.TestCase):
 
     def test_greedy_packing_fills_the_hold_best_first(self):

@@ -183,9 +183,15 @@ one of those prices is already inside the `PROFIT/T` beside it.
 ## Interface
 
 Inputs across the top: hold size, radius (30 ly), jump range empty and laden,
-minimum supply (200), max data age (7 days), and a fleet-carrier toggle. Enter
-or SEARCH runs it. Rows older than the max age are hidden and the status bar
-says how many; if every row is older, they are shown anyway.
+minimum supply (200), and a fleet-carrier toggle. Enter or SEARCH runs it.
+
+**What the age filter did has its own line, under the table, always.** Sources
+older than the cutoff (Settings → DATA ACCURACY, 7 days by default) are dropped
+during the fetch, and the line says how many out of how many — or says nothing
+was hidden, which is worth reading too. Raise the cutoff and the search re-runs,
+because the rows it hid are not held anywhere to un-hide. If *every* source is
+older than the cutoff the filter stands down rather than leave you an empty
+table, and the line says so.
 
 The title line carries the destination and how old the data on screen is. The
 status bar is the search's own line — what was found, what was hidden, what
@@ -205,8 +211,9 @@ and the choice is saved.
 
 **Settings** (SETTINGS button): journal folder (auto-detected, override only if
 you have several installs), the destination, how many minutes cached results
-count as fresh (10), how many top results to re-check against EDSM (18), font
-size, toggles for desktop notifications and EDDN, and a readout of current trip
+count as fresh (10), how many top results to re-check against EDSM (18), how old
+a source may be (7 days), font size, toggles for desktop notifications and EDDN,
+and a readout of current trip
 timings with a reset.
 
 On startup the last results are shown straight away; if they are older than

@@ -614,6 +614,22 @@ def age_phrase(stamp):
     return "%d day%s" % (d, "" if d == 1 else "s")
 
 
+def age_short(stamp):
+    """'4m', '2h', '3d' - the title line shares its row with the standing
+    bar, and that grows as a goal runs on. Same shape as the AGE column."""
+    try:
+        secs = max(0, int(time.time() - float(stamp)))
+    except (TypeError, ValueError):
+        return "?"
+    if secs < 90:
+        return "%ds" % secs
+    if secs < 5400:
+        return "%dm" % round(secs / 60.0)
+    if secs < 172800:
+        return "%dh" % round(secs / 3600.0)
+    return "%dd" % round(secs / 86400.0)
+
+
 def load_config():
     try:
         with open(CONFIG_PATH) as fh:
@@ -748,6 +764,9 @@ class App:
         self.toast = None           # (window, after id) of the visible toast
         # Only exists while Settings is open; Ctrl+plus works either way.
         self.font_lbl = None
+        # Edited in Settings, not the toolbar: it is a preference about what
+        # counts as trustworthy data, not a knob you turn between searches.
+        self.v_age = tk.StringVar(value=str(MAX_AGE_DEFAULT))
         # Worker threads outlive a destroyed root otherwise, which races the
         # interpreter shutdown and can take the process down on quit.
         self.closing = False
@@ -940,21 +959,28 @@ class App:
     def _header(self):
         f = ttk.Frame(self.root, padding=(16, 12, 16, 8))
         f.grid(row=0, column=0, sticky="ew")
-        ttk.Label(f, text="CG BUY FINDER", style="Or.TLabel").pack(side="left")
+        # Gridded, not packed: the standing bar grows as a goal progresses
+        # and packing let it run off the right edge. Here it keeps the width
+        # it asks for and the destination line gives way instead.
+        ttk.Label(f, text="CG BUY FINDER", style="Or.TLabel").grid(
+            row=0, column=0, sticky="w")
+        mid = ttk.Frame(f)
+        mid.grid(row=0, column=1, sticky="ew", padx=(14, 14))
+        f.columnconfigure(1, weight=1)
         self.cg_lbl = ttk.Label(
-            f, text="%s  -  %s" % (self.dest["station"], self.dest["system"]),
+            mid, text="%s  -  %s" % (self.dest["station"], self.dest["system"]),
             style="Sub.TLabel")
-        self.cg_lbl.pack(side="left", padx=(14, 0))
+        self.cg_lbl.pack(side="left")
         # What the CG pays per tonne is already inside every PROFIT/T in the
         # table. It bought three lines of the window to say so again, so it
         # lives here now, on the line that names the goal.
         self.cg_tip = Tip(self.cg_lbl, "", self)
-        self.fetch_lbl = ttk.Label(f, text="", style="Or.TLabel",
+        self.fetch_lbl = ttk.Label(mid, text="", style="Or.TLabel",
                                    font=self._fonts()["bold"])
         self.fetch_lbl.pack(side="left", padx=(18, 0))
         self.standing_lbl = ttk.Label(f, text="", style="Or.TLabel",
                                       font=self._fonts()["bold"])
-        self.standing_lbl.pack(side="right")
+        self.standing_lbl.grid(row=0, column=2, sticky="e")
         self.standing_tip = Tip(self.standing_lbl, "", self)
 
     def _num(self, parent, label, default, width=7, key=None):
@@ -988,7 +1014,6 @@ class App:
         self.v_jl    = self._num(row, "JUMP LADEN", int(JUMP_LADEN_DEFAULT),
                                  key="jump_laden")
         self.v_ms    = self._num(row, "MIN SUPPLY", MIN_SUPPLY_DEFAULT)
-        self.v_age   = self._num(row, "MAX AGE (D)", MAX_AGE_DEFAULT, width=5)
 
         self.v_fc = tk.BooleanVar(value=False)
         cb = ttk.Frame(row, style="Panel.TFrame")
@@ -1144,8 +1169,18 @@ class App:
         self._toast("Copied %s to the clipboard" % system, event)
 
     def _tabs(self):
-        nb = ttk.Notebook(self.root, padding=(16, 6, 16, 0))
-        nb.grid(row=3, column=0, sticky="nsew")
+        wrap = ttk.Frame(self.root)
+        wrap.grid(row=3, column=0, sticky="nsew")
+        # Packed before the notebook so the line is always reserved: what the
+        # age filter did belongs under the table it did it to, and it used to
+        # ride on the end of the status message where a long search line
+        # pushed it off - so the one number that says "you are not seeing
+        # everything" was the first thing to go missing.
+        self.stale_lbl = ttk.Label(wrap, style="Dim.TLabel", anchor="w",
+                                   text="no results yet")
+        self.stale_lbl.pack(side="bottom", fill="x", padx=16, pady=(4, 0))
+        nb = ttk.Notebook(wrap, padding=(16, 6, 16, 0))
+        nb.pack(side="top", fill="both", expand=True)
 
         f1 = ttk.Frame(nb, padding=(0, 6, 0, 0))
         nb.add(f1, text="BEST MIXED LOADS")
@@ -1523,6 +1558,20 @@ class App:
                                                sticky="w", padx=14)
         row[0] += 1
 
+        v_age_row = ttk.Frame(win)
+        v_age_row.grid(row=row[0], column=1, sticky="w", **pad)
+        ttk.Label(v_age_row, text="Hide sources older than (days)").pack(
+            side="left", padx=(0, 10))
+        e_age = ttk.Entry(v_age_row, textvariable=self.v_age, width=5,
+                          font=self._fonts()["mono"], justify="right")
+        e_age.pack(side="left")
+        Tip(v_age_row, "A CG drains supply fast, so a week-old report of "
+                       "40,000t\nmay be a wasted trip. Raising this shows the "
+                       "older rows\nrather than hiding them; the AGE column "
+                       "is coloured so you\ncan judge each one. Saving a new "
+                       "value re-runs the search.", self)
+        row[0] += 1
+
         section("DISPLAY")
         fr = ttk.Frame(win)
         fr.grid(row=row[0], column=1, sticky="w", **pad)
@@ -1623,13 +1672,20 @@ class App:
                 self._init_journal()
             self.set_status("settings saved")
             win.destroy()
+            # The filter is applied while fetching, so the rows it hid are
+            # not here to un-hide: telling someone to raise MAX AGE has to
+            # actually go and get them.
+            if self.v_age.get() != was_age and not self.busy:
+                self.search()
 
         ttk.Button(bar, text="SAVE", style="Go.TButton",
                    command=save).pack(side="right")
         was_eddn = bool(self.v_eddn.get())
+        was_age = self.v_age.get()
 
         def cancel():
             self.v_eddn.set(was_eddn)   # the checkbuttons edit the live vars
+            self.v_age.set(was_age)
             win.destroy()
 
         ttk.Button(bar, text="CANCEL", style="Alt.TButton",
@@ -1819,7 +1875,7 @@ class App:
                 stale = mins >= int(self.cfg.get("cache_fresh_minutes",
                                                  CACHE_FRESH_MINUTES))
                 self.fetch_lbl.configure(
-                    text="updated %s ago" % age_phrase(self.last_fetch),
+                    text="updated %s ago" % age_short(self.last_fetch),
                     foreground=WARN if stale else GOOD)
         else:
             self.fetch_lbl.configure(text="not updated yet", foreground=DIM)
@@ -2612,14 +2668,13 @@ class App:
         order = sorted(d["cg"], key=lambda k: -d["cg"][k]["sell"])
         self.cg_tip.text = "CG PAYS PER TONNE\n" + "\n".join(
             "%-14s %9s" % (k, f"{d['cg'][k]['sell']:,}") for k in order)
-        hidden = d.get("hidden_stale") or 0
-        extra = ("   %d hidden as stale - raise MAX AGE to see them"
-                 % hidden) if hidden else ""
+        # "updated N ago" is on the title line, so repeating the age here
+        # only said the same thing twice, in different words.
         self.status.configure(
             text="%s sources across %d commodities%s"
                  % (f"{len(d['rows']):,}", len(d["cg"]),
-                    "  (cached, %s old)" % age_phrase(d.get("fetched_at"))
-                    if from_cache else "") + extra, foreground=DIM)
+                    "  (from cache)" if from_cache else ""), foreground=DIM)
+        self._show_stale(d)
         self._fill_mixed()
         self._fill_single()
         if not from_cache:
@@ -2627,6 +2682,38 @@ class App:
         if not from_cache:
             save_cache(d)
         self._tick_age()
+
+    def _show_stale(self, d):
+        """What the age filter did to this result, in its own line.
+
+        Always says something. "Nothing was hidden" is worth reading too:
+        without it, an empty line is indistinguishable from a line that
+        failed to update, and the reader is left wondering.
+        """
+        max_age = (d.get("params") or {}).get("max_age_days") or 0
+        hidden = d.get("hidden_stale") or 0
+        shown = len(d.get("rows") or ())
+        if not max_age:
+            self.stale_lbl.configure(text="no age limit set - every source "
+                                          "found is shown", foreground=DIM)
+        elif hidden:
+            self.stale_lbl.configure(
+                text="%s of %s sources hidden as stale, older than %d days"
+                     "   -   raise MAX AGE in SETTINGS to see them"
+                     % (f"{hidden:,}", f"{hidden + shown:,}", max_age),
+                foreground=WARN)
+        elif any(days_old(r.get("updated")) is None
+                 or days_old(r.get("updated")) > max_age
+                 for r in d.get("rows") or ()):
+            # build_rows stands the filter down rather than leave an empty
+            # table, so "none hidden" here does not mean "all fresh".
+            self.stale_lbl.configure(
+                text="every source is older than %d days, so none were hidden"
+                     % max_age, foreground=WARN)
+        else:
+            self.stale_lbl.configure(
+                text="nothing hidden - every source is newer than %d days"
+                     % max_age, foreground=DIM)
 
     def _fill_mixed(self):
         t = self.t_mixed
