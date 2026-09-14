@@ -1,7 +1,7 @@
 # <img src="icon.png" width="28" alt=""> cgbuy
 
 [![build](https://github.com/joebywan/ed-cg-buyfinder/actions/workflows/build.yml/badge.svg)](https://github.com/joebywan/ed-cg-buyfinder/actions/workflows/build.yml)
-[![virustotal](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fjoebywan%2Fed-cg-buyfinder%2Fmain%2F.github%2Fbadges%2Fvirustotal.json)](#antivirus-false-positives)
+[![virustotal](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fjoebywan%2Fed-cg-buyfinder%2Fmain%2F.github%2Fbadges%2Fvirustotal.json)](#antivirus)
 
 Finds the best places to **buy** for an Elite Dangerous community goal, ranked
 by credits per minute of round trip — not by profit per tonne, because a rich
@@ -32,14 +32,15 @@ current in place.
 Every asset carries its version — `cgbuy-v1.5-windows.zip`, `cgbuy-v1.5-linux`
 and so on — so a second download never lands as `cgbuy-linux(1)`.
 
-**Windows** — take the `.zip`, extract the whole folder, run `cgbuy.exe` from
-inside it. It is a folder rather than a single `.exe` on purpose: the
-self-extracting one-file format is what antivirus engines were flagging, and
-dropping it took the Windows build from 7/75 on VirusTotal to 0/75. The cost is
-that `cgbuy.exe` needs the DLLs beside it, so move the folder, not the exe.
-`README-FIRST.txt` in the zip says as much for anyone who skips this page.
-The download is about the same size as the old single file (~12 MB); it is
-~33 MB once extracted.
+**Windows** — take the `.zip` (~12 MB), extract the whole folder, and run
+`cgbuy.exe` from inside it. **Keep the folder together**: `cgbuy.exe` needs the
+files beside it and will not start on its own, so move the folder, not the exe.
+For a desktop entry, make a shortcut rather than a copy. `README-FIRST.txt`
+ships inside the zip and says the same for anyone who skips this page.
+
+It is a folder rather than a single `.exe` deliberately — that is what took the
+Windows build to zero antivirus detections, and the
+[reasoning is in DEVELOPMENT.md](DEVELOPMENT.md#why-windows-ships-as-a-folder).
 
 **Linux** — take the `.tar.gz` and `tar -xzf cgbuy-v*-linux.tar.gz`; the binary
 comes out executable. The loose binary next to it is the same thing without the
@@ -47,10 +48,10 @@ wrapper, and a plain download of that one needs `chmod +x` first, because a
 GitHub release asset cannot record the execute bit.
 
 Neither build is code-signed, so Windows SmartScreen will warn on first run
-("More info" → "Run anyway") — see
-[Antivirus false positives](#antivirus-false-positives).
+("More info" → "Run anyway") — see [Antivirus](#antivirus).
 
-**Or run from source** — Python 3 with tkinter, nothing else:
+**Or run from source** — Python 3 with tkinter, nothing else. Stdlib only, no
+pip installs:
 
 ```
 git clone https://github.com/joebywan/ed-cg-buyfinder
@@ -59,18 +60,13 @@ python cgbuy                  # searches immediately
 python cgbuy --no-autosearch  # open without hitting the APIs
 ```
 
-Stdlib only — no pip installs. tkinter is `python3-tk` on Debian/Ubuntu/Mint;
-Python from python.org already includes it. It needs a desktop session and
-exits with a clear message if there is no display. The file has no `.py`
-extension, so on Windows run it through `python` rather than double-clicking.
+tkinter is `python3-tk` on Debian/Ubuntu/Mint; Python from python.org already
+includes it. It needs a desktop session and exits with a clear message if there
+is no display. The file has no `.py` extension, so on Windows run it through
+`python` rather than double-clicking.
 
-Building your own: `./build.sh` on Linux, `build.bat` on Windows. Each creates
-a `.venv` and installs its packager into it — the only step that needs network.
-Linux uses PyInstaller and produces the single `cgbuy-linux` file; Windows uses
-Nuitka and produces a `cgbuy-windows` folder, for the reasons under
-[Antivirus false positives](#antivirus-false-positives). Neither packager can
-cross-compile, so each has to be built on the OS it targets, which is why CI
-runs a separate job per platform.
+Building it yourself, and how it is packaged, are in
+[DEVELOPMENT.md](DEVELOPMENT.md).
 
 ## What you are looking at
 
@@ -372,62 +368,29 @@ What adapts automatically:
 Beyond those paths, the only platform-specific code is
 [notifications](#notifications), which call each OS's own notifier.
 
-## Antivirus false positives
+## Antivirus
 
-Both downloads currently scan clean on VirusTotal — zero detections for
-Windows and Linux alike. That was not true before v1.5, and the history is
-worth keeping, because the fix was not a code change.
+**Both downloads currently scan clean on VirusTotal — zero detections, Windows
+and Linux alike.** Every release scans itself: after a version is published CI
+submits both downloads and appends the counts, hashes and the names of any
+flagging engines to the release notes, so anyone forwarded an alarming-looking
+scan link finds the same figures already on the download page.
 
-Up to v1.4 the Windows download was a PyInstaller `--onefile` build, and a
-handful of engines flagged it — 14/75 at v1.3, 7/75 at v1.4, **Microsoft
-Defender among them**, which matters more than the count because Defender can
-quarantine a download rather than just warn about it.
+This was not always true. Up to v1.4 the Windows download was a single
+self-extracting `.exe`, and a handful of engines flagged that shape generically
+no matter what the program did — Microsoft Defender among them, which matters
+because Defender can quarantine a download rather than just warn. Shipping a
+folder instead cleared every detection. It was never the code, and the full
+investigation is in
+[DEVELOPMENT.md](DEVELOPMENT.md#why-windows-ships-as-a-folder).
 
-The cause was the packaging. `--onefile` appends a ~12 MB compressed archive to
-a small stub; at runtime the stub unpacks CPython, Tcl/Tk and the extension
-modules to a temporary directory and executes from there. A high-entropy blob
-glued to an unsigned executable that then self-extracts and runs is, to a
-heuristic, indistinguishable from a dropper.
-
-Four builds from one commit, scanned minutes apart, isolate the variable.
-The exe column is what an on-disk scan sees; the zip column is what people
-actually download:
-
-| Build | Layout | Zip | Exe |
-|---|---|---|---|
-| PyInstaller one-file *(shipped up to v1.4)* | one file | — | 7/75 |
-| Nuitka one-file | one file | — | 15/75 |
-| PyInstaller `--onedir` | exe + `_internal/` | 1/74 | 5/75 |
-| **Nuitka standalone** *(shipped from v1.5)* | flat folder | **0/73** | **0/75** |
-
-Denominators vary because VirusTotal does not run the same number of engines on
-every submission; the counts above are from that one experiment, while the
-badge and each release's notes carry the figures for what actually shipped.
-
-Compiling to C rather than bundling an interpreter made it *worse*, because
-Nuitka's one-file mode extracts at startup too. It is the extraction step the
-engines score, not the language, and not the code.
-
-`--onedir` is worth singling out because it is the tidier shape — the exe alone
-at the top with everything under `_internal/` — and it was rejected on the
-numbers rather than on taste. Dropping the self-extraction got it most of the
-way, Microsoft Defender included, but PyInstaller's bootloader is itself scored
-and five engines still flagged it. Nuitka's standalone output is a flat
-directory with no way to nest the DLLs, so the cost of zero detections is
-about two dozen support files sitting next to `cgbuy.exe`. That trade was made
-deliberately.
-
-The same reasoning is why there is no Go rewrite: Go would land near zero for
-exactly this reason — a static binary with nothing to unpack — and so does the
-Python, at the price of a build flag rather than 4,400 lines and a new GUI
-toolkit.
-
-If you would rather not take that on trust:
+Detections can come back — heuristics change, and an unsigned binary from a
+small project has no reputation to fall back on. If one does:
 
 - **Run from source** — `python cgbuy`. No binary, no packaging, and the source
   is all in this repository.
-- **Check the hash.** `Get-FileHash` on Windows, `sha256sum` elsewhere,
-  against the file on the Releases page.
+- **Check the hash.** `Get-FileHash` on Windows, `sha256sum` elsewhere, against
+  the figures in the release notes.
 - **Read the sandbox report** rather than the score. The relevant question is
   what it did: contacted hosts, files written, processes spawned.
 
@@ -435,18 +398,6 @@ Neither build is code-signed, and neither will be. A certificate is a recurring
 annual cost and this is a free tool written for its author's own use; sharing it
 is a courtesy. Signing would also quiet SmartScreen, which shipping a folder
 does not, but not at that price.
-
-Detections can come back — heuristics change, and an unsigned binary from a
-small project has no reputation to fall back on. If one does, the options above
-are the answer: run from source, check the hash, read the sandbox report — or
-don't run it. All three are reasonable.
-
-Every release scans itself. After a version is published, CI submits both
-downloads to VirusTotal and appends the detection counts, hashes and the names
-of any flagging engines to the release notes. The numbers are a point-in-time
-reading and the links show the current verdict — but it means anyone forwarded
-an alarming-looking scan link finds the same figures already on the download
-page, with this section next to them, rather than having to guess.
 
 ## Notifications
 

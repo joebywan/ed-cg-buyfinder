@@ -197,7 +197,7 @@ jobs:
             will warn on first run. The Windows build ships as a folder rather
             than a single file because the self-extracting one-file format was
             what antivirus engines flagged — see
-            [Antivirus false positives](../../#antivirus-false-positives),
+            [Antivirus](../../#antivirus),
             or run from source: `python cgbuy`.
           files: |
             cgbuy-v${{ needs.tag.outputs.version }}-windows.zip

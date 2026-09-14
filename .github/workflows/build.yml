@@ -151,7 +151,7 @@ jobs:
             Neither binary is signed and neither will be; Windows SmartScreen
             will warn on first run. The Windows build ships as a folder because
             the self-extracting one-file format was what engines flagged — see
-            [Antivirus false positives](../../#antivirus-false-positives),
+            [Antivirus](../../#antivirus),
             or run from source: `python cgbuy`.
           files: |
             cgbuy-${{ env.SHORT }}-windows.zip

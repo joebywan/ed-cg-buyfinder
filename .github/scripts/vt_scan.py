@@ -145,7 +145,7 @@ def main():
             out.append(f"Flagged `{name}`: {', '.join(engines)}.")
         out += ["",
                 "These are generic heuristic detections, not a verdict on what the code does; "
-                "see [Antivirus false positives](../../#antivirus-false-positives). "
+                "see [Antivirus](../../#antivirus). "
                 "Run from source if you would rather not take that on trust."]
     print("\n".join(out))
     return 0

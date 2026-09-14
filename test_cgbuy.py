@@ -18,6 +18,7 @@ import importlib.util
 import io
 import json
 import os
+import re
 import shutil
 import sys
 import tempfile
@@ -2956,6 +2957,52 @@ class TestWindowsIsNotBuiltAsOneFile(unittest.TestCase):
         # The workflows legitimately contain --onefile for the Linux job, so
         # only build.bat, which is Windows-only, can be checked outright.
         self.assertNotIn("--onefile", self._read("build.bat"))
+
+
+class TestDocAnchorsResolve(unittest.TestCase):
+    """Release notes and the badge deep-link into README headings.
+
+    Those links are written in workflow YAML and in vt_scan.py, so renaming a
+    heading breaks them silently -- nothing fails, and the damage only shows up
+    when someone clicks a link in a published release. Renaming
+    "Antivirus false positives" to "Antivirus" broke four of them at once."""
+
+    # Files that link into README.md by anchor.
+    LINKERS = ("README.md", ".github/workflows/build.yml",
+               ".github/workflows/release.yml", ".github/scripts/vt_scan.py")
+
+    @staticmethod
+    def _slug(heading):
+        """GitHub's heading-to-anchor rule, near enough for ASCII headings."""
+        kept = [c for c in heading.strip().lower() if c.isalnum() or c in " -_"]
+        return "".join(kept).replace(" ", "-")
+
+    def _headings(self, name):
+        with open(os.path.join(PROJECT_DIR, name), encoding="utf-8") as fh:
+            return {self._slug(m) for m in
+                    re.findall(r"^#{1,6} (.+)$", fh.read(), re.M)}
+
+    def test_every_readme_anchor_exists(self):
+        readme = self._headings("README.md")
+        for name in self.LINKERS:
+            with open(os.path.join(PROJECT_DIR, name), encoding="utf-8") as fh:
+                text = fh.read()
+            # Matches ](#anchor) and the ](../../#anchor) form the workflows use
+            # to climb out of the release-notes context back to the repo root.
+            for frag in re.findall(r"\]\((?:\.\./)*#([a-z0-9-]+)\)", text):
+                with self.subTest(linker=name, anchor=frag):
+                    self.assertIn(frag, readme)
+
+    def test_readme_links_to_development_resolve(self):
+        with open(os.path.join(PROJECT_DIR, "README.md"), encoding="utf-8") as fh:
+            text = fh.read()
+        dev = self._headings("DEVELOPMENT.md")
+        found = re.findall(r"\]\(DEVELOPMENT\.md(?:#([a-z0-9-]+))?\)", text)
+        self.assertTrue(found, "README no longer points at DEVELOPMENT.md")
+        for frag in found:
+            if frag:
+                with self.subTest(anchor=frag):
+                    self.assertIn(frag, dev)
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
