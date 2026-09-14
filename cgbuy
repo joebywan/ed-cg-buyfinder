@@ -746,6 +746,8 @@ class App:
         self.entries = []
         self.copy_map = {}          # (widget name, item id) -> system name
         self.toast = None           # (window, after id) of the visible toast
+        # Only exists while Settings is open; Ctrl+plus works either way.
+        self.font_lbl = None
         # Worker threads outlive a destroyed root otherwise, which races the
         # interpreter shutdown and can take the process down on quit.
         self.closing = False
@@ -943,6 +945,13 @@ class App:
             f, text="%s  -  %s" % (self.dest["station"], self.dest["system"]),
             style="Sub.TLabel")
         self.cg_lbl.pack(side="left", padx=(14, 0))
+        # What the CG pays per tonne is already inside every PROFIT/T in the
+        # table. It bought three lines of the window to say so again, so it
+        # lives here now, on the line that names the goal.
+        self.cg_tip = Tip(self.cg_lbl, "", self)
+        self.fetch_lbl = ttk.Label(f, text="", style="Or.TLabel",
+                                   font=self._fonts()["bold"])
+        self.fetch_lbl.pack(side="left", padx=(18, 0))
         self.standing_lbl = ttk.Label(f, text="", style="Or.TLabel",
                                       font=self._fonts()["bold"])
         self.standing_lbl.pack(side="right")
@@ -988,19 +997,6 @@ class App:
         ttk.Checkbutton(cb, text="Fleet carriers", variable=self.v_fc).pack(
             anchor="w", pady=(2, 0))
 
-        fb = ttk.Frame(row, style="Panel.TFrame")
-        fb.pack(side="left", padx=(0, 14))
-        ttk.Label(fb, text="FONT", style="Cap.TLabel").pack(anchor="w")
-        fr = ttk.Frame(fb, style="Panel.TFrame")
-        fr.pack(anchor="w", pady=(2, 0))
-        ttk.Button(fr, text="-", width=2, style="Step.TButton",
-                   command=lambda: self.bump_font(-1)).pack(side="left")
-        self.font_lbl = ttk.Label(fr, text=str(self.fs), style="PanelTxt.TLabel",
-                                  width=3, anchor="center")
-        self.font_lbl.pack(side="left", padx=2)
-        ttk.Button(fr, text="+", width=2, style="Step.TButton",
-                   command=lambda: self.bump_font(1)).pack(side="left")
-
         self.v_eddn = tk.BooleanVar(value=bool(self.cfg.get("eddn_enabled", False)))
 
         sb = ttk.Frame(row, style="Panel.TFrame")
@@ -1019,10 +1015,6 @@ class App:
         self.go.pack(side="left")
 
 
-        self.prices = ttk.Label(p, text="", style="PanelDim.TLabel",
-                                wraplength=1400, justify="left")
-        self.prices.pack(anchor="w", pady=(10, 0))
-
         # maximum is set per search: the commodity count varies by destination
         # A dismissible notice, not a blocker: routes load either way.
         self.banner = ttk.Frame(outer, style="Banner.TFrame")
@@ -1037,9 +1029,11 @@ class App:
                                       command=self._copy_dest_system)
         self.banner_copy.pack(side="right")
         self.banner_dismissed = False
+        # Packed only while a search runs. Left up, a full bar is a
+        # full-width orange rule that has finished saying anything.
+        self.pbar_in = dict(fill="x", pady=(6, 0))
         self.pbar = ttk.Progressbar(outer, mode="determinate",
                                     maximum=max(1, len(self.dest["commodities"])))
-        self.pbar.pack(fill="x", pady=(6, 0))
 
     def _tree(self, parent, columns, show):
         wrap = ttk.Frame(parent)
@@ -1177,19 +1171,16 @@ class App:
     def _statusbar(self):
         f = ttk.Frame(self.root, padding=(16, 6, 16, 10))
         f.grid(row=4, column=0, sticky="ew")
-        # Pack the right-hand hint FIRST so the status text yields to it
-        # instead of overlapping when it grows.
+        # Pack the right-hand readout FIRST so the status text yields to it
+        # instead of being cut off when it grows. It used to share the bar
+        # with a hint to click a row - which the copy now announces itself -
+        # and with a warning that trip times are estimates, which they have
+        # not been since they were fitted to the journal.
         self.sco_lbl = ttk.Label(f, style="Or.TLabel", text="")
         self.sco_lbl.pack(side="right", padx=(0, 18))
-        ttk.Label(f, style="Dim.TLabel",
-                  text="click a row to copy its system  -  trip times are "
-                       "estimates").pack(side="right")
         self.status = ttk.Label(f, text="Press SEARCH to pull live market data.",
                                 style="Dim.TLabel", anchor="w")
         self.status.pack(side="left", fill="x", expand=True)
-        self.fetch_lbl = ttk.Label(f, text="", style="Or.TLabel",
-                                   font=self._fonts()["bold"])
-        self.fetch_lbl.pack(side="left", padx=(18, 24))
         # Calibration lives in Settings > TRIP TIMINGS; repeating it here
         # crowded the bar until the other fields were truncated.
         self.cal_lbl = ttk.Label(f, text="")     # kept for _show_cal, not packed
@@ -1532,6 +1523,24 @@ class App:
                                                sticky="w", padx=14)
         row[0] += 1
 
+        section("DISPLAY")
+        fr = ttk.Frame(win)
+        fr.grid(row=row[0], column=1, sticky="w", **pad)
+        ttk.Label(fr, text="Font size").pack(side="left", padx=(0, 10))
+        ttk.Button(fr, text="-", width=2, style="Step.TButton",
+                   command=lambda: self.bump_font(-1)).pack(side="left")
+        self.font_lbl = ttk.Label(fr, text=str(self.fs), width=3,
+                                  anchor="center")
+        self.font_lbl.pack(side="left", padx=2)
+        ttk.Button(fr, text="+", width=2, style="Step.TButton",
+                   command=lambda: self.bump_font(1)).pack(side="left")
+        Tip(fr, "Scales the whole window - fonts, row heights, column widths.\n"
+                "Ctrl+plus and Ctrl+minus do the same without opening this.",
+            self)
+        win.bind("<Destroy>", lambda e, w=win: (
+            setattr(self, "font_lbl", None) if e.widget is w else None), add="+")
+        row[0] += 1
+
         section("INTEGRATIONS")
         self.v_notify = tk.BooleanVar(
             value=bool(self.cfg.get("notifications", True)))
@@ -1662,7 +1671,8 @@ class App:
         if new == self.fs:
             return
         self.fs = new
-        self.font_lbl.configure(text=str(new))
+        if self.font_lbl is not None:
+            self.font_lbl.configure(text=str(new))
         self._style()                       # restyle every widget class
         self._apply_col_widths()
         self._fit_window()
@@ -2503,6 +2513,7 @@ class App:
         self._tick_age()
         self.pbar.configure(maximum=max(1, len(self.dest["commodities"])))
         self.pbar["value"] = 0
+        self.pbar.pack(**self.pbar_in)
         self.status.configure(text="Starting...", foreground=DIM)
         self._spawn(lambda: self._work(self._params()))
 
@@ -2561,6 +2572,7 @@ class App:
                 elif kind == "err":
                     self.busy = False
                     self.go.state(["!disabled"])
+                    self.pbar.pack_forget()
                     self.status.configure(text=payload, foreground=BAD)
         except queue.Empty:
             pass
@@ -2568,6 +2580,7 @@ class App:
             self.busy = False
             try:
                 self.go.state(["!disabled"])
+                self.pbar.pack_forget()
                 self.set_status("display error: %s" % e, BAD)
             except Exception:
                 pass
@@ -2577,15 +2590,14 @@ class App:
         self.last_fetch = d.get("fetched_at")
         self.busy = False
         self.go.state(["!disabled"])
-        self.pbar["value"] = self.pbar["maximum"]
+        self.pbar.pack_forget()
         self.cg_lbl.configure(text="%s  -  %s  -  %s Ls from arrival"
                               % (self.dest["station"], self.dest["system"],
                                  f"{d['cg_ls']:,.0f}"))
         self._show_sco()
         order = sorted(d["cg"], key=lambda k: -d["cg"][k]["sell"])
-        self.prices.configure(
-            text="CG PAYS   " + "    ".join(
-                "%s %s" % (k, f"{d['cg'][k]['sell']:,}") for k in order))
+        self.cg_tip.text = "CG PAYS PER TONNE\n" + "\n".join(
+            "%-14s %9s" % (k, f"{d['cg'][k]['sell']:,}") for k in order)
         hidden = d.get("hidden_stale") or 0
         extra = ("   %d hidden as stale - raise MAX AGE to see them"
                  % hidden) if hidden else ""

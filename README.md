@@ -175,8 +175,10 @@ stations, first five expanded.
 | `T/MIN` | tonnes per minute — use this if you care about CG rank rather than credits |
 | `AGE` | how long ago a commander last reported this market; green ≤2 days, amber ≤7, red beyond — a CG drains supply fast |
 
-The header line shows what the CG currently pays for each commodity (the CG
-multiplier is already baked into the EDSM price — the tool does not apply it).
+Hover the destination at the top to see what the CG pays per tonne for each
+commodity (the CG multiplier is already baked into the EDSM price — the tool
+does not apply it). It is a hover rather than a row of its own because every
+one of those prices is already inside the `PROFIT/T` beside it.
 
 ## Interface
 
@@ -185,19 +187,26 @@ minimum supply (200), max data age (7 days), and a fleet-carrier toggle. Enter
 or SEARCH runs it. Rows older than the max age are hidden and the status bar
 says how many; if every row is older, they are shown anyway.
 
+The title line carries the destination and how old the data on screen is. The
+status bar is the search's own line — what was found, what was hidden, what
+went wrong — with the supercruise cut on the right, which is the one figure
+read just before undocking. Nothing else lives in either: a progress bar you
+have finished reading is a full-width orange rule saying nothing, so it is
+only there while a search runs.
+
 Hold and the two jump ranges are marked `*` and locked while your journal can
 see a ship — they are the ship's, not yours to guess at. Hover one to see
 where its number came from. See [Ship detection](#ship-detection).
 
 **Font scaling.** The default size is picked from your screen width (9pt under
-2560px, 14 under 3840, 17 above). The `- 9 +` control, or Ctrl+`+` / Ctrl+`-`,
+2560px, 14 under 3840, 17 above). Ctrl+`+` / Ctrl+`-`, or Settings → DISPLAY,
 rescales everything — fonts, row heights, column widths, and the window itself —
 and the choice is saved.
 
 **Settings** (SETTINGS button): journal folder (auto-detected, override only if
 you have several installs), the destination, how many minutes cached results
-count as fresh (10), how many top results to re-check against EDSM (18),
-toggles for desktop notifications and EDDN, and a readout of current trip
+count as fresh (10), how many top results to re-check against EDSM (18), font
+size, toggles for desktop notifications and EDDN, and a readout of current trip
 timings with a reset.
 
 On startup the last results are shown straight away; if they are older than
