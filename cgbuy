@@ -2125,6 +2125,11 @@ class App:
         self._check_top_rank_change(st)
         bits = ["%st delivered" % f"{st['contribution']:,}",
                 "top %s%%" % st["band"]]
+        # The bands step four times in a week; this moves every run, which is
+        # the whole reason it is here.
+        avg = st.get("times_average")
+        if avg:
+            bits.append("%.1fx average" % avg)
 
         gap, approx, target = None, False, None
         if st["next_known"] and st["to_next"] is not None:
@@ -2136,6 +2141,15 @@ class App:
             approx = True
 
         detail = []
+        if avg:
+            detail.append(
+                "The average contributor is on %st and you are on %st,\n"
+                "%.1f times that. Both figures are exact, and both move:\n"
+                "yours when you deliver, theirs when anyone does.\n"
+                "It is a ratio, not a placing - the field is lopsided, so\n"
+                "the average sits well above the middle of it."
+                % (f"{int(st['mean_contribution']):,}",
+                   f"{st['contribution']:,}", avg))
         rank = st.get("top_rank_size")
         if st["next_band"] is None and rank:
             bits.append("in the top %d" % rank if st.get("in_top_rank")

@@ -20,6 +20,13 @@ are in it (PlayerInTopRank), never what the cut-off costs, so there is
 nothing to bracket and nothing to extrapolate. It is reported as a yes or
 a no.
 
+Nothing here estimates a placing. The crossings are measured when YOU pass
+them and the thresholds keep rising afterwards, so they are floors, not
+current values; and the distribution steepens sharply towards the top, so a
+curve fitted to the lower crossings says nothing about the upper one. What
+is exact is the average contribution - the goal's total over its number of
+contributors - so that is what your tonnage is compared against.
+
 Standalone:  python3 cg.py
 """
 
@@ -96,6 +103,25 @@ def band_brackets(history):
             brackets[b] = (prev_c, c)
         prev_c, prev_b = c, b
     return brackets
+
+
+def times_average(contribution, total, contributors):
+    """Your tonnage over the average contributor's.
+
+    Two exact figures from the same journal event, divided. Its worth is
+    that it moves - with every run you make and every run the field makes -
+    where the bands only step four times in a week.
+
+    It is not a placing. The field is lopsided enough that the average sits
+    well above the middle of it, so more than half the commanders are below
+    average and being above it is commoner than it sounds.
+    """
+    if not contribution or not total or not contributors:
+        return None
+    mean = float(total) / contributors
+    if mean <= 0:
+        return None
+    return contribution / mean
 
 
 def rate_per_hour(history, window=6):
@@ -252,6 +278,13 @@ def standing(history, live=None):
     exp = (live or {}).get("expiry") or cur.get("expiry")
     hrs = hours_left(exp) if exp else None
 
+    # Both figures from the same journal event: the live feed refreshes the
+    # total but never the head count, and mixing the two would inflate the
+    # average and understate the multiple.
+    mean_contribution = None
+    if cur.get("total") and cur.get("contributors"):
+        mean_contribution = float(cur["total"]) / cur["contributors"]
+
     # Extrapolate the unobserved next threshold from the gaps between the
     # ones actually crossed. Clearly separate from measured brackets - band
     # boundaries also drift upward as other commanders contribute.
@@ -277,6 +310,10 @@ def standing(history, live=None):
         "hold_margin": hold_margin, "to_next": to_next, "next_known": next_known,
         "top_rank_size": cur.get("top_rank_size"),
         "in_top_rank": cur.get("in_top_rank"),
+        "mean_contribution": mean_contribution,
+        "times_average": times_average(cur.get("contribution"),
+                                       cur.get("total"),
+                                       cur.get("contributors")),
         "hours_left": hrs, "as_of": cur.get("ts"),
     }
 
@@ -304,6 +341,10 @@ if __name__ == "__main__":
     if s["hours_left"]:
         d, h = divmod(s["hours_left"], 24)
         print("  time left: %dd %dh" % (d, h))
+    if s["times_average"]:
+        print("  %.1fx the average contributor (%s t across %s of them)"
+              % (s["times_average"], f"{int(s['mean_contribution']):,}",
+                 f"{s['contributors']:,}"))
     if s["hold_margin"] is not None:
         print("  safely inside top %s%%: %s t above where you entered it"
               % (s["band"], f"{s['hold_margin']:,}"))

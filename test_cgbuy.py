@@ -2027,6 +2027,36 @@ class TestReadHistory(unittest.TestCase):
         self.assertIsNone(h[0]["in_top_rank"])
 
 
+class TestTimesAverage(unittest.TestCase):
+
+    def test_the_multiple_is_your_tonnage_over_the_mean(self):
+        # 1,000,000 t across 5,000 contributors averages 200 t
+        self.assertAlmostEqual(cg.times_average(600, 1000000, 5000), 3.0)
+
+    def test_below_average_is_reported_as_such(self):
+        self.assertAlmostEqual(cg.times_average(50, 1000000, 5000), 0.25)
+
+    def test_missing_figures_give_nothing_rather_than_a_guess(self):
+        for args in ((0, 1000000, 5000), (600, 0, 5000), (600, 1000000, 0),
+                     (600, None, 5000), (600, 1000000, None)):
+            with self.subTest(args=args):
+                self.assertIsNone(cg.times_average(*args))
+
+    def test_standing_reports_the_multiple_and_the_mean(self):
+        s = cg.standing([cg_sample(600, 25, total=1000000, contributors=5000)])
+        self.assertAlmostEqual(s["times_average"], 3.0)
+        self.assertAlmostEqual(s["mean_contribution"], 200.0)
+
+    def test_the_mean_ignores_the_live_total(self):
+        # the feed refreshes the total but never the head count; dividing one
+        # by the other would inflate the average and understate the multiple
+        h = [cg_sample(600, 25, total=1000000, contributors=5000)]
+        s = cg.standing(h, {"qty": 4000000})
+        self.assertEqual(s["total"], 4000000)          # shown as the goal total
+        self.assertAlmostEqual(s["mean_contribution"], 200.0)
+        self.assertAlmostEqual(s["times_average"], 3.0)
+
+
 class TestBandBrackets(unittest.TestCase):
 
     def history(self, *pairs):
