@@ -88,7 +88,9 @@ header — click once for high-to-low, again to reverse it. Or switch to
 figure, and `AGE` is colour-coded — stale supply is the single
 biggest cause of a wasted trip.
 
-Click any row to copy its system to the clipboard.
+Click any row to copy its system to the clipboard. A note saying so appears
+next to the pointer and clears itself after a second and a half — nothing to
+dismiss, since you do this every run.
 
 
 ## Destination

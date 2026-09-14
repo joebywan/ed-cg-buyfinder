@@ -745,6 +745,7 @@ class App:
         self.cfg = load_config()
         self.entries = []
         self.copy_map = {}          # (widget name, item id) -> system name
+        self.toast = None           # (window, after id) of the visible toast
         # Worker threads outlive a destroyed root otherwise, which races the
         # interpreter shutdown and can take the process down on quit.
         self.closing = False
@@ -1072,6 +1073,57 @@ class App:
     def _remember(self, tree, item, system):
         self.copy_map[(str(tree), item)] = system
 
+    TOAST_MS = 1600             # long enough to read a long system name
+
+    def _toast(self, text, event=None, colour=None):
+        """Say what just happened, over the table, and get out of the way.
+
+        The status bar already says it, but the eye is on the row that was
+        clicked, not the bottom of the window - and this is a thing you do
+        every run, so it cannot be anything that needs dismissing. No focus
+        is taken: the game is usually the window that wants the keyboard.
+        """
+        self._hide_toast()
+        if self.closing:
+            return
+        win = tk.Toplevel(self.root)
+        win.wm_overrideredirect(True)
+        try:                          # a hint, not a promise, on every WM
+            win.wm_attributes("-topmost", True)
+        except tk.TclError:
+            pass
+        tk.Label(win, text=text, bg="#1c1610", fg=colour or OR,
+                 font=self._fonts()["bold"], relief="solid", borderwidth=1,
+                 padx=14, pady=9).pack()
+        win.update_idletasks()
+        if event is not None:
+            x, y = event.x_root + 16, event.y_root + 18
+        else:                         # centred over the window
+            x = self.root.winfo_rootx() + (self.root.winfo_width()
+                                           - win.winfo_width()) // 2
+            y = self.root.winfo_rooty() + 120
+        # Nudge back on screen: a long name clicked near the right edge would
+        # otherwise hang off it.
+        x = max(0, min(x, win.winfo_screenwidth() - win.winfo_width() - 4))
+        y = max(0, min(y, win.winfo_screenheight() - win.winfo_height() - 4))
+        win.wm_geometry("+%d+%d" % (x, y))
+        win.bind("<Button-1>", lambda _e: self._hide_toast())
+        self.toast = (win, self.root.after(self.TOAST_MS, self._hide_toast))
+
+    def _hide_toast(self):
+        if not self.toast:
+            return
+        win, token = self.toast
+        self.toast = None
+        try:
+            self.root.after_cancel(token)
+        except (tk.TclError, ValueError):
+            pass
+        try:
+            win.destroy()
+        except tk.TclError:
+            pass
+
     def _copy_clicked(self, event):
         """Click a row to put its system name on the clipboard."""
         tree = event.widget
@@ -1091,8 +1143,10 @@ class App:
             self.root.update_idletasks()
         except tk.TclError:
             self.set_status("could not reach the clipboard", BAD)
+            self._toast("Could not reach the clipboard", event, BAD)
             return
         self.set_status("copied  %s" % system, OR)
+        self._toast("Copied %s to the clipboard" % system, event)
 
     def _tabs(self):
         nb = ttk.Notebook(self.root, padding=(16, 6, 16, 0))
@@ -1595,6 +1649,7 @@ class App:
     def _quit(self):
         self._save_cal()
         self.closing = True
+        self._hide_toast()          # an orphaned Toplevel outlives the root
         # Give in-flight network calls a moment to notice and return.
         for w in list(self.workers):
             if w.is_alive():
