@@ -2660,7 +2660,7 @@ def _apply_icon(root):
         pass
 
 
-VERSION = "1.4"
+VERSION = "1.5"
 
 USAGE = """cgbuy - where to buy for a community goal, ranked by credits/minute
 
