@@ -4,10 +4,14 @@ Unit tests for the pure logic in cgbuy, journal.py, eddn.py and plot.py.
 
 Run with:  python3 test_cgbuy.py
 
-No network, no tkinter window, no real Elite journal directory and no real
-user config: every path the tests touch is a tempfile, and XDG_CONFIG_HOME is
-redirected before cgbuy is imported so its CONFIG_PATH/STATE_PATH constants
-can never point at the commander's own files.
+No network, no real Elite journal directory and no real user config: every
+path the tests touch is a tempfile, and XDG_CONFIG_HOME is redirected before
+cgbuy is imported so its CONFIG_PATH/STATE_PATH constants can never point at
+the commander's own files.
+
+One class opens a Tk window - TestFontSettingReachesEveryReadout, which has
+to ask live widgets what they are rendering with - and it skips itself when
+there is no display. CI runs the suite under xvfb, so it runs there.
 """
 
 import atexit
@@ -23,6 +27,7 @@ import shutil
 import sys
 import tempfile
 import unittest
+import urllib.error
 import urllib.parse
 
 PROJECT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -43,7 +48,9 @@ import journal                                                # noqa: E402
 import notify                                                 # noqa: E402
 import sco_model                                              # noqa: E402
 import status                                                 # noqa: E402
+import update                                                 # noqa: E402
 import verify                                                 # noqa: E402
+import version                                                # noqa: E402
 
 # cgbuy has no .py extension, so the normal import machinery cannot see it.
 # Importing it only defines things; main() runs under __name__ == "__main__",
@@ -3106,6 +3113,256 @@ class TestDocAnchorsResolve(unittest.TestCase):
             if frag:
                 with self.subTest(anchor=frag):
                     self.assertIn(frag, dev)
+
+
+class TestParseVersion(unittest.TestCase):
+    """The tag is text from an API, not a number we control."""
+
+    def test_reads_a_dotted_number_with_or_without_the_v(self):
+        self.assertEqual(update.parse_version("1.6"), (1, 6))
+        self.assertEqual(update.parse_version("v1.6"), (1, 6))
+        self.assertEqual(update.parse_version("v1.6.2"), (1, 6, 2))
+        self.assertEqual(update.parse_version(" v2.0 "), (2, 0))
+
+    def test_anything_else_is_none(self):
+        for bad in ("", "v", "snapshot", "1.6a", "1..6", "-1.0", "1.6-rc1",
+                    "1.2.3.4.5", None, 1.6, ["1", "6"]):
+            with self.subTest(tag=bad):
+                self.assertIsNone(update.parse_version(bad))
+
+
+class TestIsNewer(unittest.TestCase):
+
+    def test_ten_beats_nine(self):
+        """Why this is not `latest > current`: as strings "1.10" sorts below
+        "1.9", so every user past 1.9 would be told they were up to date."""
+        self.assertTrue(update.is_newer("1.10", "1.9"))
+        self.assertFalse(update.is_newer("1.9", "1.10"))
+
+    def test_same_version_is_not_newer(self):
+        self.assertFalse(update.is_newer("1.6", "1.6"))
+        self.assertFalse(update.is_newer("v1.6", "1.6"))
+        self.assertFalse(update.is_newer("1.6", "1.6.0"))
+        self.assertFalse(update.is_newer("1.6.0", "1.6"))
+
+    def test_a_patch_release_is_newer_than_the_release(self):
+        self.assertTrue(update.is_newer("1.6.1", "1.6"))
+        self.assertFalse(update.is_newer("1.6", "1.6.1"))
+
+    def test_older_is_not_newer(self):
+        self.assertFalse(update.is_newer("1.5", "1.6"))
+        self.assertFalse(update.is_newer("1.6", "2.0"))
+        self.assertTrue(update.is_newer("2.0", "1.6"))
+
+    def test_unparseable_never_nags(self):
+        """Fail closed: a tag we cannot read is not evidence of anything."""
+        self.assertFalse(update.is_newer("snapshot", "1.6"))
+        self.assertFalse(update.is_newer("1.7", "who knows"))
+        self.assertFalse(update.is_newer(None, "1.6"))
+
+
+class TestUpdateCheck(unittest.TestCase):
+    """check() is the whole feature: one call, one answer, never an exception
+    and never a socket - the fetch is injected here exactly as the app
+    injects its own."""
+
+    def fetch(self, doc):
+        self.asked = []
+
+        def go(url, timeout=10):
+            self.asked.append(url)
+            if isinstance(doc, Exception):
+                raise doc
+            return doc
+        return go
+
+    def test_opted_out_does_not_even_ask(self):
+        f = self.fetch({"tag_name": "v9.9"})
+        self.assertIsNone(update.check({}, "1.6", fetch=f))
+        self.assertIsNone(update.check({"update_check": False}, "1.6", fetch=f))
+        self.assertEqual(self.asked, [], "reached GitHub without being opted in")
+
+    def test_opted_in_and_newer_returns_the_bare_version(self):
+        f = self.fetch({"tag_name": "v1.7"})
+        self.assertEqual(update.check({"update_check": True}, "1.6", fetch=f),
+                         "1.7")
+        self.assertEqual(self.asked, [update.RELEASES_API])
+
+    def test_current_version_says_nothing(self):
+        f = self.fetch({"tag_name": "v1.6"})
+        self.assertIsNone(update.check({"update_check": True}, "1.6", fetch=f))
+
+    def test_one_request_per_call_and_no_more(self):
+        f = self.fetch({"tag_name": "v1.7"})
+        update.check({"update_check": True}, "1.6", fetch=f)
+        self.assertEqual(len(self.asked), 1)
+
+    def test_every_failure_is_silence(self):
+        """Offline, rate-limited, proxied, GitHub down, or a response shaped
+        like nothing we expected. A background courtesy check has no business
+        raising any of that at someone, so all of it comes back as None."""
+        for doc in (OSError("no route to host"),
+                    urllib.error.URLError("unreachable"),
+                    ValueError("not json"),
+                    RuntimeError("something else entirely"),
+                    {}, {"tag_name": None}, {"tag_name": "snapshot"},
+                    [], "not a dict", None):
+            with self.subTest(response=doc):
+                f = self.fetch(doc)
+                self.assertIsNone(
+                    update.check({"update_check": True}, "1.6", fetch=f))
+
+    def test_it_asks_for_the_latest_release_not_the_tag_list(self):
+        """/releases/latest skips pre-releases, and that is the only thing
+        stopping the rolling `snapshot` release being offered as an update."""
+        self.assertTrue(update.RELEASES_API.endswith("/releases/latest"))
+        self.assertIn(update.OWNER_REPO, update.RELEASES_API)
+        self.assertIn(update.OWNER_REPO, update.RELEASES_PAGE)
+
+
+class TestRunningFromSource(unittest.TestCase):
+
+    def test_true_under_the_test_runner(self):
+        self.assertTrue(update.running_from_source())
+
+    def test_a_frozen_build_is_not_source(self):
+        old = getattr(sys, "frozen", None)
+        sys.frozen = True
+        try:
+            self.assertFalse(update.running_from_source())
+        finally:
+            if old is None:
+                del sys.frozen
+            else:
+                sys.frozen = old
+
+
+class TestVersionHasOneHome(unittest.TestCase):
+    """cgbuy, cg.py, verify.py and eddn.py each carried their own copy, and
+    three had drifted to 2.0 while the app shipped 1.5. That was harmless
+    while nothing read it. The update check reads it."""
+
+    USERS = ("cgbuy", "cg.py", "verify.py", "eddn.py")
+
+    def test_every_module_agrees_on_the_version(self):
+        self.assertEqual(cgbuy.VERSION, version.VERSION)
+        self.assertEqual(eddn.VERSION, version.VERSION)
+        self.assertEqual(cgbuy.AGENT, version.AGENT)
+        self.assertEqual(cg.AGENT, version.AGENT)
+        self.assertEqual(verify.AGENT, version.AGENT)
+
+    def test_the_agent_string_carries_the_real_version(self):
+        self.assertIn(version.VERSION, version.AGENT)
+        self.assertIsNotNone(update.parse_version(version.VERSION))
+
+    def test_no_module_hardcodes_a_version_again(self):
+        for name in self.USERS:
+            with open(os.path.join(PROJECT_DIR, name), encoding="utf-8") as fh:
+                body = fh.read()
+            with self.subTest(module=name):
+                self.assertNotRegex(
+                    body, r"""(?m)^(VERSION|AGENT) = ['"]""",
+                    name + " declares its own VERSION/AGENT again - import "
+                    "it from version.py instead")
+
+    def test_the_release_workflow_bumps_the_file_that_matters(self):
+        """Pointing the bump at the old file would tag a release whose
+        binaries still report the previous version."""
+        with open(os.path.join(PROJECT_DIR, ".github/workflows/release.yml"),
+                  encoding="utf-8") as fh:
+            wf = fh.read()
+        self.assertIn('open("version.py")', wf)
+
+
+
+def _has_display():
+    if sys.platform in ("win32", "darwin"):
+        return True
+    return bool(os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"))
+
+
+@unittest.skipUnless(_has_display(), "needs a display; CI runs this under xvfb")
+class TestFontSettingReachesEveryReadout(unittest.TestCase):
+    """The one test in this file that opens a window, because the bug it
+    guards cannot be seen any other way.
+
+    ttk looks a style's font up on every redraw, but a font passed to the
+    widget itself is read once at construction and never again. The CG
+    standing and the fetch state were built that way, so Ctrl-+ moved the
+    whole window around them and left them at their original size. Nothing
+    catches that except asking a live widget what it is actually rendering.
+    """
+
+    # attribute -> multiple of the font setting the widget should render at
+    CHROME = {"standing_lbl": 0, "fetch_lbl": 0, "sco_lbl": 0,
+              "status": 0, "cg_lbl": 0, "update_lbl": 0}
+
+    def setUp(self):
+        import tkinter as tk
+        from tkinter import ttk
+        self.tk, self.ttk = tk, ttk
+        try:
+            self.root = tk.Tk()
+        except tk.TclError as e:                  # display present but unusable
+            self.skipTest("no usable Tk display: %s" % e)
+        self.addCleanup(self.root.destroy)
+        self.app = cgbuy.App(self.root, autosearch=False)
+        self.app._show_sco()
+        self.app._show_update("9.9")
+
+    def effective(self, widget):
+        """What the widget really renders with: its own font if it was given
+        one, otherwise whatever its style currently says."""
+        own = widget.cget("font")
+        if own:
+            return str(own)
+        style = widget.cget("style") or widget.winfo_class()
+        return str(self.ttk.Style().lookup(style, "font"))
+
+    def size_of(self, widget):
+        parts = self.effective(widget).split()
+        for p in parts:                           # '{DejaVu Sans Mono} 17 bold'
+            if p.lstrip("-").isdigit():
+                return int(p)
+        self.fail("no size in %r" % self.effective(widget))
+
+    def test_every_readout_starts_at_the_font_setting(self):
+        for name, offset in self.CHROME.items():
+            with self.subTest(widget=name):
+                w = getattr(self.app, name)
+                self.assertEqual(self.size_of(w), self.app.fs + offset)
+
+    def test_bumping_the_font_moves_all_of_them(self):
+        before = {n: self.size_of(getattr(self.app, n)) for n in self.CHROME}
+        self.app.bump_font(8)
+        for name, offset in self.CHROME.items():
+            with self.subTest(widget=name):
+                w = getattr(self.app, name)
+                self.assertEqual(self.size_of(w), self.app.fs + offset)
+                self.assertNotEqual(
+                    self.size_of(w), before[name],
+                    name + " ignored the font setting - it was probably built "
+                    "with font=, which ttk reads once and never re-reads")
+
+    def test_shrinking_works_too(self):
+        self.app.bump_font(8)
+        self.app.bump_font(-8)
+        for name, offset in self.CHROME.items():
+            with self.subTest(widget=name):
+                self.assertEqual(self.size_of(getattr(self.app, name)),
+                                 self.app.fs + offset)
+
+    def test_no_persistent_readout_freezes_a_font_onto_itself(self):
+        """The invariant behind the fix: persistent chrome is styled, never
+        given a font of its own. A dialog may do as it likes - it is rebuilt
+        every time it opens, so it cannot go stale."""
+        for name in self.CHROME:
+            with self.subTest(widget=name):
+                self.assertEqual(
+                    getattr(self.app, name).cget("font"), "",
+                    name + " has a per-widget font; give it a ttk style so "
+                    "the font setting can reach it")
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

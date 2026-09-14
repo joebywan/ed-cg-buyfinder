@@ -21,6 +21,10 @@ import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 from tkinter import ttk, filedialog
 
+# Not optional like the modules below: a build that cannot report its
+# own version has nothing sensible to compare against the latest release.
+from version import AGENT, VERSION
+
 try:
     import journal
 except ImportError:            # running without the journal module alongside
@@ -49,6 +53,10 @@ try:
     import sco_model
 except ImportError:
     sco_model = None
+try:
+    import update
+except ImportError:          # no update notice, app is fine
+    update = None
 
 # Where you sell, and what that place pays well for. Defaults to the goal
 # this tool was written for so an existing install keeps working, but nothing
@@ -94,7 +102,6 @@ SPANSH_SEARCH = "https://spansh.co.uk/api/stations/search"
 EDSM_MARKET = ("https://www.edsm.net/api-system-v1/stations/market"
                "?systemName={sys}&stationName={stn}")
 EDSM_STATIONS = "https://www.edsm.net/api-system-v1/stations?systemName={sys}"
-AGENT = "cgbuy/2.0 (personal ED trade helper)"
 
 
 # --------------------------------------------------------------------------
@@ -826,6 +833,7 @@ class App:
         root.after(200, self._tick_age)
         if autosearch:
             root.after(200, self._start_with_cache)
+        root.after(2000, self._check_update)
         root.bind("<Return>", lambda e: self.search())
         root.bind("<Control-q>", lambda e: self._quit())
         root.protocol("WM_DELETE_WINDOW", self._quit)
@@ -842,6 +850,7 @@ class App:
             "bold": (FONT_FAMILY, n, "bold"),
             "cap": (FONT_FAMILY, max(FONT_MIN - 1, n - 1)),
             "head": (FONT_FAMILY, max(FONT_MIN - 1, n - 1), "bold"),
+            "link": (FONT_FAMILY, n, "underline"),
             "title": (FONT_FAMILY, n + 4, "bold"),
         }
 
@@ -863,10 +872,20 @@ class App:
         s.configure("PanelDim.TLabel", background=PANEL, foreground=DIM, font=MONO)
         s.configure("PanelTxt.TLabel", background=PANEL, foreground=TXT, font=MONO)
         s.configure("Or.TLabel", background=BG, foreground=OR, font=TITLE)
+        # Or.TLabel is the app title, and carries the title font with it.
+        # Readouts want the orange without the size, and want it looked up
+        # again on every restyle rather than frozen onto the widget.
+        s.configure("Hot.TLabel", background=BG, foreground=OR, font=MONO_B)
         s.configure("Banner.TFrame", background="#3a2408")
         s.configure("Banner.TLabel", background="#3a2408", foreground="#ffd9a8",
                     font=MONO_B, padding=(12, 8))
         s.configure("Sub.TLabel", background=BG, foreground=DIM, font=MONO)
+        # Underlined, and deliberately not orange at rest: it sits next to the
+        # SCO readout, which is live in-flight information and should win the
+        # eye. The underline and the hand cursor are what say "clickable";
+        # orange is saved for hover.
+        s.configure("Link.TLabel", background=BG, foreground=TXT, font=f["link"])
+        s.configure("LinkHot.TLabel", background=BG, foreground=OR, font=f["link"])
 
         # ttk.Combobox does NOT inherit TEntry styling: without this it keeps
         # Tk's white field, and pale text on white is unreadable. The dropdown
@@ -975,11 +994,9 @@ class App:
         # table. It bought three lines of the window to say so again, so it
         # lives here now, on the line that names the goal.
         self.cg_tip = Tip(self.cg_lbl, "", self)
-        self.fetch_lbl = ttk.Label(mid, text="", style="Or.TLabel",
-                                   font=self._fonts()["bold"])
+        self.fetch_lbl = ttk.Label(mid, text="", style="Hot.TLabel")
         self.fetch_lbl.pack(side="left", padx=(18, 0))
-        self.standing_lbl = ttk.Label(f, text="", style="Or.TLabel",
-                                      font=self._fonts()["bold"])
+        self.standing_lbl = ttk.Label(f, text="", style="Hot.TLabel")
         self.standing_lbl.grid(row=0, column=2, sticky="e")
         self.standing_tip = Tip(self.standing_lbl, "", self)
 
@@ -1211,8 +1228,18 @@ class App:
         # with a hint to click a row - which the copy now announces itself -
         # and with a warning that trip times are estimates, which they have
         # not been since they were fitted to the journal.
-        self.sco_lbl = ttk.Label(f, style="Or.TLabel", text="")
+        self.sco_lbl = ttk.Label(f, style="Hot.TLabel", text="")
         self.sco_lbl.pack(side="right", padx=(0, 18))
+        # Stays hidden unless the startup check found a newer release, and
+        # then just sits there: no popup, no focus grab, nothing to dismiss.
+        # The game is usually the window that wants the screen.
+        self.update_lbl = ttk.Label(f, style="Link.TLabel", text="", cursor="hand2")
+        self.update_tip = Tip(self.update_lbl, "", self)
+        self.update_lbl.bind("<Button-1>", lambda _e: self._open_release_page())
+        self.update_lbl.bind("<Enter>", lambda _e: self.update_lbl.configure(
+            style="LinkHot.TLabel"), add="+")
+        self.update_lbl.bind("<Leave>", lambda _e: self.update_lbl.configure(
+            style="Link.TLabel"), add="+")
         self.status = ttk.Label(f, text="Press SEARCH to pull live market data.",
                                 style="Dim.TLabel", anchor="w")
         self.status.pack(side="left", fill="x", expand=True)
@@ -1280,9 +1307,9 @@ class App:
         row = [0]
 
         def section(title):
-            ttk.Label(win, text=title, style="Or.TLabel",
-                      font=f["bold"]).grid(row=row[0], column=0, columnspan=3,
-                                           sticky="w", padx=14, pady=(14, 2))
+            ttk.Label(win, text=title, style="Hot.TLabel").grid(
+                row=row[0], column=0, columnspan=3, sticky="w",
+                padx=14, pady=(14, 2))
             row[0] += 1
 
         def pathrow(label, value, on_browse, is_dir):
@@ -1611,6 +1638,19 @@ class App:
                   ).grid(row=row[0], column=1, sticky="w", padx=14)
         row[0] += 1
 
+        # Off unless asked for: every other call this app makes is about the
+        # market, and this one is the only one about the user.
+        self.v_update = tk.BooleanVar(
+            value=bool(self.cfg.get("update_check", False)))
+        cb_u = ttk.Checkbutton(win, text="Check for a new version at startup",
+                               variable=self.v_update)
+        cb_u.grid(row=row[0], column=1, sticky="w", **pad)
+        Tip(cb_u, "One request to GitHub when the app opens, asking only what\n"
+                  "the latest release is. If there is a newer one, a line\n"
+                  "appears in the status bar linking to it - nothing is\n"
+                  "downloaded, and nothing about you is sent.", self)
+        row[0] += 1
+
         section("TRIP TIMINGS")
         cal_txt = self.cal.summary() if self.cal else "no journal data"
         ttk.Label(win, text=cal_txt, style="Dim.TLabel").grid(
@@ -1667,11 +1707,18 @@ class App:
             except ValueError:
                 self.cfg["verify_top"] = VERIFY_TOP_DEFAULT
             self.cfg["eddn_enabled"] = bool(self.v_eddn.get())
+            turned_on = (bool(self.v_update.get())
+                         and not self.cfg.get("update_check"))
+            self.cfg["update_check"] = bool(self.v_update.get())
             save_config(self.cfg)
             if journal and self.cfg["journal_dir"]:
                 self._init_journal()
             self.set_status("settings saved")
             win.destroy()
+            if turned_on:
+                # Otherwise the box does nothing until the next launch, which
+                # reads as broken. Still one request, still user-initiated.
+                self._check_update()
             # The filter is applied while fetching, so the rows it hid are
             # not here to un-hide: telling someone to raise MAX AGE has to
             # actually go and get them.
@@ -1894,6 +1941,44 @@ class App:
         else:
             self.banner_lbl.configure(text="")
             self.banner.pack_forget()
+
+    # -- update notice ---------------------------------------------------
+    def _check_update(self):
+        """Ask GitHub once, in the background, if the user asked us to.
+
+        Off by default and never scheduled again: one request per run, no
+        poller, nothing stored. If it says nothing - offline, rate-limited,
+        opted out - the bar looks exactly as it did before.
+        """
+        if update is None or not self.cfg.get("update_check"):
+            return
+
+        def work():
+            found = update.check(self.cfg, VERSION)
+            if not found or self.closing:
+                return
+            try:
+                self.root.after(0, self._show_update, found)
+            except tk.TclError:      # window went away mid-flight
+                pass
+
+        self._spawn(work)
+
+    def _show_update(self, newest):
+        if self.closing:
+            return
+        self.update_lbl.configure(text="New version %s available" % newest)
+        self.update_tip.text = (
+            "You are running %s.\n"
+            "Click to open the releases page - %s."
+            % (VERSION, "git pull to update" if update.running_from_source()
+               else "nothing is downloaded until you choose it there"))
+        self.update_lbl.pack(side="right", padx=(0, 18))
+
+    def _open_release_page(self):
+        if update is not None and not update.open_page():
+            self.set_status("could not open a browser - %s"
+                            % update.RELEASES_PAGE, BAD)
 
     def known_commodities(self, station, system):
         """Everything we can name, for the picker.
@@ -2863,8 +2948,6 @@ def _apply_icon(root):
     except Exception:
         pass
 
-
-VERSION = "1.6"
 
 USAGE = """cgbuy - where to buy for a community goal, ranked by credits/minute
 

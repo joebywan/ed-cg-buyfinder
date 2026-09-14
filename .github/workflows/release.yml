@@ -49,17 +49,21 @@ jobs:
           sudo apt-get install -y -qq python3-tk xvfb
           xvfb-run -a python test_cgbuy.py
 
+      # version.py is the only place the number lives: cgbuy, cg.py, verify.py
+      # and eddn.py all import it, so bumping one line bumps the --version
+      # output, all three User-Agent strings and what EDDN records. The smoke
+      # tests below prove the bump reached the built binaries.
       - name: Bump VERSION in the source and tag it
         run: |
           V="${{ steps.check.outputs.version }}"
           python - "$V" <<'PY'
           import re, sys
           v = sys.argv[1]
-          s = open("cgbuy").read()
+          s = open("version.py").read()
           new, n = re.subn(r'^VERSION = "[^"]*"', 'VERSION = "%s"' % v, s, count=1, flags=re.M)
           if n != 1:
-              raise SystemExit("could not find the VERSION line in cgbuy")
-          open("cgbuy", "w").write(new)
+              raise SystemExit("could not find the VERSION line in version.py")
+          open("version.py", "w").write(new)
           PY
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"

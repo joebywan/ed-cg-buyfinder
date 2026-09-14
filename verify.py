@@ -18,10 +18,11 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
+from version import AGENT      # one place; see version.py
+
 EDSM_STATIONS = "https://www.edsm.net/api-system-v1/stations?systemName={sys}"
 EDSM_MARKET = ("https://www.edsm.net/api-system-v1/stations/market"
                "?systemName={sys}&stationName={stn}")
-AGENT = "cgbuy/2.0 (personal ED trade helper)"
 
 
 # EDSM starts returning 429 after roughly ten rapid requests. Going parallel

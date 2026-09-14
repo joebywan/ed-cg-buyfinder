@@ -19,8 +19,18 @@ point and has no `.py` extension, which is why the build scripts copy it to
 | `sco_model.py` | SCO fuel/time model, backed by `sco_table.json` |
 | `status.py` | `Status.json` reading |
 | `notify.py` | per-OS notifications |
+| `update.py` | asks GitHub for the latest release tag; compares, never fetches |
 | `verify.py` | market re-checks against EDSM |
+| `version.py` | the version number and the User-Agent, for everything else |
 | `test_cgbuy.py` | the whole suite, one file |
+
+`version.py` is the only place the version lives. `cgbuy`, `cg.py`,
+`verify.py` and `eddn.py` all import it, so one line governs `--version`, all
+three User-Agent strings and the `softwareVersion` EDDN records. They used to
+carry a literal each, and three had drifted to `2.0` while the app shipped
+`1.5` — harmless while nothing read it, which stopped being true when the
+update check started comparing against it. A test asserts nothing declares its
+own again.
 
 `sco_table.json` is **opened, not imported**, so every packager has to be told
 about it explicitly — PyInstaller with `--add-data`, Nuitka with
@@ -157,11 +167,11 @@ before new ones are uploaded. Forget that and the downloads list grows forever.
 
 Actions → **release** → Run workflow → a version like `2.2` (no leading `v`),
 plus optional extra notes. It refuses a version that is malformed or already
-tagged, runs the suite before anything is tagged, rewrites `VERSION` in `cgbuy`,
-commits, tags, builds both platforms, checks each binary reports the version it
-claims, publishes, and then scans the published files on VirusTotal — appending
-counts, hashes and flagging engine names to the release notes and refreshing the
-badge on `main`.
+tagged, runs the suite before anything is tagged, rewrites `VERSION` in
+`version.py`, commits, tags, builds both platforms, checks each binary reports
+the version it claims, publishes, and then scans the published files on
+VirusTotal — appending counts, hashes and flagging engine names to the release
+notes and refreshing the badge on `main`.
 
 The VirusTotal step needs the `VT_API_KEY` secret and never fails a release:
 the binaries are already out, and VirusTotal being slow is not a broken build.

@@ -19,10 +19,11 @@ import os
 import urllib.error
 import urllib.request
 
+from version import VERSION    # EDDN records this as softwareVersion
+
 EDDN_URL = "https://eddn.edcd.io:4430/upload/"
 SCHEMA = "https://eddn.edcd.io/schemas/commodity/3"
 SOFTWARE = "cgbuy"
-VERSION = "2.0"
 
 # Limpets/drones are not tradeable market goods and must not be sent.
 NON_MARKET_NAMES = {"drones"}

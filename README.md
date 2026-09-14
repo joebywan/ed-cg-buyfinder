@@ -354,6 +354,31 @@ against the schema before sending, and each market snapshot is sent at most once
 Everything this tool reads came from someone else doing this, which is the
 argument for turning it on.
 
+## Update check
+
+**Off by default, opt-in in Settings** (*Check for a new version at startup*).
+When on, the app asks GitHub once as it opens what the latest release is. If
+that is newer than what you are running, a line appears in the status bar —
+
+> New version 1.7 available
+
+— and clicking it opens the releases page in your browser. That is the entire
+feature. It is not an updater: nothing is downloaded, nothing is replaced, and
+the app never opens a browser on its own. The Windows build scans clean
+precisely because nothing in it fetches or runs code, and that is not being
+traded away for convenience.
+
+One request per run, no polling, and nothing about you is sent — it is a plain
+`GET` of the public releases endpoint, with the same User-Agent every other
+call uses. If it fails for any reason at all — offline, blocked, rate-limited,
+GitHub having a bad day — it says nothing rather than reporting an error at
+you. There is no second prompt and nothing to dismiss: the line is either
+there or it is not.
+
+Running from source? The notice still appears, and `git pull` is your update.
+The rolling [snapshot](#install) build is a pre-release, so it is never
+offered as an update to anyone.
+
 ## Limitations
 
 - **Trip times are estimates.** Even calibrated, they are medians of your past

@@ -37,8 +37,9 @@ import time
 import urllib.error
 import urllib.request
 
+from version import AGENT      # one place; see version.py
+
 FRONTIER_URL = "https://api.orerve.net/2.0/website/initiatives/list?lang=en"
-AGENT = "cgbuy/2.0 (personal ED trade helper)"
 
 # Percentile bands, best first. 100 means "top 100%", i.e. everyone.
 # There is no 10 here: PlayerPercentileBand tops out at 25, and the rung
