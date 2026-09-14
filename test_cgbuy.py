@@ -881,6 +881,63 @@ class TestBuildMixed(unittest.TestCase):
 
 
 # --------------------------------------------------------------------------
+# cgbuy.mixed_sort_value - the mixed-load table's column sort
+# --------------------------------------------------------------------------
+
+class TestMixedSortValue(unittest.TestCase):
+
+    def plans(self):
+        rows = [row("Gold", "beta dock", "Zeta", 500, 600, ly=30.0, ls=900,
+                    updated="2024-12-01", minutes=50.0),
+                row("Gold", "Alpha Hub", "Yankee", 500, 1000, ly=5.0, ls=12,
+                    updated="2025-01-02", minutes=20.0)]
+        return cgbuy.build_mixed(rows, hold=100)
+
+    def order(self, key, desc=True):
+        ps = sorted(self.plans(),
+                    key=lambda p: cgbuy.mixed_sort_value(p, key), reverse=desc)
+        return [p["station"] for p in ps]
+
+    def test_credits_per_minute_is_the_default_order(self):
+        self.assertEqual([p["station"] for p in self.plans()],
+                         ["Alpha Hub", "beta dock"])
+        self.assertEqual(self.order("cr_per_min"), ["Alpha Hub", "beta dock"])
+
+    def test_numeric_columns_sort_by_value_not_by_text(self):
+        self.assertEqual(self.order("ly", desc=False), ["Alpha Hub",
+                                                        "beta dock"])
+        self.assertEqual(self.order("ls"), ["beta dock", "Alpha Hub"])
+
+    def test_names_sort_case_insensitively(self):
+        # "beta dock" would beat "Alpha Hub" under a raw string compare,
+        # because every lowercase letter sorts after every uppercase one.
+        self.assertEqual(self.order("station", desc=False),
+                         ["Alpha Hub", "beta dock"])
+        self.assertEqual(self.order("system", desc=False),
+                         ["Alpha Hub", "beta dock"])   # Yankee, then Zeta
+
+    def test_newest_data_first_when_sorting_by_date_descending(self):
+        self.assertEqual(self.order("updated"), ["Alpha Hub", "beta dock"])
+
+    def test_a_missing_value_does_not_break_the_comparison(self):
+        plans = self.plans() + [{"station": None, "system": None,
+                                 "updated": None, "ls": None}]
+        for key in cgbuy.App.MIXED_SORTABLE:
+            with self.subTest(key=key):
+                sorted(plans, key=lambda p: cgbuy.mixed_sort_value(p, key),
+                       reverse=True)
+
+    def test_every_sortable_column_is_a_column_of_the_table(self):
+        keys = {k for k, _lbl, _w, _a in cgbuy.App.MIXED_COLS}
+        self.assertTrue(set(cgbuy.App.MIXED_SORTABLE) <= keys)
+
+    def test_every_sortable_column_is_a_field_of_a_plan(self):
+        plan = self.plans()[0]
+        for key in cgbuy.App.MIXED_SORTABLE:
+            self.assertIn(key, plan)
+
+
+# --------------------------------------------------------------------------
 # cgbuy.derive_commodities
 # --------------------------------------------------------------------------
 

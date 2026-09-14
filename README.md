@@ -69,8 +69,9 @@ The **best mixed loads** view groups by station and shows what to buy there.
 A station's most profitable commodity is often capped below your hold, so it
 tops up with that station's next best — no extra travel, more credits.
 
-Expand a row for the per-commodity breakdown, or switch to **all sources** for
-the flat sortable table:
+Expand a row for the per-commodity breakdown. Both views sort on any column
+header — click once for high-to-low, again to reverse it. Or switch to
+**all sources** for the flat one-row-per-commodity table:
 
 ![All sources](screenshots/02-all-sources.png)
 
@@ -138,12 +139,15 @@ carriers are excluded unless you tick the box.
 
 ## The two views
 
-**BEST MIXED LOADS** — one expandable row per station, ranked by cr/min. The
-parent row is the station, system, distance, arrival Ls, data age, and the total
-tonnes the station can actually fill (with `Nt short` if it cannot fill the
-hold). Expanding shows each commodity in the mix with its buy price, tonnes, and
-profit per tonne. `VALUE` is tonnes × profit/t; `CR/MIN` is the whole plan's
-value over the trip estimate. Top 40 stations, first five expanded.
+**BEST MIXED LOADS** — one expandable row per station, ranked by cr/min until
+you click another header. The station row carries `SYSTEM`, `LY`, `LS`, `DATA`,
+the `TONNES` the station can actually fill and the `SHORT` it cannot, then the
+plan's `VALUE` (tonnes × profit/t, summed) and `CR/MIN` (that value over the
+trip estimate). Expanding it shows each commodity in the mix under `TONNES`,
+`BUY` and `PROFIT/T`. `BUY` and `PROFIT/T` belong to those commodities rather
+than to the station, so those two headers do not sort; every other one does.
+Whatever the order, the best cr/min plan keeps its highlight, so re-sorting
+never loses it. Top 40 stations, first five expanded.
 
 **ALL SOURCES** — one row per commodity-at-station, click any header to sort.
 

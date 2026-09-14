@@ -463,6 +463,21 @@ def build_mixed(rows, hold):
     return plans
 
 
+def mixed_sort_value(plan, key):
+    """Sort value for one station row of the mixed-load table.
+
+    Names compare case-insensitively, so Aitken sorts next to aitken rather
+    than ahead of every lowercase name. A missing date or number becomes an
+    empty string or zero: a market with no reported date should sort last,
+    not take the whole comparison down with a TypeError.
+    """
+    v = plan.get(key)
+    if key in ("station", "system"):
+        return (v or "").lower()
+    if key == "updated":
+        return v or ""
+    return v or 0
+
 
 # --------------------------------------------------------------------------
 # desktop UI
@@ -693,6 +708,20 @@ class App:
         ("updated", "DATA", 78, "e"), ("src", "SRC", 52, "e"),
     ]
 
+    MIXED_COLS = [
+        ("station", "STATION / LOAD", 300, "w"),
+        ("system", "SYSTEM", 190, "w"), ("ly", "LY", 56, "e"),
+        ("ls", "LS", 78, "e"), ("updated", "DATA", 78, "e"),
+        ("tonnes", "TONNES", 90, "e"), ("short", "SHORT", 70, "e"),
+        ("buy", "BUY", 90, "e"), ("profit_per_t", "PROFIT/T", 100, "e"),
+        ("total", "VALUE", 140, "e"), ("cr_per_min", "CR/MIN", 120, "e"),
+    ]
+    # BUY and PROFIT/T belong to the commodities inside a load, not to the
+    # station row, so sorting stations by them would order the table on
+    # numbers that are not in the rows being moved.
+    MIXED_SORTABLE = ("station", "system", "ly", "ls", "updated", "tonnes",
+                      "short", "total", "cr_per_min")
+
     def __init__(self, root, autosearch=True):
         global FONT_FAMILY
         FONT_FAMILY = pick_font_family()
@@ -731,6 +760,8 @@ class App:
         self.q = queue.Queue()
         self.sort_key = "cr_per_min"
         self.sort_desc = True
+        self.mixed_sort_key = "cr_per_min"
+        self.mixed_sort_desc = True
         self.busy = False
 
         self._update_title()
@@ -1052,16 +1083,14 @@ class App:
 
         f1 = ttk.Frame(nb, padding=(0, 6, 0, 0))
         nb.add(f1, text="BEST MIXED LOADS")
-        mcols = [("a", "STATION / LOAD", 300, "w"), ("b", "DETAIL", 460, "w"),
-                 ("c", "TONNES", 90, "e"), ("d", "PROFIT/T", 110, "e"),
-                 ("e", "VALUE", 140, "e"), ("f", "CR/MIN", 120, "e")]
-        self.MIXED_COLS = mcols
-        self.t_mixed = self._tree(f1, mcols, "tree headings")
+        self.t_mixed = self._tree(f1, self.MIXED_COLS, "tree headings")
         self.t_mixed.column("#0", width=26, stretch=False)
-        for k, lbl, w, anc in mcols:
-            self.t_mixed.heading(k, text=lbl, anchor=anc)
+        for k, lbl, w, anc in self.MIXED_COLS:
+            cmd = ({"command": (lambda c=k: self._sort_mixed(c))}
+                   if k in self.MIXED_SORTABLE else {})
+            self.t_mixed.heading(k, text=lbl, anchor=anc, **cmd)
             self.t_mixed.column(k, width=w, anchor=anc,
-                                stretch=(k in ("a", "b")))
+                                stretch=(k in ("station", "system")))
 
         f2 = ttk.Frame(nb, padding=(0, 6, 0, 0))
         nb.add(f2, text="ALL SOURCES")
@@ -2459,27 +2488,42 @@ class App:
         t = self.t_mixed
         t.delete(*t.get_children())
         self._forget_rows(t)
-        for i, p in enumerate(self.data["mixed"][:40]):
+        plans = self.data["mixed"]
+        # build_mixed ranks by cr/min, so the best plan is the first one -
+        # keep the highlight on it whatever the table is sorted by.
+        best = plans[0] if plans else None
+        k, desc = self.mixed_sort_key, self.mixed_sort_desc
+        for key, lbl, _w, _a in self.MIXED_COLS:
+            arrow = ("  v" if desc else "  ^") if key == k else ""
+            t.heading(key, text=lbl + arrow)
+        plans = sorted(plans, key=lambda p: mixed_sort_value(p, k),
+                       reverse=desc)[:40]
+        for i, p in enumerate(plans):
             carrier = "  [CARRIER]" if p["carrier"] else ""
-            short = ("  -  %dt short" % p["short"]) if p["short"] else ""
             parent = t.insert(
                 "", "end", open=(i < 5),
                 values=("%d. %s%s" % (i + 1, p["station"], carrier),
-                        "%s  -  %.1f ly  -  %s Ls  -  data %s%s"
-                        % (p["system"], p["ly"], f"{p['ls']:,}",
-                           age_text(p["updated"]), short),
-                        "%st" % f"{p['tonnes']:,}", "",
-                        f"{p['total']:,}", f"{p['cr_per_min']:,}"),
-                tags=("head",) if i else ("head", "top"))
+                        p["system"], "%.1f" % p["ly"], f"{p['ls']:,}",
+                        age_text(p["updated"]), "%st" % f"{p['tonnes']:,}",
+                        ("%st" % f"{p['short']:,}") if p["short"] else "",
+                        "", "", f"{p['total']:,}", f"{p['cr_per_min']:,}"),
+                tags=("head", "top") if p is best else ("head",))
             self._remember(t, parent, p["system"])
             for m in p["mix"]:
                 child = t.insert(parent, "end", values=(
-                    "      %s" % m["commodity"],
-                    "buy %s" % f"{m['buy']:,}",
-                    "%st" % f"{m['tonnes']:,}",
+                    "      %s" % m["commodity"], "", "", "", "",
+                    "%st" % f"{m['tonnes']:,}", "", f"{m['buy']:,}",
                     "+%s" % f"{m['profit_per_t']:,}",
                     f"{m['value']:,}", ""), tags=("child",))
                 self._remember(t, child, p["system"])
+
+    def _sort_mixed(self, col):
+        if self.mixed_sort_key == col:
+            self.mixed_sort_desc = not self.mixed_sort_desc
+        else:
+            self.mixed_sort_key, self.mixed_sort_desc = col, True
+        if self.data:
+            self._fill_mixed()
 
     def _sort_by(self, col):
         if self.sort_key == col:
