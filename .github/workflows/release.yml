@@ -75,11 +75,13 @@ jobs:
       matrix:
         include:
           - os: ubuntu-latest
-            artifact: cgbuy-linux
+            # The version goes in the filename so a download never lands as
+            # cgbuy-linux(1); suffix is the invariant half of that name.
+            suffix: linux
             built: dist/cgbuy
             icon: ""
           - os: windows-latest
-            artifact: cgbuy-windows.exe
+            suffix: windows.exe
             built: dist/cgbuy.exe
             icon: "icon.ico"
     runs-on: ${{ matrix.os }}
@@ -123,13 +125,23 @@ jobs:
           echo "$OUT"
           echo "$OUT" | grep -q "${{ needs.tag.outputs.version }}" \
             || { echo "::error::binary reports '$OUT', expected ${{ needs.tag.outputs.version }}"; exit 1; }
-      - name: Rename
+      - name: Name the binary after the release
         shell: bash
-        run: mv "${{ matrix.built }}" "${{ matrix.artifact }}"
+        run: mv "${{ matrix.built }}" "cgbuy-v${{ needs.tag.outputs.version }}-${{ matrix.suffix }}"
+      # A GitHub release asset carries no POSIX mode: the execute bit is lost
+      # on upload and again on download, so the raw binary always needs a
+      # chmod. tar does store the mode, so ship a tarball as well and the
+      # extracted binary is runnable straight away.
+      - name: Tarball the Linux binary, execute bit intact
+        if: runner.os == 'Linux'
+        run: |
+          BIN="cgbuy-v${{ needs.tag.outputs.version }}-linux"
+          chmod +x "$BIN"
+          tar -czf "$BIN.tar.gz" "$BIN"
       - uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.artifact }}
-          path: ${{ matrix.artifact }}
+          name: cgbuy-v${{ needs.tag.outputs.version }}-${{ matrix.suffix }}
+          path: cgbuy-v${{ needs.tag.outputs.version }}-${{ matrix.suffix }}*
 
   publish:
     needs: [tag, build]
@@ -145,8 +157,9 @@ jobs:
           body: |
             ${{ inputs.notes }}
 
-            * `cgbuy-linux` — Linux x86-64
-            * `cgbuy-windows.exe` — Windows x86-64
+            * `cgbuy-v${{ needs.tag.outputs.version }}-linux.tar.gz` — Linux x86-64, extracts ready to run
+            * `cgbuy-v${{ needs.tag.outputs.version }}-linux` — the same binary, unpacked (needs `chmod +x`)
+            * `cgbuy-v${{ needs.tag.outputs.version }}-windows.exe` — Windows x86-64
 
             Neither binary is signed and neither will be; Windows SmartScreen
             will warn on first run. Some antivirus engines flag PyInstaller
@@ -154,8 +167,9 @@ jobs:
             [Antivirus false positives](../../#antivirus-false-positives),
             or run from source: `python cgbuy`.
           files: |
-            cgbuy-linux
-            cgbuy-windows.exe
+            cgbuy-v${{ needs.tag.outputs.version }}-linux
+            cgbuy-v${{ needs.tag.outputs.version }}-linux.tar.gz
+            cgbuy-v${{ needs.tag.outputs.version }}-windows.exe
 
   virustotal:
     # Scans what was actually published and appends the verdict to the release,
@@ -178,7 +192,10 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           TAG: v${{ needs.tag.outputs.version }}
         run: |
-          SUMMARY=$(python3 .github/scripts/vt_scan.py --badge=.github/badges/virustotal.json cgbuy-windows.exe cgbuy-linux)
+          V="${{ needs.tag.outputs.version }}"
+          # The tarball is the same bytes as the loose binary, so scanning it
+          # too would only spend quota on a duplicate verdict.
+          SUMMARY=$(python3 .github/scripts/vt_scan.py --badge=.github/badges/virustotal.json "cgbuy-v$V-windows.exe" "cgbuy-v$V-linux")
           # Empty means no VT_API_KEY configured; nothing to append.
           [ -n "$SUMMARY" ] || exit 0
           gh release view "$TAG" --json body --jq .body > body.md

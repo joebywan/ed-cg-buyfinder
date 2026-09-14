@@ -29,8 +29,16 @@ current in place.
 | [Latest release](https://github.com/joebywan/ed-cg-buyfinder/releases/latest) | stable, version-tagged |
 | [Snapshot](https://github.com/joebywan/ed-cg-buyfinder/releases/tag/snapshot) | rebuilt on every push to `main` |
 
-Take `cgbuy-linux` or `cgbuy-windows.exe`. On Linux, `chmod +x cgbuy-linux`
-first. Neither is code-signed, so Windows SmartScreen will warn on first run
+Every asset carries its version — `cgbuy-v1.4-linux`, `cgbuy-v1.4-windows.exe`
+and so on — so a second download never lands as `cgbuy-linux(1)`. On Windows,
+take the `.exe`.
+
+On Linux, take the `.tar.gz` and `tar -xzf cgbuy-v*-linux.tar.gz` — the binary
+comes out executable. The loose binary next to it is the same thing
+without the wrapper, and a plain download of that one needs `chmod +x` first,
+because a GitHub release asset cannot record the execute bit.
+
+Neither binary is code-signed, so Windows SmartScreen will warn on first run
 ("More info" → "Run anyway"). Some antivirus engines, currently including
 Microsoft Defender, flag the Windows build — see
 [Antivirus false positives](#antivirus-false-positives).
@@ -289,7 +297,7 @@ argument for turning it on.
   fast during a CG, and a station showing 40,000t three weeks ago may be empty.
   Watch the DATA column; it is coloured for exactly this reason.
 - **Fleet carriers move and reprice.** Off by default for that reason.
-- **`cgbuy-linux` is glibc-specific** and is built on a current Ubuntu runner,
+- **The Linux binary is glibc-specific** and is built on a current Ubuntu runner,
   so it may not start on an older distro. Run from source or build it locally
   if so.
 - **No macOS binary.** The code runs there from source; nothing builds one.
@@ -313,7 +321,7 @@ Beyond those paths, the only platform-specific code is
 ## Antivirus false positives
 
 A handful of engines flag the Windows binary; the Linux one scans clean. At
-v1.3, VirusTotal put `cgbuy-windows.exe` at 14/75 — the badge above and each
+v1.3, VirusTotal put the Windows build at 14/75 — the badge above and each
 release's notes carry the current count and the names of the flagging engines.
 Several of those (eScan, GData, Emsisoft, Arcabit, VIPRE, ALYac) license
 BitDefender's engine, so one verdict appears under several names. Kaspersky,
@@ -336,8 +344,8 @@ If you would rather not take that on trust:
 
 - **Run from source** — `python cgbuy`. No binary, no packaging, and the source
   is all in this repository.
-- **Check the hash.** `Get-FileHash cgbuy-windows.exe` on Windows, `sha256sum`
-  elsewhere, against the file on the Releases page.
+- **Check the hash.** `Get-FileHash` on Windows, `sha256sum` elsewhere,
+  against the file on the Releases page.
 - **Read the sandbox report** rather than the score. The relevant question is
   what it did: contacted hosts, files written, processes spawned.
 

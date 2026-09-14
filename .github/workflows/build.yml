@@ -31,11 +31,14 @@ jobs:
       matrix:
         include:
           - os: ubuntu-latest
-            artifact: cgbuy-linux
+            # The snapshot tag is reused on every push, so its assets carry the
+            # commit instead of a version: downloading two of them in a row
+            # gives two distinct files, not cgbuy-linux(1).
+            suffix: linux
             built: dist/cgbuy
             icon: ""
           - os: windows-latest
-            artifact: cgbuy-windows.exe
+            suffix: windows.exe
             built: dist/cgbuy.exe
             icon: "icon.ico"
     runs-on: ${{ matrix.os }}
@@ -82,13 +85,26 @@ jobs:
           OUT=$("${{ matrix.built }}" --version)
           echo "$OUT"
           [ -n "$OUT" ] || { echo "::error::--version printed nothing (windowed build has no stdout?)"; exit 1; }
+      - name: Name the binary after the commit
+        shell: bash
+        run: |
+          echo "ASSET=cgbuy-$(echo "${{ github.sha }}" | cut -c1-7)-${{ matrix.suffix }}" >> "$GITHUB_ENV"
       - name: Rename
         shell: bash
-        run: mv "${{ matrix.built }}" "${{ matrix.artifact }}"
+        run: mv "${{ matrix.built }}" "$ASSET"
+      # A GitHub release asset carries no POSIX mode: the execute bit is lost
+      # on upload and again on download, so the raw binary always needs a
+      # chmod. tar does store the mode, so ship a tarball as well and the
+      # extracted binary is runnable straight away.
+      - name: Tarball the Linux binary, execute bit intact
+        if: runner.os == 'Linux'
+        run: |
+          chmod +x "$ASSET"
+          tar -czf "$ASSET.tar.gz" "$ASSET"
       - uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.artifact }}
-          path: ${{ matrix.artifact }}
+          name: ${{ env.ASSET }}
+          path: ${{ env.ASSET }}*
 
   snapshot:
     # Every push to main refreshes a single rolling pre-release, so there is
@@ -104,6 +120,17 @@ jobs:
         run: |
           git tag -f snapshot
           git push -f origin snapshot
+      - name: Work out this commit's asset names
+        run: echo "SHORT=$(echo "${{ github.sha }}" | cut -c1-7)" >> "$GITHUB_ENV"
+      # The snapshot tag is reused but its asset names now change with every
+      # commit, so same-name replacement no longer clears the old build: strip
+      # the release back to empty first or the downloads list grows forever.
+      - name: Clear the previous snapshot's assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          names=$(gh release view snapshot --json assets --jq '.assets[].name' 2>/dev/null) || exit 0
+          for a in $names; do gh release delete-asset snapshot "$a" -y; done
       - uses: softprops/action-gh-release@v2
         with:
           tag_name: snapshot
@@ -114,8 +141,9 @@ jobs:
 
             Commit `${{ github.sha }}`
 
-            * `cgbuy-linux` — Linux x86-64
-            * `cgbuy-windows.exe` — Windows x86-64
+            * `cgbuy-${{ env.SHORT }}-linux.tar.gz` — Linux x86-64, extracts ready to run
+            * `cgbuy-${{ env.SHORT }}-linux` — the same binary, unpacked (needs `chmod +x`)
+            * `cgbuy-${{ env.SHORT }}-windows.exe` — Windows x86-64
 
             Neither binary is signed and neither will be; Windows SmartScreen
             will warn on first run. Some antivirus engines flag PyInstaller
@@ -123,5 +151,6 @@ jobs:
             [Antivirus false positives](../../#antivirus-false-positives),
             or run from source: `python cgbuy`.
           files: |
-            cgbuy-linux
-            cgbuy-windows.exe
+            cgbuy-${{ env.SHORT }}-linux
+            cgbuy-${{ env.SHORT }}-linux.tar.gz
+            cgbuy-${{ env.SHORT }}-windows.exe
