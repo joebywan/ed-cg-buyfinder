@@ -12,6 +12,7 @@ Standalone-testable:  python3 journal.py
 import calendar
 import glob
 import json
+import math
 import os
 import statistics
 import time
@@ -186,6 +187,76 @@ class Calibration:
             return None
         return statistics.median(ratios)
 
+    # An arrival leg is mostly fixed cost - drop, approach, request docking,
+    # land - with a travel term on top. One multiplier on a distance curve
+    # cannot fit both ends of that: on the journals this was written against,
+    # two stations 15x apart in arrival distance were 18% apart in time, and
+    # the single ratio that "fitted" them was 22% low at one and 57% high at
+    # the other. Fitting the constant and the travel term separately gets
+    # both, which matters because the destination's own arrival leg is paid
+    # on every single run.
+    ARRIVAL_MIN_SPREAD = 3.0        # furthest/nearest sampled Ls, to fit at all
+
+    @property
+    def arrival_fit(self):
+        """(a, b, lo, hi): arrival seconds as a + b * Ls**0.3, and the range
+        of arrival distances actually flown to learn it. None when the
+        samples cannot support a fit.
+
+        Bucketed by distance and fitted on the bucket medians, so a station
+        farmed for a hundred runs does not outvote one visited twice, and one
+        interdicted approach does not bend the line.
+        """
+        pool = self.approach_samples
+        if len(pool) < self.MIN_SAMPLES:
+            return None
+        buckets = {}
+        for ls, secs in pool:
+            # Half-decade buckets: near enough to the same station to share a
+            # median, far enough apart to be a different distance.
+            buckets.setdefault(round(math.log10(max(ls, 1)) * 2), []).append((ls, secs))
+        if len(buckets) < 2:
+            return None
+        pts = [(statistics.median(l for l, _s in g) ** 0.3,
+                statistics.median(s for _l, s in g)) for g in buckets.values()]
+        lo = min(ls for ls, _s in pool)
+        hi = max(ls for ls, _s in pool)
+        if lo <= 0 or hi / lo < self.ARRIVAL_MIN_SPREAD:
+            return None
+        n = len(pts)
+        mx = sum(x for x, _y in pts) / n
+        my = sum(y for _x, y in pts) / n
+        var = sum((x - mx) ** 2 for x, _y in pts)
+        if var <= 0:
+            return None
+        b = sum((x - mx) * (y - my) for x, y in pts) / var
+        # A negative travel term is noise, not a discount for flying further.
+        b = max(b, 0.0)
+        a = my - b * mx
+        if a < 0:
+            return None
+        return a, b, lo, hi
+
+    def arrival_minutes(self, ls):
+        """Measured arrival leg for a station this far out, in minutes, or
+        None when there is nothing measured to go on.
+
+        Inside the range actually flown this is measurement. Outside it the
+        fit is extended by the shape of the estimate curve rather than by its
+        own slope: samples from 350 and 5,000 Ls say nothing about what
+        40,000 Ls costs, and a straight line through them will cheerfully
+        claim it is quick.
+        """
+        fit = self.arrival_fit
+        if not fit:
+            return None
+        a, b, lo, hi = fit
+        anchor = min(max(float(ls), lo), hi)
+        secs = a + b * anchor ** 0.3
+        if abs(anchor - ls) > 1e-9:
+            secs += (est_sc_minutes(ls) - est_sc_minutes(anchor)) * 60.0
+        return max(secs, 0.0) / 60.0
+
     def add_sco_sample(self, ls, total_secs, sco_secs, lit_after, ship=None):
         """Record one approach and how the overcharge was used flying it."""
         self._add(self.sco_samples,
@@ -238,8 +309,13 @@ class Calibration:
         bits.append("station stop %s (not used: fixed 2 min turnaround)"
                     % ("%.1f min median" % d if d else "no samples"))
         n_sc = len(self.approach_samples)
-        bits.append("supercruise %s" % ("x%.2f (n=%d)" % (s, n_sc)
-                                        if s else "estimate (n=%d)" % n_sc))
+        fit = self.arrival_fit
+        if fit:
+            bits.append("arrival leg %.1f min + travel, %.0f-%.0f Ls (n=%d)"
+                        % (fit[0] / 60.0, fit[2], fit[3], n_sc))
+        else:
+            bits.append("supercruise %s" % ("x%.2f (n=%d)" % (s, n_sc)
+                                            if s else "estimate (n=%d)" % n_sc))
         return "  |  ".join(bits)
 
 

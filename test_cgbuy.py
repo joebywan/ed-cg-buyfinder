@@ -663,8 +663,9 @@ class TestTripMinutes(unittest.TestCase):
         return cgbuy.trip_minutes(dist, src_ls, cg_ls, empty, laden, cal)
 
     def test_uncalibrated_uses_the_shipped_estimates(self):
-        # 60 ly: ceil(60/30)=2 out, ceil(60/25)=3 back
-        expected = (5 * cgbuy.EST_JUMP_MIN
+        # 60 ly: ceil(60/30)=2 out, ceil(60/25)=3 back, and the first jump of
+        # each leg is already inside departure - so 1 + 2 jump cycles.
+        expected = (3 * cgbuy.EST_JUMP_MIN
                     + (cgbuy.sc_minutes(1000) + cgbuy.sc_minutes(500))
                     * cgbuy.EST_SC_SCALE
                     + (cgbuy.EST_DOCK_MIN + cgbuy.EST_DEPART_MIN) * 2)
@@ -673,7 +674,7 @@ class TestTripMinutes(unittest.TestCase):
     def test_calibrated_jump_time_is_used_when_supplied(self):
         cal = journal.Calibration({"jump_secs": [120.0] * 3})   # 2.0 min/jump
         self.assertAlmostEqual(cal.jump_minutes, 2.0)
-        expected = (5 * 2.0
+        expected = (3 * 2.0
                     + (cgbuy.sc_minutes(1000) + cgbuy.sc_minutes(500))
                     + (cgbuy.EST_DOCK_MIN + cgbuy.EST_DEPART_MIN) * 2)
         self.assertAlmostEqual(self.trip(cal=cal), expected)
@@ -697,6 +698,70 @@ class TestTripMinutes(unittest.TestCase):
         self.assertAlmostEqual(self.trip(cal=cal), self.trip(),
                                msg="dock samples must not move the estimate")
         self.assertAlmostEqual(cgbuy.EST_DOCK_MIN, 2.0)
+
+    def test_a_measured_arrival_leg_beats_the_curve(self):
+        """Samples at one distance cannot support a fit, so the ratio stands
+        in; samples at two distances can, and then the fit is what counts."""
+        far = journal.est_sc_minutes(5000) * 60.0
+        one_place = journal.Calibration(
+            {"approach_samples": [(5000, far * 2.0)] * 3})
+        self.assertIsNone(one_place.arrival_fit)
+        self.assertAlmostEqual(one_place.sc_scale, 2.0)
+
+        two_places = journal.Calibration(
+            {"approach_samples": [(350, 208.0)] * 3 + [(5000, 245.0)] * 3})
+        self.assertIsNotNone(two_places.arrival_fit)
+        for ls, secs in ((350, 208.0), (5000, 245.0)):
+            self.assertAlmostEqual(two_places.arrival_minutes(ls), secs / 60.0,
+                                   places=2)
+
+    def test_the_curve_cannot_fit_both_ends_at_once(self):
+        """The whole reason for the fit. 350 Ls and 5,000 Ls really do cost
+        about the same, and no single multiplier on a distance curve can say
+        so: whatever fits one end is wrong at the other."""
+        cal = journal.Calibration(
+            {"approach_samples": [(350, 208.0)] * 3 + [(5000, 245.0)] * 3})
+        ratio = cal.sc_scale
+        for ls, secs in ((350, 208.0), (5000, 245.0)):
+            scaled = journal.est_sc_minutes(ls) * 60.0 * ratio
+            self.assertGreater(abs(scaled - secs) / secs, 0.15)
+            fitted = cal.arrival_minutes(ls) * 60.0
+            self.assertLess(abs(fitted - secs) / secs, 0.02)
+
+    def test_outside_the_range_flown_the_fit_is_not_extrapolated(self):
+        """Two clusters say nothing about 40,000 Ls. Past the last one flown
+        the estimate curve's own shape takes over, so a shallow fit cannot
+        claim a deep-space station is quick to reach."""
+        cal = journal.Calibration(
+            {"approach_samples": [(350, 208.0)] * 3 + [(5000, 245.0)] * 3})
+        a, b, lo, hi = cal.arrival_fit
+        straight_line = (a + b * 40000 ** 0.3) / 60.0
+        self.assertGreater(cal.arrival_minutes(40000), straight_line)
+        # and it still grows with distance, in both directions
+        self.assertLess(cal.arrival_minutes(10), cal.arrival_minutes(350))
+        self.assertLess(cal.arrival_minutes(5000), cal.arrival_minutes(40000))
+
+    def test_a_fit_needs_distances_that_are_actually_different(self):
+        near = [(350, 208.0)] * 3 + [(360, 210.0)] * 3
+        self.assertIsNone(journal.Calibration(
+            {"approach_samples": near}).arrival_fit)
+
+    def test_one_farmed_station_does_not_outvote_a_rare_one(self):
+        """Bucket medians, not raw samples: a hundred runs to the same pad
+        would otherwise drag the line onto that one distance."""
+        lopsided = [(350, 208.0)] * 100 + [(5000, 245.0)] * 3
+        cal = journal.Calibration({"approach_samples": lopsided})
+        self.assertAlmostEqual(cal.arrival_minutes(5000), 245.0 / 60.0, places=2)
+
+    def test_flying_further_is_never_priced_as_a_discount(self):
+        """A negative travel term is noise. It must not make distance free."""
+        backwards = [(350, 300.0)] * 3 + [(5000, 200.0)] * 3
+        cal = journal.Calibration({"approach_samples": backwards})
+        fit = cal.arrival_fit
+        if fit:
+            self.assertGreaterEqual(fit[1], 0.0)
+            self.assertLessEqual(cal.arrival_minutes(350),
+                                 cal.arrival_minutes(5000))
 
     def test_calibrated_sc_scale_is_applied(self):
         ls = 1000
@@ -740,10 +805,14 @@ class TestTripMinutes(unittest.TestCase):
                 self.assertGreater(self.trip(**kw), 0)
         self.assertGreaterEqual(self.trip(dist=0.0, src_ls=0, cg_ls=0), 0.5)
 
-    def test_zero_distance_costs_no_jumps(self):
-        no_jumps = self.trip(dist=0.0)
-        one_jump_each_way = self.trip(dist=1.0)
-        self.assertLess(no_jumps, one_jump_each_way)
+    def test_the_first_jump_of_a_leg_is_already_paid_for_in_departure(self):
+        """Jump time is measured FSDJump -> FSDJump, so it prices the jumps
+        after the first: the first one's cost lives in departure (Undocked ->
+        first FSDJump) and the arrival leg (FSDJump -> Docked). Charging all
+        of them made every single-jump hop a minute a leg too slow."""
+        self.assertAlmostEqual(self.trip(dist=0.0), self.trip(dist=1.0))
+        # 31 ly is two jumps each way, so one cycle each way is real
+        self.assertLess(self.trip(dist=1.0), self.trip(dist=31.0))
 
     def test_sc_minutes_is_monotonic_and_positive(self):
         self.assertGreater(cgbuy.sc_minutes(0), 0)

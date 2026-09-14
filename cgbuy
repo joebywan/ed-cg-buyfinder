@@ -285,10 +285,22 @@ def trip_minutes(dist_ly, src_ls, cg_ls, jump_empty, jump_laden, cal=None):
                   else EST_DEPART_MIN)
     sc_scale = (cal.sc_scale if cal and cal.sc_scale else EST_SC_SCALE)
 
+    def arrival(ls):
+        """Measured if the commander has flown legs like this, modelled if
+        not. The measurement knows about supercruise overcharge and their own
+        approach habits; the curve knows only the distance."""
+        measured = cal.arrival_minutes(ls) if cal else None
+        return measured if measured is not None else sc_minutes(ls) * sc_scale
+
     out_j = math.ceil(dist_ly / jump_empty) if dist_ly > 0 else 0
     back_j = math.ceil(dist_ly / jump_laden) if dist_ly > 0 else 0
-    jumps = (out_j + back_j) * jump_min
-    legs = (sc_minutes(src_ls) + sc_minutes(cg_ls)) * sc_scale
+    # Jump time is measured FSDJump -> FSDJump, so it prices the jumps after
+    # the first one. The first is already inside departure (Undocked -> first
+    # FSDJump) and the last system's flying is inside the arrival leg
+    # (FSDJump -> Docked). Charging all N left a single-jump hop paying for a
+    # jump cycle that never happens - a minute per leg, on every row.
+    jumps = (max(out_j - 1, 0) + max(back_j - 1, 0)) * jump_min
+    legs = arrival(src_ls) + arrival(cg_ls)
     # Two of each per round trip: leave the destination, arrive at the
     # source, leave the source, arrive back. Departure was previously counted
     # nowhere - jump time is measured jump-to-jump, so the run out from the

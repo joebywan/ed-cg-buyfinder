@@ -257,11 +257,13 @@ tails your Elite journals and replaces those guesses with what actually happens
 to you:
 
 - **jump cycle** — FSDJump to FSDJump, counted only when 15–300s apart, so a stop
-  mid-route is not charged as jump time
+  mid-route is not charged as jump time. It prices the jumps *after* the first:
+  the first one's cost is already inside departure and the arrival leg, so a
+  route of N jumps is charged N−1 cycles
 - **departure** — Undocked to the first FSDJump: launch, clear mass lock, align,
   charge
 - **arrival leg** — FSDJump to Docked, i.e. supercruise plus approach plus
-  docking, paired with the station's arrival Ls to scale the supercruise curve
+  docking, paired with the station's arrival Ls
 
 **Station time is not calibrated.** Docked to Undocked cannot tell trading apart
 from making a cup of tea, so the trip model uses a fixed 2-minute turnaround.
@@ -272,6 +274,23 @@ value is a median, so one 500,000 Ls outlier cannot swing it. Until then the
 estimate stands, and the status bar says `estimate (n=…)`. On first run it
 back-fills from your last six journal files. It keeps the most recent 200
 samples of each kind in the config.
+
+**The arrival leg is fitted, not scaled.** Most of a leg is fixed cost — drop,
+approach, request docking, land — with travel on top, so one multiplier on a
+distance curve cannot fit both ends. On the journals this was written against,
+two stations 15× apart in arrival distance were 18% apart in time, and the
+single ratio that "fitted" them ran 22% fast at one and 57% slow at the other.
+Once you have flown legs at arrival distances at least 3× apart, the fixed cost
+and the travel term are fitted separately, on bucket medians so a station farmed
+for a hundred runs cannot outvote one visited twice. Beyond the range you have
+actually flown the estimate curve's shape takes over again — two clusters of
+samples say nothing about what 40,000 Ls costs, and a straight line through them
+would cheerfully claim it is quick. Below 3× spread, the old ratio stands in.
+
+This matters more than it sounds: the destination's own arrival leg is paid on
+every run, and because the error ran the wrong way at each end it was not a flat
+offset — distant sources were being pushed down the rankings and near ones
+pulled up.
 
 Docking at the destination station triggers an automatic re-search — the run
 just ended, so the next one gets fresh data.
