@@ -64,11 +64,13 @@ Python from python.org already includes it. It needs a desktop session and
 exits with a clear message if there is no display. The file has no `.py`
 extension, so on Windows run it through `python` rather than double-clicking.
 
-Building your own binary: `./build.sh` on Linux, `build.bat` on Windows. Each
-creates a `.venv`, installs PyInstaller into it (the only step that needs
-network) and produces a single file with Python bundled. PyInstaller cannot
-cross-compile, so each has to be built on the OS it targets — which is what
-the CI matrix does.
+Building your own: `./build.sh` on Linux, `build.bat` on Windows. Each creates
+a `.venv` and installs its packager into it — the only step that needs network.
+Linux uses PyInstaller and produces the single `cgbuy-linux` file; Windows uses
+Nuitka and produces a `cgbuy-windows` folder, for the reasons under
+[Antivirus false positives](#antivirus-false-positives). Neither packager can
+cross-compile, so each has to be built on the OS it targets, which is why CI
+runs a separate job per platform.
 
 ## What you are looking at
 
@@ -385,25 +387,39 @@ modules to a temporary directory and executes from there. A high-entropy blob
 glued to an unsigned executable that then self-extracts and runs is, to a
 heuristic, indistinguishable from a dropper.
 
-Three builds from one commit, scanned minutes apart, isolate the variable:
+Four builds from one commit, scanned minutes apart, isolate the variable.
+The exe column is what an on-disk scan sees; the zip column is what people
+actually download:
 
-| Build | Detections |
-|---|---|
-| PyInstaller one-file | 7/75 |
-| Nuitka one-file | 15/75 |
-| Nuitka standalone folder | 0/75 |
+| Build | Layout | Zip | Exe |
+|---|---|---|---|
+| PyInstaller one-file *(shipped up to v1.4)* | one file | — | 7/75 |
+| Nuitka one-file | one file | — | 15/75 |
+| PyInstaller `--onedir` | exe + `_internal/` | 1/74 | 5/75 |
+| **Nuitka standalone** *(shipped from v1.5)* | flat folder | **0/73** | **0/75** |
 
-The complete Windows zip, DLLs and all, scans clean too, not just the exe
-inside it.
+Denominators vary because VirusTotal does not run the same number of engines on
+every submission; the counts above are from that one experiment, while the
+badge and each release's notes carry the figures for what actually shipped.
 
 Compiling to C rather than bundling an interpreter made it *worse*, because
 Nuitka's one-file mode extracts at startup too. It is the extraction step the
-engines score, not the language, and not the code. Removing it — shipping a
-folder — cleared every detection including Defender's. The same reasoning is
-why there is no Go rewrite: Go would land near zero for exactly this reason,
-and so does the Python, at the price of a build flag rather than 4,400 lines.
+engines score, not the language, and not the code.
 
-If you would rather not take that on trust:
+`--onedir` is worth singling out because it is the tidier shape — the exe alone
+at the top with everything under `_internal/` — and it was rejected on the
+numbers rather than on taste. Dropping the self-extraction got it most of the
+way, Microsoft Defender included, but PyInstaller's bootloader is itself scored
+and five engines still flagged it. Nuitka's standalone output is a flat
+directory with no way to nest the DLLs, so the cost of zero detections is
+about two dozen support files sitting next to `cgbuy.exe`. That trade was made
+deliberately.
+
+The same reasoning is why there is no Go rewrite: Go would land near zero for
+exactly this reason — a static binary with nothing to unpack — and so does the
+Python, at the price of a build flag rather than 4,400 lines and a new GUI
+toolkit.
+
 If you would rather not take that on trust:
 
 - **Run from source** — `python cgbuy`. No binary, no packaging, and the source
