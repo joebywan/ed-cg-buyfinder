@@ -1990,9 +1990,41 @@ def cg_sample(contribution, band, when="2025-01-01T12:00:00Z", **kw):
          "station": "Metz Enterprise", "system": "Ega", "expiry": None,
          "contribution": contribution, "band": band, "total": 1000000,
          "contributors": 5000, "tier": 4, "top_tier": "Tier 8", "bonus": 0,
-         "in_top_rank": False}
+         "in_top_rank": False, "top_rank_size": 10}
     h.update(kw)
     return h
+
+
+class TestReadHistory(unittest.TestCase):
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(prefix="cgbuy-test-cg-")
+        self.addCleanup(self.tmp.cleanup)
+
+    def write(self, *goals):
+        path = os.path.join(self.tmp.name, "Journal.2025-01-01T120000.01.log")
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write(json.dumps({"timestamp": "2025-01-01T12:00:00Z",
+                                 "event": "CommunityGoal",
+                                 "CurrentGoals": list(goals)}) + "\n")
+
+    def test_the_top_rank_fields_are_read(self):
+        self.write({"CGID": 859, "Title": "Wreaken", "SystemName": "Ega",
+                    "MarketName": "Metz Enterprise",
+                    "PlayerContribution": 19363, "PlayerPercentileBand": 25,
+                    "TopRankSize": 10, "PlayerInTopRank": False})
+        h = cg.read_history(self.tmp.name)
+        self.assertEqual(len(h), 1)
+        self.assertEqual(h[0]["band"], 25)
+        self.assertEqual(h[0]["top_rank_size"], 10)
+        self.assertIs(h[0]["in_top_rank"], False)
+
+    def test_a_goal_without_a_top_rank_reads_as_none(self):
+        self.write({"CGID": 1, "Title": "No rank", "PlayerContribution": 5,
+                    "PlayerPercentileBand": 50})
+        h = cg.read_history(self.tmp.name)
+        self.assertIsNone(h[0]["top_rank_size"])
+        self.assertIsNone(h[0]["in_top_rank"])
 
 
 class TestBandBrackets(unittest.TestCase):
@@ -2299,13 +2331,34 @@ class TestStanding(unittest.TestCase):
         self.assertEqual(s["system"], "Ega")
 
     def test_the_next_band_is_the_one_above(self):
-        for band, nxt in ((100, 75), (75, 50), (50, 25), (25, 10)):
+        for band, nxt in ((100, 75), (75, 50), (50, 25)):
             with self.subTest(band=band):
                 s = cg.standing([cg_sample(100, band)])
                 self.assertEqual(s["next_band"], nxt)
 
-    def test_the_best_band_has_no_next(self):
-        self.assertIsNone(cg.standing([cg_sample(100, 10)])["next_band"])
+    def test_top_25_is_the_best_band_and_has_no_next(self):
+        # above it the reward is the top-N-commanders rank, not a band;
+        # PlayerPercentileBand never reports 10.
+        s = cg.standing([cg_sample(100, 25)])
+        self.assertIsNone(s["next_band"])
+        self.assertIsNone(s["to_next"])
+        self.assertIsNone(s["est_next"])
+
+    def test_the_top_rank_is_carried_through_as_a_rank(self):
+        s = cg.standing([cg_sample(100, 25, top_rank_size=10,
+                                   in_top_rank=True)])
+        self.assertEqual(s["top_rank_size"], 10)
+        self.assertTrue(s["in_top_rank"])
+
+    def test_no_threshold_is_extrapolated_above_the_best_band(self):
+        # the rank has no tonnage cut-off in the journal, so nothing may be
+        # invented for it
+        h = [cg_sample(100, 100), cg_sample(500, 75), cg_sample(900, 75),
+             cg_sample(1200, 50), cg_sample(2500, 25)]
+        s = cg.standing(h)
+        self.assertEqual(s["band"], 25)
+        self.assertIsNone(s["next_band"])
+        self.assertIsNone(s["est_next"])
 
     def test_hold_margin_is_measured_from_where_the_band_was_entered(self):
         h = [cg_sample(100, 100), cg_sample(500, 75), cg_sample(900, 75),

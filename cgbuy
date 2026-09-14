@@ -752,6 +752,7 @@ class App:
         self.last_fetch = None      # when the shown data was actually fetched
         self.last_best = None       # (station, system) of the last top plan
         self.last_band = None       # last CG percentile band seen
+        self.last_top_rank = None   # last in/out of the top-N-commanders rank
         self.workers = []
         self.pad = self.cfg.get("pad_override") or "L"
         self.boxes = {}             # ship key -> (entry, caption, label, tip)
@@ -1752,6 +1753,23 @@ class App:
             % (top["system"], top["ly"], f"{top['ls']:,}", mix,
                f"{top['total']:,}", round(top["trip_minutes"])))
 
+    def _check_top_rank_change(self, st):
+        """The top N is a rank, so it changes hands without you lifting off."""
+        n, inside = st.get("top_rank_size"), st.get("in_top_rank")
+        if not n or inside is None:
+            return
+        if self.last_top_rank is None or inside == self.last_top_rank:
+            self.last_top_rank = inside
+            return
+        self.last_top_rank = inside
+        if inside:
+            self._notify("Into the top %d" % n,
+                         "%st delivered." % f"{st['contribution']:,}", "normal")
+        else:
+            self._notify("Out of the top %d" % n,
+                         "Others have overtaken you - %st delivered so far."
+                         % f"{st['contribution']:,}", "high")
+
     def _check_band_change(self, st):
         """Reward bands move both ways - others delivering can push you down."""
         band = st.get("band")
@@ -2094,6 +2112,7 @@ class App:
             return
         self.standing = st
         self._check_band_change(st)
+        self._check_top_rank_change(st)
         bits = ["%st delivered" % f"{st['contribution']:,}",
                 "top %s%%" % st["band"]]
 
@@ -2107,6 +2126,16 @@ class App:
             approx = True
 
         detail = []
+        rank = st.get("top_rank_size")
+        if st["next_band"] is None and rank:
+            bits.append("in the top %d" % rank if st.get("in_top_rank")
+                        else "not in the top %d" % rank)
+            detail.append(
+                "Top %s%% is the best percentile band; above it the reward\n"
+                "goes to the top %d commanders by tonnage. That is a rank,\n"
+                "not a band: the journal says only whether you are in it,\n"
+                "never what the cut-off costs, so there is no distance to\n"
+                "quote." % (st["band"], rank))
         if gap is not None:
             # Percent of the way from where this band started to where the
             # next one does - "how close am I to promotion", not "how much of

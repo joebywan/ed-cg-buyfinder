@@ -14,6 +14,12 @@ thresholds, so boundaries are BRACKETED from your own crossings: the last
 contribution recorded in the lower band and the first in the higher one.
 That is a measured range, not a prediction, and it is labelled as such.
 
+Above the best percentile band the reward is not a band at all: it is a
+rank - the top TopRankSize commanders. The journal says only whether you
+are in it (PlayerInTopRank), never what the cut-off costs, so there is
+nothing to bracket and nothing to extrapolate. It is reported as a yes or
+a no.
+
 Standalone:  python3 cg.py
 """
 
@@ -28,7 +34,9 @@ FRONTIER_URL = "https://api.orerve.net/2.0/website/initiatives/list?lang=en"
 AGENT = "cgbuy/2.0 (personal ED trade helper)"
 
 # Percentile bands, best first. 100 means "top 100%", i.e. everyone.
-BANDS = [10, 25, 50, 75, 100]
+# There is no 10 here: PlayerPercentileBand tops out at 25, and the rung
+# above it is the top-N-commanders rank carried in TopRankSize.
+BANDS = [25, 50, 75, 100]
 
 
 def read_history(journal_dir, files=12):
@@ -67,6 +75,7 @@ def read_history(journal_dir, files=12):
                         "top_tier": (g.get("TopTier") or {}).get("Name"),
                         "bonus": g.get("Bonus"),
                         "in_top_rank": g.get("PlayerInTopRank"),
+                        "top_rank_size": g.get("TopRankSize"),
                     })
     return out
 
@@ -266,6 +275,8 @@ def standing(history, live=None):
         "target": (live or {}).get("target_qty"),
         "brackets": br, "rate_per_hour": rate,
         "hold_margin": hold_margin, "to_next": to_next, "next_known": next_known,
+        "top_rank_size": cur.get("top_rank_size"),
+        "in_top_rank": cur.get("in_top_rank"),
         "hours_left": hrs, "as_of": cur.get("ts"),
     }
 
@@ -296,7 +307,15 @@ if __name__ == "__main__":
     if s["hold_margin"] is not None:
         print("  safely inside top %s%%: %s t above where you entered it"
               % (s["band"], f"{s['hold_margin']:,}"))
-    if s["next_known"]:
+    if s["next_band"] is None:
+        if s["top_rank_size"]:
+            print("  above top %s%% the reward is a rank, not a band: the top %d"
+                  % (s["band"], s["top_rank_size"]))
+            print("     you are %sin it%s"
+                  % ("" if s["in_top_rank"] else "not ",
+                     "" if s["in_top_rank"] else
+                     " - the journal never says what the cut-off costs"))
+    elif s["next_known"]:
         print("  to reach top %s%%: %s t" % (s["next_band"], f"{s['to_next']:,}"))
     elif s["est_next"]:
         gap = max(0, s["est_next"] - s["contribution"])
