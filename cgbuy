@@ -750,6 +750,7 @@ class App:
             self.dest.update(saved)          # an explicit choice always wins
         self.standing = None
         self.real_cycle = None      # measured dock-to-dock, distractions and all
+        self.real_cycle_runs = 0    # how many runs that median was taken over
         self.ship_label = None
         # 9pt is unreadable on a 5K panel, so scale the default to the display.
         sw = root.winfo_screenwidth()
@@ -1974,12 +1975,29 @@ class App:
                 pass
         self._spawn(work)
 
+    def _run_minutes(self):
+        """How long a run takes, and where that figure came from.
+
+        What you have actually been flying beats what the route model says
+        you could fly. The model measures focused travel - it cannot see the
+        market screen you sat on - so it reads as a floor, and an ETA built
+        on a floor is one you never hit. The model stands in only until
+        enough runs have been flown to have a median.
+        """
+        if self.real_cycle:
+            return self.real_cycle, ("the median of your last %d run%s"
+                                     % (self.real_cycle_runs,
+                                        "" if self.real_cycle_runs == 1 else "s"))
+        top = (self.data or {}).get("mixed") or []
+        mins = top[0]["trip_minutes"] if top else None
+        return mins, ("the route plus a two-minute turnaround\nat each end")
+
     def _effort(self, tonnes):
         """Turn a tonnage gap into runs and time, which is what you act on.
 
         A number of tonnes says nothing about whether that is one more run or
-        twenty. Runs come from the hold you are actually flying; time from the
-        best current plan's measured round trip.
+        twenty. Runs come from the hold you are actually flying; time from
+        what a run has really been costing you.
         """
         try:
             hold = max(1, int(float(self.v_hold.get().strip())))
@@ -1989,8 +2007,7 @@ class App:
         if runs <= 0:
             return "you're there"
 
-        top = (self.data or {}).get("mixed") or []
-        mins = top[0]["trip_minutes"] if top else None
+        mins, _basis = self._run_minutes()
         if not mins:
             return "%d run%s" % (runs, "" if runs == 1 else "s")
 
@@ -2033,16 +2050,18 @@ class App:
                 "%s%st still needed to reach top %s%%\n%s"
                 % ("about " if approx else "", f"{gap:,}", st["next_band"],
                    self._effort(gap)))
-            top = (self.data or {}).get("mixed") or []
-            plan = top[0]["trip_minutes"] if top else None
-            if plan:
-                extra = ""
-                if self.real_cycle and self.real_cycle > plan * 1.15:
-                    extra = ("\nYou have actually been averaging %.0f min a run."
-                             % self.real_cycle)
-                detail.append(
-                    "Based on %.0f min a run: the route plus a two-minute\n"
-                    "turnaround at each end.%s" % (plan, extra))
+            mins, basis = self._run_minutes()
+            if mins:
+                line = "Based on %.0f min a run: %s." % (mins, basis)
+                top = (self.data or {}).get("mixed") or []
+                plan = top[0]["trip_minutes"] if top else None
+                # Only worth saying when the two disagree enough to explain
+                # the ETA; a run inside the model's margin needs no footnote.
+                if self.real_cycle and plan and self.real_cycle > plan * 1.15:
+                    line += ("\nThe route itself is %.0f min, so about %.0f of "
+                             "those\nminutes are spent not flying it."
+                             % (plan, self.real_cycle - plan))
+                detail.append(line)
             detail.append("You are %.0f%% of the way from top %s%% to top %s%%."
                           % (pct, st["band"], st["next_band"]))
             if approx:
@@ -2074,7 +2093,7 @@ class App:
         travel model says it should."""
         if journal is None or not self.watcher:
             return
-        self.real_cycle = journal.real_cycle_minutes(
+        self.real_cycle, self.real_cycle_runs = journal.real_cycle_minutes(
             self.watcher.dest_docks, self.dest.get("station"))
 
     def _adopt_ship(self):

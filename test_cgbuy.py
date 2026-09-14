@@ -2099,6 +2099,65 @@ class TestShipIdentity(WatcherTestCase):
         self.assertEqual(cgbuy.pad_for_ship("nosuchship"), "L")
 
 
+class TestRealCycleMinutes(unittest.TestCase):
+    """journal.real_cycle_minutes - what a run actually costs."""
+
+    STN = "Metz Enterprise"
+
+    def docks(self, *minutes_apart, **kw):
+        """Dock events at the destination, each N minutes after the last."""
+        station = kw.get("station", self.STN)
+        t, out = 1_700_000_000.0, [(station, 1_700_000_000.0)]
+        for m in minutes_apart:
+            t += m * 60.0
+            out.append((station, t))
+        return out
+
+    def test_a_run_is_the_gap_between_two_docks(self):
+        mins, runs = journal.real_cycle_minutes(self.docks(20, 22, 21), self.STN)
+        self.assertEqual((mins, runs), (21, 3))
+
+    def test_too_few_runs_to_have_an_answer(self):
+        self.assertEqual(journal.real_cycle_minutes(self.docks(20, 22), self.STN),
+                         (None, 0))
+
+    def test_other_stations_are_not_this_run(self):
+        docks = self.docks(20, 22, 21) + self.docks(5, 5, 5, station="Elsewhere")
+        mins, runs = journal.real_cycle_minutes(docks, self.STN)
+        self.assertEqual((mins, runs), (21, 3))
+
+    def test_a_session_break_is_not_a_four_hour_run(self):
+        mins, runs = journal.real_cycle_minutes(
+            self.docks(20, 900, 22, 21), self.STN)
+        self.assertEqual((mins, runs), (21, 3))
+
+    def test_only_the_last_six_runs_count(self):
+        # Six slow runs yesterday, six tight ones since: the answer is the
+        # tight ones. This is the whole point of the window.
+        docks = self.docks(40, 40, 40, 40, 40, 40, 20, 20, 20, 20, 20, 20)
+        mins, runs = journal.real_cycle_minutes(docks, self.STN)
+        self.assertEqual((mins, runs), (20, 6))
+
+    def test_the_window_is_adjustable(self):
+        docks = self.docks(40, 40, 40, 20, 20, 20)
+        self.assertEqual(journal.real_cycle_minutes(docks, self.STN, window=3),
+                         (20, 3))
+        self.assertEqual(journal.real_cycle_minutes(docks, self.STN, window=99),
+                         (30, 6))
+
+    def test_tightening_up_moves_the_figure_within_a_few_runs(self):
+        was = journal.real_cycle_minutes(self.docks(*([40] * 6)), self.STN)[0]
+        # Three tight runs after a slow session already pull the median down;
+        # you do not have to fly a whole evening to see the ETA respond.
+        now = journal.real_cycle_minutes(
+            self.docks(*([40] * 6 + [20] * 3)), self.STN)[0]
+        self.assertEqual(was, 40)
+        self.assertLess(now, was)
+
+    def test_no_docks_at_all(self):
+        self.assertEqual(journal.real_cycle_minutes([], self.STN), (None, 0))
+
+
 class TestLadenJumpRange(unittest.TestCase):
     """The laden figure the game never states."""
 

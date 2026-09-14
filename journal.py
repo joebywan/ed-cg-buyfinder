@@ -243,14 +243,20 @@ class Calibration:
         return "  |  ".join(bits)
 
 
-def real_cycle_minutes(docks, station, min_samples=3):
+def real_cycle_minutes(docks, station, min_samples=3, window=6):
     """Median time between consecutive docks at `station` - a whole run as
-    actually flown.
+    actually flown. Returns (minutes, runs counted), or (None, 0).
 
     The calibrated trip model measures focused travel: its sanity windows
     reject long station stays so one overnight AFK cannot poison it. That
     makes it a floor, not a forecast. This is the other number - what a run
     really costs you, distractions included.
+
+    Only the last `window` runs count. A commander who tightens up their
+    loop wants to watch the figure fall, and a median over every run of the
+    last three sessions would take a whole evening to notice. Six is enough
+    for the median to shrug off one interdiction and short enough that two
+    good runs move it.
 
     Anything over four hours is treated as a session break rather than a run.
     """
@@ -258,8 +264,9 @@ def real_cycle_minutes(docks, station, min_samples=3):
     gaps = [(b - a) / 60.0 for a, b in zip(times, times[1:])
             if 0 < (b - a) / 60.0 <= 240]
     if len(gaps) < min_samples:
-        return None
-    return statistics.median(gaps)
+        return None, 0
+    recent = gaps[-window:]
+    return statistics.median(recent), len(recent)
 
 
 def laden_jump_range(max_range, unladen_mass, fuel, cargo, observed=None):

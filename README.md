@@ -276,6 +276,14 @@ samples of each kind in the config.
 Docking at the destination station triggers an automatic re-search — the run
 just ended, so the next one gets fresh data.
 
+**The reward-tier ETA uses your real runs, not the model.** The trip model
+measures focused travel — it cannot see the market screen you sat on — so it is
+a floor, and an ETA built on a floor is one you never hit. Once four docks at
+the CG station are on record, the `% to next tier` tooltip plans on the median
+of your **last six runs**, dock to dock, with gaps over four hours discarded as
+session breaks. Tighten your loop and the estimate follows within two or three
+runs; until there are enough runs to have a median, the model stands in.
+
 ## EDDN sharing
 
 **Off by default, opt-in in Settings.** When on, every time the game writes
