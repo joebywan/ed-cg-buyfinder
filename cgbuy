@@ -753,67 +753,115 @@ class RowTip:
     pointer does - the body a starport orbits may still be on its way from
     EDSM. So the text is asked for per row, and the window can be redrawn in
     place without the pointer moving.
+
+    Two things here are about cost rather than wording, because a table is
+    not a toolbar button and the first version got both wrong:
+
+      * it waits for the pointer to STOP. Popping on entry meant a cursor
+        swept down the table built and tore down a window per row - visibly
+        janky, a white flash as each bare Toplevel was mapped before it was
+        drawn, and an EDSM lookup queued for every system skimmed past.
+      * the window is built once and then shown and hidden. Destroying it
+        each time is what makes the flash, and there is nothing to destroy:
+        one tip is visible at a time and its text is rewritten anyway.
     """
+
+    DELAY_MS = 450          # long enough to sweep past a row without firing
 
     def __init__(self, tree, app, text_for):
         self.tree, self.app, self.text_for = tree, app, text_for
-        self.win = None
+        self.win = None         # built on first use, then reused
         self.label = None
-        self.item = None        # the row the visible tip belongs to
+        self.item = None        # the row the pointer is over
+        self.shown = None       # the row the visible tip belongs to
         self.text = None
+        self.at = (0, 0)        # where the pointer was, in screen coords
+        self.timer = None
         tree.bind("<Motion>", self._move, add="+")
         tree.bind("<Leave>", lambda _e: self.hide(), add="+")
         tree.bind("<ButtonPress>", lambda _e: self.hide(), add="+")
 
     def _move(self, e):
+        self.at = (e.x_root + 18, e.y_root + 20)
         item = self.tree.identify_row(e.y)
         if item == self.item:
-            return              # same row: <Motion> fires on every pixel
+            return              # <Motion> fires on every pixel of a row
         self.hide()
         self.item = item
-        if not item:
+        if item:
+            self.timer = self.tree.after(self.DELAY_MS, self._pop)
+
+    def _pop(self):
+        """The pointer has settled. Now it is worth asking what this row is."""
+        self.timer = None
+        if not self.item:
             return
-        text = self.text_for(item)
+        text = self.text_for(self.item)
         if text:
-            self._show(text, e.x_root + 18, e.y_root + 20)
+            self.shown = self.item
+            self._show(text, *self.at)
 
     def refresh(self):
         """Say it again: a late answer must reach a tip already on screen."""
-        if not self.win or not self.item:
+        if not self.shown:
             return
-        text = self.text_for(self.item)
+        text = self.text_for(self.shown)
         if not text:
             self.hide()
         elif text != self.text:
             self.text = text
             self.label.configure(text=text)
 
-    def _show(self, text, x, y):
-        self.text = text
+    def _build(self):
         self.win = tk.Toplevel(self.tree)
         self.win.wm_overrideredirect(True)
-        self.win.wm_geometry("+%d+%d" % (x, y))
-        self.label = tk.Label(self.win, text=text, justify="left",
-                              bg="#1c1610", fg=TXT,
-                              font=self.app._fonts()["mono"], relief="solid",
-                              borderwidth=1, padx=10, pady=7, wraplength=520)
+        # The toplevel's own background, not just the label's: for the moment
+        # between mapping and drawing it is the window that is on screen, and
+        # Tk's default for that is white.
+        self.win.configure(bg="#1c1610")
+        self.win.withdraw()
+        self.label = tk.Label(self.win, justify="left", bg="#1c1610", fg=TXT,
+                              relief="solid", borderwidth=1, padx=10, pady=7,
+                              wraplength=520)
         self.label.pack()
+
+    def _show(self, text, x, y):
+        if self.win is None:
+            self._build()
+        self.text = text
+        # Set on every show rather than at build time, so Ctrl+plus reaches a
+        # window that outlives the setting it was first drawn with.
+        self.label.configure(text=text, font=self.app._fonts()["mono"])
         # A row near the bottom of a full table would otherwise put the answer
         # off the screen, and flipping it above the pointer is the only place
-        # left. Measured after packing: the height depends on how many lines
-        # the body name wrapped to.
+        # left. Measured after the text is in: the height depends on how many
+        # lines the body name wrapped to.
         self.win.update_idletasks()
-        w, h = self.win.winfo_width(), self.win.winfo_height()
-        nx = max(0, min(x, self.win.winfo_screenwidth() - w - 8))
-        ny = y if y + h <= self.win.winfo_screenheight() - 8 else max(0, y - h - 32)
-        if (nx, ny) != (x, y):
-            self.win.wm_geometry("+%d+%d" % (nx, ny))
+        w, h = self.win.winfo_reqwidth(), self.win.winfo_reqheight()
+        x = max(0, min(x, self.win.winfo_screenwidth() - w - 8))
+        if y + h > self.win.winfo_screenheight() - 8:
+            y = max(0, y - h - 32)
+        self.win.wm_geometry("+%d+%d" % (x, y))
+        self.win.deiconify()
 
     def hide(self):
-        self.item = self.text = None
-        if self.win:
+        self.item = self.shown = self.text = None
+        if self.timer is not None:
+            try:
+                self.tree.after_cancel(self.timer)
+            except Exception:
+                pass
+            self.timer = None
+        if self.win is not None:
+            self.win.withdraw()
+
+    def destroy(self):
+        """Drop the window for good - a Toplevel outlives a destroyed root."""
+        self.hide()
+        if self.win is not None:
             self.win.destroy()
             self.win = None
+            self.label = None
 
 
 class App:
@@ -1990,7 +2038,7 @@ class App:
         self.closing = True
         self._hide_toast()          # an orphaned Toplevel outlives the root
         for tip in self.row_tips:
-            tip.hide()
+            tip.destroy()
         # Give in-flight network calls a moment to notice and return.
         for w in list(self.workers):
             if w.is_alive():

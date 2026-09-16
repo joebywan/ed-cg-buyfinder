@@ -2076,6 +2076,137 @@ class TestSystemBodies(VerifyTestCase):
         self.assertEqual(len(self.urls), 1)
 
 
+class FakeTree:
+    """Enough Treeview for RowTip: rows by y, and a timer queue we fire by
+    hand. No display, because none of what is being tested is drawing."""
+
+    ROW_H = 20
+
+    def __init__(self, rows=("r0", "r1", "r2")):
+        self.rows = list(rows)
+        self.timers = {}
+        self.cancelled = []
+        self.next_id = 0
+
+    def bind(self, *_a, **_k):
+        pass
+
+    def identify_row(self, y):
+        i = y // self.ROW_H
+        return self.rows[i] if 0 <= i < len(self.rows) else ""
+
+    def after(self, _ms, fn):
+        self.next_id += 1
+        self.timers[self.next_id] = fn
+        return self.next_id
+
+    def after_cancel(self, tid):
+        self.cancelled.append(tid)
+        self.timers.pop(tid, None)
+
+    def fire(self):
+        """Run whatever is still pending, as the event loop would."""
+        for fn in list(self.timers.values()):
+            fn()
+        self.timers.clear()
+
+
+class FakeMotion:
+    def __init__(self, y):
+        self.y, self.x_root, self.y_root = y, 500, 400 + y
+
+
+class TestRowTipWaitsForThePointerToStop(unittest.TestCase):
+    """A table is not a toolbar button. Popping on entry meant a cursor swept
+    down four hundred rows built and tore down a window per row - visibly
+    janky, a white flash per row, and an EDSM lookup queued for every system
+    it skimmed past. Nothing happens until the pointer settles."""
+
+    def setUp(self):
+        self.tree = FakeTree()
+        self.asked = []
+        self.tip = cgbuy.RowTip(self.tree, app=None, text_for=self.text_for)
+        self.tip._show = lambda text, x, y: self.shown.append((text, x, y))
+        self.shown = []
+
+    def text_for(self, item):
+        self.asked.append(item)
+        return "about %s" % item
+
+    def sweep(self, *ys):
+        for y in ys:
+            self.tip._move(FakeMotion(y))
+
+    def test_a_sweep_across_rows_asks_nothing(self):
+        self.sweep(5, 25, 45)
+        self.assertEqual(self.asked, [])
+        self.assertEqual(self.shown, [])
+
+    def test_resting_on_a_row_asks_once(self):
+        self.sweep(5)
+        self.tree.fire()
+        self.assertEqual(self.asked, ["r0"])
+        self.assertEqual(len(self.shown), 1)
+        self.assertEqual(self.tip.shown, "r0")
+
+    def test_only_the_row_rested_on_is_asked_about(self):
+        self.sweep(5, 25, 45)
+        self.tree.fire()
+        self.assertEqual(self.asked, ["r2"])
+
+    def test_leaving_a_row_cancels_its_pending_pop(self):
+        self.sweep(5, 25)
+        self.assertEqual(len(self.tree.cancelled), 1)
+        self.tree.fire()
+        self.assertEqual(self.asked, ["r1"])
+
+    def test_moving_within_one_row_does_not_restart_the_wait(self):
+        """Otherwise a hand that never quite stops never sees an answer."""
+        self.sweep(5, 8, 12)
+        self.assertEqual(self.tree.cancelled, [])
+        self.tree.fire()
+        self.assertEqual(self.asked, ["r0"])
+
+    def test_the_tip_follows_the_pointer_within_the_row(self):
+        self.sweep(5, 12)
+        self.tree.fire()
+        self.assertEqual(self.shown[0][2], FakeMotion(12).y_root + 20)
+
+    def test_the_header_is_not_a_row(self):
+        self.sweep(999)
+        self.tree.fire()
+        self.assertEqual(self.asked, [])
+
+    def test_leaving_the_table_drops_a_pending_pop(self):
+        self.sweep(5)
+        self.tip.hide()
+        self.tree.fire()
+        self.assertEqual(self.asked, [])
+
+    def test_a_late_answer_reaches_a_tip_already_on_screen(self):
+        self.sweep(5)
+        self.tree.fire()
+        self.tip.label = FakeLabel()
+        self.tip.text = "about r0"
+        self.answer = "orbiting Ega 4"
+        self.text_for = lambda item: self.answer
+        self.tip.text_for = self.text_for
+        self.tip.refresh()
+        self.assertEqual(self.tip.label.text, "orbiting Ega 4")
+
+    def test_refresh_does_nothing_when_no_tip_is_up(self):
+        self.tip.refresh()          # must not raise on a bare instance
+        self.assertIsNone(self.tip.shown)
+
+
+class FakeLabel:
+    def __init__(self):
+        self.text = None
+
+    def configure(self, **kw):
+        self.text = kw.get("text", self.text)
+
+
 class TipStub:
     """Just enough App to ask for a station's hover text.
 
