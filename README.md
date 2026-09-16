@@ -195,10 +195,9 @@ table, and the line says so.
 
 The title line carries the destination and how old the data on screen is. The
 status bar is the search's own line — what was found, what was hidden, what
-went wrong — with the supercruise cut on the right, which is the one figure
-read just before undocking. Nothing else lives in either: a progress bar you
-have finished reading is a full-width orange rule saying nothing, so it is
-only there while a search runs.
+went wrong. Nothing else lives in either: a progress bar you have finished
+reading is a full-width orange rule saying nothing, so it is only there while
+a search runs.
 
 Hold and the two jump ranges are marked `*` and locked while your journal can
 see a ship — they are the ship's, not yours to guess at. Hover one to see
@@ -222,59 +221,6 @@ the freshness window a new search runs behind them without asking.
 **Config** lives at `~/.config/cgbuy.json` (`$XDG_CONFIG_HOME` respected) and holds font
 size, journal path, search parameters, the integration toggles, EDSM
 verification settings and accumulated calibration samples.
-
-## When to cut SCO
-
-Overcharge is what makes a long arrival leg cheap; overshooting the station is
-what makes it expensive again. The rule is a **range to run**, not a countdown,
-and it depends on how fast you are going:
-
-```
-cut when range to target (Ls)  >=  a x speed(c) ^ p
-```
-
-For the Panther Clipper Mk II, `a = 30`, `p = 0.5`. In the cockpit that is a
-short table, matched against the two figures already on the HUD panel:
-
-| speed | cut with this much range left | reads on the countdown as |
-| --- | --- | --- |
-| 70c | 290 Ls | 4.1 s |
-| 250c | 545 Ls | 2.2 s |
-| 500c | 770 Ls | 1.5 s |
-| 1,000c | 1,090 Ls | 1.1 s |
-| 2,000c | 1,540 Ls | 0.8 s |
-
-The status bar shows the same figures for the ship you are flying, marked
-`estimate` when that hull has no measured law.
-
-**There is no single "seconds to target" answer**, which is the mistake worth
-avoiding: the same law reads four seconds at 70c and under one at 2,000c.
-Braking distance grows far more slowly than speed does, so a countdown that is
-right on a short hop has you cutting several thousand light seconds too early
-on a long one - shedding all your speed and crawling the rest of the way, or
-having to relight the drive.
-
-### Where the numbers come from
-
-Measured, not modelled. The game writes neither your speed nor your range to
-target into any file, so the app cannot learn this by watching - the figures
-exist only on screen. They were captured by photographing the HUD through nine
-approaches and reading both numbers at the moment the drive cut.
-
-The boundary is pinned near 70c, between a cut with 172 Ls to run that overshot
-and looped, and one with 273 Ls that arrived clean. Above that speed no
-overshoot has been recorded, so the exponent is bounded from above but not
-below; `p = 0.5` is a safety choice among the fits that remain, because the
-flatter ones and this one diverge fivefold by 2,000c and only one of those
-errors costs a loop.
-
-Two honest caveats. Below about a thousand light seconds the whole thing barely
-matters - the approach is dominated by the final crawl into the station, and
-overcharge is worth 10-20 seconds there against 105-135 on a 5,000 Ls leg. And
-the law is a property of the hull, so [`sco_table.json`](sco_table.json) holds
-one row per measured ship; only the Panther is measured, everything else
-borrows its numbers and says so. [`tools/`](tools/README.md) has the rig for
-measuring your own.
 
 ## Journal calibration
 

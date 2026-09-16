@@ -65,29 +65,12 @@ def parse_ts(s):
     time.mktime would read the struct as local time. Every existing caller
     subtracts two of these, so the timezone cancelled and nothing was visibly
     wrong - except across a DST boundary, where it silently added an hour to a
-    jump. It matters now regardless: Status.json transitions are stamped with
-    the wall clock, and the two have to be comparable.
+    jump.
     """
     try:
         return calendar.timegm(time.strptime(s, "%Y-%m-%dT%H:%M:%SZ"))
     except (ValueError, TypeError):
         return None
-
-
-def sco_band(ls):
-    """Approaches only compare to each other when they are the same shape.
-
-    Under about a thousand light seconds the whole approach happens inside the
-    arrival star's gravity well, where the speed cap is low and the overcharge
-    has little room to do anything. Past twenty thousand the cruise dominates
-    and the drive can run for a long time. The middle is where the interesting
-    trade-off lives.
-    """
-    if ls < 1000:
-        return "short"
-    if ls < 20000:
-        return "mid"
-    return "long"
 
 
 class Calibration:
@@ -120,23 +103,11 @@ class Calibration:
         # FSDJump -> Docked: the whole arrival leg (supercruise + approach +
         # docking). SupercruiseEntry is not always journalled, but this is.
         self.approach_samples = [tuple(x) for x in d.get("approach_samples", [])][-200:]
-        # (arrival_Ls, jump->drop seconds, seconds of overcharge, seconds from
-        # the start of the approach to the drive first lighting, ship). Only
-        # recorded when Status.json was being watched for the whole approach,
-        # so an absent SCO reading means "not observed", never "not used".
-        #
-        # Keyed by ship because approach behaviour is a property of the hull,
-        # not the commander. Samples written before that was understood carry
-        # no ship and are padded with None rather than being credited to
-        # whatever happens to be in the bay now.
-        self.sco_samples = [(tuple(x) + (None,))[:5] if len(x) < 5 else tuple(x)
-                            for x in d.get("sco_samples", [])][-200:]
 
     def to_dict(self):
         return {"jump_secs": self.jump_secs, "dock_secs": self.dock_secs,
                 "depart_secs": self.depart_secs,
-                "approach_samples": self.approach_samples,
-                "sco_samples": self.sco_samples}
+                "approach_samples": self.approach_samples}
 
     # -- learned values, or None when we don't have the evidence -----------
     @property
@@ -257,46 +228,6 @@ class Calibration:
             secs += (est_sc_minutes(ls) - est_sc_minutes(anchor)) * 60.0
         return max(secs, 0.0) / 60.0
 
-    def add_sco_sample(self, ls, total_secs, sco_secs, lit_after, ship=None):
-        """Record one approach and how the overcharge was used flying it."""
-        self._add(self.sco_samples,
-                  (round(float(ls), 1), round(float(total_secs), 1),
-                   round(float(sco_secs), 1),
-                   None if lit_after is None else round(float(lit_after), 1),
-                   (ship or "").lower() or None))
-
-    def sco_advice(self, ls, ship=None):
-        """What overcharge burn produced your fastest arrival at this range.
-
-        No physics and no model. The game publishes neither speed nor range to
-        target, so the only honest handle on overshoot is the clock: a loop
-        back to the station shows up as a long jump-to-drop time, and the burn
-        that avoids it is whichever one your own fastest arrival used.
-
-        Returns None until there is something to say. `spread` counts how many
-        distinct burn lengths have been tried, because a single habit repeated
-        twenty times is twenty samples of one data point - it says what you
-        always do, not what works.
-        """
-        band = sco_band(ls)
-        pool = [s for s in self.sco_samples if sco_band(s[0]) == band]
-        if ship:
-            # A Panther's approach says nothing about a Cobra's. Only fall back
-            # to the mixed pool when this hull has nothing of its own, and even
-            # then the caller can tell from `ship_specific`.
-            mine = [s for s in pool if s[4] == (ship or "").lower()]
-            pool = mine if len(mine) >= self.MIN_SAMPLES else pool
-        if len(pool) < self.MIN_SAMPLES:
-            return None
-        best = min(pool, key=lambda s: s[1])
-        worst = max(pool, key=lambda s: s[1])
-        spread = len({round(s[2] / 2.0) for s in pool})
-        ships = {s[4] for s in pool}
-        return {"band": band, "hold": best[2], "total": best[1],
-                "lit_after": best[3], "worst": worst[1], "worst_hold": worst[2],
-                "n": len(pool), "spread": spread,
-                "ship_specific": bool(ship) and ships == {(ship or "").lower()}}
-
     def summary(self):
         bits = []
         j, d, s = self.jump_minutes, self.dock_minutes, self.sc_scale
@@ -390,12 +321,6 @@ class JournalWatcher:
       on_event(event_dict)        every parsed event
       on_docked(station, system)  docked anywhere
       on_calibration(cal)         a new timing sample landed
-      on_approach(ls, start, drop, station)
-                                  an approach completed: arrival distance, the
-                                  UTC epochs it ran between, where it ended.
-                                  Whoever is watching Status.json pairs this
-                                  with the overcharge windows - the journal
-                                  itself has no idea whether SCO was running.
     """
 
     def __init__(self, directory=None, cal=None):
@@ -427,19 +352,10 @@ class JournalWatcher:
         self._arrived_at = None
         self._undocked_at = None
         self._dock_at = None
-        self._sc_entry = None
         self._last_ls = None
-        # Kept separately from _arrived_at, which the approach_samples pool
-        # defines as FSDJump -> Docked and should keep meaning exactly that.
-        # This one restarts on a re-entry, because a supercruise you dropped
-        # out of and resumed is a different flight from the one that began at
-        # the jump.
-        self._approach_start = None
-        self._drop_ts = None
         self.on_event = None
         self.on_docked = None
         self.on_calibration = None
-        self.on_approach = None
 
     def newest(self):
         if not self.dir:
@@ -570,23 +486,14 @@ class JournalWatcher:
             self._undocked_at = None
             self._last_fsdjump = ts
             self._arrived_at = ts
-            self._approach_start = ts
-            self._drop_ts = None
             self._jump_start = None
-        elif ev in ("SupercruiseEntry",):
-            self._sc_entry = ts
-            self._approach_start = ts
-            self._drop_ts = None
-        elif ev in ("SupercruiseExit", "SupercruiseDestinationDrop"):
-            # No usable distance for this leg: the journal does not say how far
-            # the supercruise actually was. FSDJump -> Docked is measured
+        elif ev in ("SupercruiseEntry", "SupercruiseExit",
+                    "SupercruiseDestinationDrop"):
+            # Deliberately nothing. The journal does not say how far a
+            # supercruise was, so pairing its duration with the last docked
+            # station's Ls invented ~28x ratios. FSDJump -> Docked is measured
             # instead, where DistFromStarLS genuinely describes the same trip.
-            self._sc_entry = None
-            # SupercruiseDestinationDrop is the moment the approach succeeded,
-            # and it is the number worth minimising. SupercruiseExit fires a
-            # few seconds later and only stands in when the drop was manual.
-            if self._drop_ts is None or ev == "SupercruiseDestinationDrop":
-                self._drop_ts = ts
+            pass
         elif ev == "Docked":
             self.station = e.get("StationName")
             self.system = e.get("StarSystem", self.system)
@@ -599,12 +506,6 @@ class JournalWatcher:
                     if 20 <= dt <= 3600:
                         self.cal._add(self.cal.approach_samples, (self._last_ls, dt))
                         learned = True
-            if (self._approach_start and self._drop_ts
-                    and self._drop_ts > self._approach_start and self._last_ls
-                    and live and self.on_approach):
-                self.on_approach(self._last_ls, self._approach_start,
-                                 self._drop_ts, self.station)
-            self._approach_start = self._drop_ts = None
             self._arrived_at = None
             if ts:
                 self._log_dock("dock", self.station, ts)
