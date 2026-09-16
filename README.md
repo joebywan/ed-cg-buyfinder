@@ -180,10 +180,33 @@ commodity (the CG multiplier is already baked into the EDSM price — the tool
 does not apply it). It is a hover rather than a row of its own because every
 one of those prices is already inside the `PROFIT/T` beside it.
 
+**Hover any station row, in either table, to see which body it is.** `LS` says
+how long the approach is; it does not say whether it ends at a starport you
+dock at or a pad you have to glide down to — and if it is a surface, which rock
+you set course for. The hover says that, with the body's type and surface
+gravity when it is one you land on. A carrier says so instead, because it
+orbits nothing and can leave.
+
+The two halves come from different places. Spansh names the body for a surface
+station, so that answer is already in hand. It records nothing at all for an
+orbital starport — not in its station index and not in its system dump — so the
+body a starport orbits is asked of EDSM, once per system, only for a row you
+actually pointed at, and it fills itself in a moment later. A system the search
+already re-checked against EDSM costs nothing, because it is the same response.
+
 ## Interface
 
 Inputs across the top: hold size, radius (30 ly), jump range empty and laden,
-minimum supply (200), and a fleet-carrier toggle. Enter or SEARCH runs it.
+minimum supply (200), and toggles for fleet carriers and Odyssey. Enter or
+SEARCH runs it.
+
+**ODYSSEY** decides whether stations on a planet surface are candidates at all
+— settlements, planetary outposts and ports. It is off by default because a
+surface market is a different trip from a starport: a glide down, a pad on a
+rock, and a client that owns the expansion. The first time your journal names a
+game it sets the box for you from what that game is running; after that the
+choice is yours and it is remembered. Hover a row to see which body you would
+be landing on.
 
 **What the age filter did has its own line, under the table, always.** Sources
 older than the cutoff (Settings → DATA ACCURACY, 7 days by default) are dropped
@@ -219,8 +242,8 @@ On startup the last results are shown straight away; if they are older than
 the freshness window a new search runs behind them without asking.
 
 **Config** lives at `~/.config/cgbuy.json` (`$XDG_CONFIG_HOME` respected) and holds font
-size, journal path, search parameters, the integration toggles, EDSM
-verification settings and accumulated calibration samples.
+size, journal path, search parameters, the Odyssey toggle, the integration
+toggles, EDSM verification settings and accumulated calibration samples.
 
 ## Journal calibration
 

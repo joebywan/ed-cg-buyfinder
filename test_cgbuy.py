@@ -1440,14 +1440,24 @@ class TestFetchSources(FakeNetTestCase):
 
 def source_station(name="Alpha Hub", system="Sys A", commodity="Gold",
                    buy=9000, supply=600, distance=12.0, ls=250, age_days=0,
-                   stype="Coriolis Starport", large=2, medium=4, small=8):
-    """A Spansh station result with one commodity, as build_rows reads it."""
-    return {"name": name, "system_name": system, "distance": distance,
-            "distance_to_arrival": ls, "type": stype,
-            "large_pads": large, "medium_pads": medium, "small_pads": small,
-            "market_updated_at": days_ago(age_days) + " 04:00:00",
-            "market": [{"commodity": commodity, "buy_price": buy,
-                        "supply": supply}]}
+                   stype="Coriolis Starport", large=2, medium=4, small=8,
+                   planetary=False, body=None, body_kind=None, gravity=None):
+    """A Spansh station result with one commodity, as build_rows reads it.
+
+    Spansh carries the body_* fields only for a station on a surface, which
+    is why they default to absent rather than empty."""
+    st = {"name": name, "system_name": system, "distance": distance,
+          "distance_to_arrival": ls, "type": stype,
+          "large_pads": large, "medium_pads": medium, "small_pads": small,
+          "market_updated_at": days_ago(age_days) + " 04:00:00",
+          "market": [{"commodity": commodity, "buy_price": buy,
+                      "supply": supply}]}
+    if planetary:
+        st["is_planetary"] = True
+        st["body_name"] = body or "Sys A 3 a"
+        st["body_subtype"] = body_kind or "Rocky body"
+        st["body_gravity"] = gravity if gravity is not None else 0.18
+    return st
 
 
 class BuildRowsTestCase(FakeNetTestCase):
@@ -1485,7 +1495,8 @@ class BuildRowsTestCase(FakeNetTestCase):
     def params(self, **kw):
         p = {"dest": self.DEST, "range": 40, "min_supply": 100, "hold": 100,
              "jump_empty": 30.0, "jump_laden": 25.0, "carriers": False,
-             "pad": "L", "verify_edsm": False, "max_age_days": 0}
+             "odyssey": True, "pad": "L", "verify_edsm": False,
+             "max_age_days": 0}
         p.update(kw)
         return p
 
@@ -1668,6 +1679,81 @@ class TestBuildRows(BuildRowsTestCase):
         self.assertTrue(all(s[1] == 2 for s in seen))
 
 
+class TestBuildRowsOdysseyFilter(BuildRowsTestCase):
+    """Surface markets are a different trip - a glide down and a pad on a
+    rock - and a client without the expansion cannot use half of them. The
+    box decides whether they are candidates at all."""
+
+    def setUp(self):
+        super().setUp()
+        self.sources = {
+            "Gold": [source_station(name="Alpha Hub"),
+                     source_station(name="Rakhmaninov Landing", planetary=True,
+                                    body="Sys A 3 a")],
+        }
+
+    def names(self, **kw):
+        rows, _p, _ls, _h = self.build(**kw)
+        return sorted(r["station"] for r in rows)
+
+    def test_surface_stations_are_dropped_when_the_box_is_off(self):
+        self.assertEqual(self.names(odyssey=False), ["Alpha Hub"])
+
+    def test_surface_stations_are_ranked_when_the_box_is_on(self):
+        self.assertEqual(self.names(odyssey=True),
+                         ["Alpha Hub", "Rakhmaninov Landing"])
+
+    def test_an_absent_flag_is_read_as_off(self):
+        """A caller that has never heard of the filter must not get surface
+        markets it cannot use."""
+        p = self.params()
+        del p["odyssey"]
+        rows, _p, _ls, _h = cgbuy.build_rows(p)
+        self.assertEqual([r["station"] for r in rows], ["Alpha Hub"])
+
+    def test_orbital_stations_are_never_touched_by_it(self):
+        self.sources = {"Gold": [source_station(name="Alpha Hub")]}
+        self.assertEqual(self.names(odyssey=False), ["Alpha Hub"])
+
+
+class TestBuildRowsCarriesTheBody(BuildRowsTestCase):
+    """Spansh names the body for a surface station and nothing for an orbital
+    one. Both answers have to survive into the row, because the hover text
+    tells them apart."""
+
+    def row(self, **kw):
+        self.sources = {"Gold": [source_station(**kw)]}
+        rows, _p, _ls, _h = self.build()
+        self.assertEqual(len(rows), 1)
+        return rows[0]
+
+    def test_a_surface_station_carries_its_body(self):
+        r = self.row(planetary=True, body="Oberon", body_kind="Rocky body",
+                     gravity=0.035)
+        self.assertTrue(r["planetary"])
+        self.assertEqual(r["body"], "Oberon")
+        self.assertEqual(r["body_kind"], "Rocky body")
+        self.assertAlmostEqual(r["gravity"], 0.035)
+
+    def test_an_orbital_station_carries_its_type_and_no_body(self):
+        r = self.row(stype="Ocellus Starport")
+        self.assertFalse(r["planetary"])
+        self.assertEqual(r["stype"], "Ocellus Starport")
+        self.assertEqual(r["body"], "")
+        self.assertIsNone(r["gravity"])
+
+    def test_the_mixed_plan_inherits_it_from_the_station(self):
+        self.sources = {
+            "Gold": [source_station(planetary=True, body="Oberon")],
+            "Silver": [source_station(commodity="Silver", buy=3000,
+                                      planetary=True, body="Oberon")],
+        }
+        rows, _p, _ls, _h = self.build()
+        plan = cgbuy.build_mixed(rows, 100)[0]
+        self.assertTrue(plan["planetary"])
+        self.assertEqual(plan["body"], "Oberon")
+
+
 class TestBuildRowsAgeFilter(BuildRowsTestCase):
 
     def stations_of_ages(self, *ages):
@@ -1747,6 +1833,7 @@ class VerifyTestCase(unittest.TestCase):
         self.urls = []
         self.systems = {}        # system -> {station: market timestamp}
         self.markets = {}        # (sys, stn) -> {commodity: (buy, stock)}
+        self.bodies = {}         # (sys, stn) -> the body EDSM records for it
         self.limit_after = None  # raise RateLimited from this request on
         old = verify._get
         verify._get = self.fake_verify_get
@@ -1763,9 +1850,13 @@ class VerifyTestCase(unittest.TestCase):
         sysname = q["systemName"][0]
         station = q.get("stationName", [None])[0]
         if station is None:
-            return {"stations": [
-                {"name": n, "updateTime": {"market": t}}
-                for n, t in self.systems.get(sysname, {}).items()]}
+            out = []
+            for n, t in self.systems.get(sysname, {}).items():
+                st = {"name": n, "updateTime": {"market": t}}
+                if (sysname, n) in self.bodies:
+                    st["body"] = {"id": 1, "name": self.bodies[(sysname, n)]}
+                out.append(st)
+            return {"stations": out}
         market = self.markets.get((sysname, station), {})
         return {"commodities": [
             {"name": c, "buyPrice": buy, "stock": stock,
@@ -1775,6 +1866,13 @@ class VerifyTestCase(unittest.TestCase):
     def edsm_has(self, system, station, stamp="2025-06-01 09:00:00", **goods):
         self.systems.setdefault(system, {})[station] = stamp
         self.markets[(system, station)] = goods
+
+    def edsm_body(self, system, station, body):
+        """EDSM records a parent body for orbital stations as well as surface
+        ones, which is the whole reason system_bodies exists."""
+        self.systems.setdefault(system, {}).setdefault(
+            station, "2025-06-01 09:00:00")
+        self.bodies[(system, station)] = body
 
 
 class TestVerifyRefresh(VerifyTestCase):
@@ -1938,6 +2036,128 @@ class TestVerifyRefresh(VerifyTestCase):
 # --------------------------------------------------------------------------
 # cgbuy.build_rows against a faked EDSM verification pass
 # --------------------------------------------------------------------------
+
+class TestSystemBodies(VerifyTestCase):
+    """Spansh names a body only for stations on a surface; the parent body of
+    an orbital starport is in neither its station index nor its system dump.
+    EDSM has both, in the payload the market re-check already fetches."""
+
+    def test_stations_are_mapped_to_the_body_edsm_records(self):
+        self.edsm_body("Ega", "Jameson Memorial", "Ega AB 2 i")
+        self.edsm_body("Ega", "Jameson Base", "Ega A 1")
+        self.assertEqual(verify.system_bodies("Ega"),
+                         {"Jameson Memorial": "Ega AB 2 i",
+                          "Jameson Base": "Ega A 1"})
+
+    def test_a_station_with_no_body_is_left_out_rather_than_guessed(self):
+        self.edsm_has("Ega", "P4X-N0W")           # a carrier: no body at all
+        self.edsm_body("Ega", "Metz Enterprise", "Ega 4")
+        self.assertEqual(verify.system_bodies("Ega"), {"Metz Enterprise": "Ega 4"})
+
+    def test_cached_only_never_reaches_the_network(self):
+        self.edsm_body("Ega", "Metz Enterprise", "Ega 4")
+        self.assertIsNone(verify.system_bodies("Ega", cached_only=True))
+        self.assertEqual(self.urls, [])
+
+    def test_cached_only_answers_once_the_system_has_been_fetched(self):
+        """A system already re-checked against EDSM must cost nothing: it is
+        the same payload, and it is already in hand."""
+        self.edsm_body("Ega", "Metz Enterprise", "Ega 4")
+        verify.system_market_times("Ega")
+        self.assertEqual(len(self.urls), 1)
+        self.assertEqual(verify.system_bodies("Ega", cached_only=True),
+                         {"Metz Enterprise": "Ega 4"})
+        self.assertEqual(len(self.urls), 1)
+
+    def test_a_second_ask_reuses_the_first_answer(self):
+        self.edsm_body("Ega", "Metz Enterprise", "Ega 4")
+        verify.system_bodies("Ega")
+        verify.system_bodies("Ega")
+        self.assertEqual(len(self.urls), 1)
+
+
+class TipStub:
+    """Just enough App to ask for a station's hover text.
+
+    _station_tip reads the body cache and, when an orbital station is not in
+    it, asks for a lookup. Neither touches a widget, so none is built here -
+    the point of the test is the wording, which is the whole feature.
+    """
+
+    _station_tip = cgbuy.App._station_tip
+    _orbit_of = cgbuy.App._orbit_of
+    BODY_QUEUE_MAX = cgbuy.App.BODY_QUEUE_MAX
+
+    def __init__(self, cache=None):
+        self.body_cache = dict(cache or {})
+        self.wanted = []
+
+    def _want_bodies(self, system):
+        self.wanted.append(system)
+
+
+class TestStationTip(VerifyTestCase):
+    """What the hover says. The table has a column for everything except the
+    one thing a commander needs before setting course: which body this is."""
+
+    def tip(self, cache=None, **info):
+        self.app = TipStub(cache)
+        return self.app._station_tip(info)
+
+    def test_a_surface_station_says_which_planet_it_is_on(self):
+        t = self.tip(station="Awolowo Mineralogic Base", system="Sol",
+                     planetary=True, stype="Settlement", body="Actaea",
+                     body_kind="Rocky Ice world", gravity=0.0014)
+        self.assertIn("Awolowo Mineralogic Base", t)
+        self.assertIn("on Actaea", t)
+        self.assertIn("Rocky Ice world", t)
+        # Not "0.00 g": surface gravity out here runs from an ice moon to a
+        # heavy rock, and two fixed places rounds the light end to nothing.
+        self.assertIn("0.0014 g", t)
+        self.assertNotIn("orbiting", t)
+
+    def test_a_heavy_world_still_reads_in_the_usual_two_places(self):
+        t = self.tip(station="Ehrlich City", system="Sol", planetary=True,
+                     stype="Planetary Port", body="Mercury", gravity=0.38)
+        self.assertIn("0.38 g", t)
+
+    def test_an_orbital_station_says_which_body_it_orbits(self):
+        t = self.tip(cache={"Ega": {"Jameson Memorial": "Ega AB 2 i"}},
+                     station="Jameson Memorial", system="Ega",
+                     planetary=False, stype="Orbis Starport")
+        self.assertIn("orbiting Ega AB 2 i", t)
+        self.assertNotIn("on Ega", t)
+
+    def test_an_unknown_orbit_is_asked_for_and_says_so_meanwhile(self):
+        t = self.tip(station="Jameson Memorial", system="Ega", planetary=False)
+        self.assertIn("asking EDSM", t)
+        self.assertEqual(self.app.wanted, ["Ega"])
+
+    def test_a_system_edsm_cannot_place_is_not_asked_twice(self):
+        t = self.tip(cache={"Ega": {}}, station="Jameson Memorial",
+                     system="Ega", planetary=False)
+        self.assertIn("no body", t)
+        self.assertEqual(self.app.wanted, [])
+
+    def test_a_carrier_is_told_apart_from_a_station(self):
+        t = self.tip(station="P4X-N0W", system="Ega", carrier=True,
+                     planetary=False, stype="Drake-Class Carrier")
+        self.assertIn("orbits nothing", t)
+        self.assertEqual(self.app.wanted, [])
+
+    def test_a_row_from_an_older_cache_is_placed_without_being_labelled(self):
+        """Rows saved before the body was recorded carry no planetary flag.
+        EDSM can still name the body; what it cannot say is whether you land
+        on it or dock above it, so the wording commits to neither."""
+        t = self.tip(cache={"Ega": {"Old Station": "Ega 4"}},
+                     station="Old Station", system="Ega")
+        self.assertIn("at Ega 4", t)
+        self.assertNotIn("orbiting", t)
+        self.assertNotIn("on Ega 4", t)
+
+    def test_no_row_means_no_tip(self):
+        self.assertEqual(TipStub()._station_tip(None), "")
+
 
 class TestBuildRowsVerify(BuildRowsTestCase, VerifyTestCase):
     """Both halves faked at once: Spansh discovers, EDSM corrects."""

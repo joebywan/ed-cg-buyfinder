@@ -90,6 +90,37 @@ def system_market_times(system):
     return out
 
 
+def system_bodies(system, cached_only=False):
+    """{station name: the body it sits on, or the one it orbits}.
+
+    Spansh records a body only for stations on a surface. The parent body of
+    an orbital starport is in neither its station index nor its system dump,
+    so the one source the search already uses cannot answer "what am I
+    docking at". EDSM records it for both kinds, in the very payload
+    system_market_times already reads - so for a system that has been
+    verified this costs nothing at all.
+
+    `cached_only` answers from what has already been fetched and returns None
+    rather than going to the network, so a caller can show what it knows
+    before deciding whether the question is worth a request.
+    """
+    key = ("sys", system)
+    hit = _cache.get(key)
+    if hit and time.monotonic() - hit[0] < CACHE_TTL:
+        data = hit[1]
+    elif cached_only:
+        return None
+    else:
+        data = _cached(key, lambda: _get(
+            EDSM_STATIONS.format(sys=urllib.parse.quote(system))))
+    out = {}
+    for st in data.get("stations", []) or []:
+        body = (st.get("body") or {}).get("name")
+        if body:
+            out[st["name"]] = body
+    return out
+
+
 def station_market(system, station):
     """{commodity: {buy, supply, sell, demand}} from EDSM."""
     d = _cached(("mkt", system, station),

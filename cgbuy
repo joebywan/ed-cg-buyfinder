@@ -335,6 +335,12 @@ def build_rows(p, progress=None, cal=None):
                 carrier = "Carrier" in str(st.get("type", ""))
                 if carrier and not p["carriers"]:
                     continue
+                # Landing on a surface is a different trip from docking at a
+                # starport - a glide, a pad on a rock, and a client that has
+                # to own the expansion. Off by default unless the journal
+                # says otherwise; see the ODYSSEY box.
+                if st.get("is_planetary") and not p.get("odyssey"):
+                    continue
                 e = next((c for c in st.get("market", [])
                           if c["commodity"] == name), None)
                 if not e or e["supply"] <= 0 or e["buy_price"] <= 0:
@@ -352,6 +358,15 @@ def build_rows(p, progress=None, cal=None):
                 local.append({
                     "commodity": name, "station": st.get("name", "?"),
                     "system": st.get("system_name", "?"), "carrier": carrier,
+                    # Where it physically is. Spansh names the body for a
+                    # surface station and nothing for an orbital one, which
+                    # is why the tooltip has a second source for the latter.
+                    "planetary": bool(st.get("is_planetary")),
+                    "stype": st.get("type") or "",
+                    "body": st.get("body_name") or "",
+                    "body_kind": (st.get("body_subtype")
+                                  or st.get("body_type") or ""),
+                    "gravity": st.get("body_gravity"),
                     "ly": round(dist, 1), "ls": round(src_ls),
                     "supply": e["supply"], "buy": e["buy_price"], "sell": sell,
                     "profit_per_t": profit, "load": load,
@@ -466,6 +481,12 @@ def build_mixed(rows, hold):
         plans.append({
             "station": stn, "system": sysn, "ly": items[0]["ly"],
             "ls": items[0]["ls"], "carrier": items[0]["carrier"],
+            # Properties of the station, so any of its rows can supply them.
+            "planetary": items[0].get("planetary", False),
+            "stype": items[0].get("stype", ""),
+            "body": items[0].get("body", ""),
+            "body_kind": items[0].get("body_kind", ""),
+            "gravity": items[0].get("gravity"),
             "updated": items[0]["updated"], "tonnes": hold - remaining,
             "short": remaining, "trip_minutes": mins, "total": total,
             "cr_per_min": round(total / mins), "mix": mix,
@@ -724,6 +745,77 @@ class Tip:
             self.win = None
 
 
+class RowTip:
+    """Hover help for a table row, where the text depends on the row.
+
+    Tip binds one widget to one fixed string. A Treeview is one widget with
+    four hundred rows in it, and the answer for a row can arrive after the
+    pointer does - the body a starport orbits may still be on its way from
+    EDSM. So the text is asked for per row, and the window can be redrawn in
+    place without the pointer moving.
+    """
+
+    def __init__(self, tree, app, text_for):
+        self.tree, self.app, self.text_for = tree, app, text_for
+        self.win = None
+        self.label = None
+        self.item = None        # the row the visible tip belongs to
+        self.text = None
+        tree.bind("<Motion>", self._move, add="+")
+        tree.bind("<Leave>", lambda _e: self.hide(), add="+")
+        tree.bind("<ButtonPress>", lambda _e: self.hide(), add="+")
+
+    def _move(self, e):
+        item = self.tree.identify_row(e.y)
+        if item == self.item:
+            return              # same row: <Motion> fires on every pixel
+        self.hide()
+        self.item = item
+        if not item:
+            return
+        text = self.text_for(item)
+        if text:
+            self._show(text, e.x_root + 18, e.y_root + 20)
+
+    def refresh(self):
+        """Say it again: a late answer must reach a tip already on screen."""
+        if not self.win or not self.item:
+            return
+        text = self.text_for(self.item)
+        if not text:
+            self.hide()
+        elif text != self.text:
+            self.text = text
+            self.label.configure(text=text)
+
+    def _show(self, text, x, y):
+        self.text = text
+        self.win = tk.Toplevel(self.tree)
+        self.win.wm_overrideredirect(True)
+        self.win.wm_geometry("+%d+%d" % (x, y))
+        self.label = tk.Label(self.win, text=text, justify="left",
+                              bg="#1c1610", fg=TXT,
+                              font=self.app._fonts()["mono"], relief="solid",
+                              borderwidth=1, padx=10, pady=7, wraplength=520)
+        self.label.pack()
+        # A row near the bottom of a full table would otherwise put the answer
+        # off the screen, and flipping it above the pointer is the only place
+        # left. Measured after packing: the height depends on how many lines
+        # the body name wrapped to.
+        self.win.update_idletasks()
+        w, h = self.win.winfo_width(), self.win.winfo_height()
+        nx = max(0, min(x, self.win.winfo_screenwidth() - w - 8))
+        ny = y if y + h <= self.win.winfo_screenheight() - 8 else max(0, y - h - 32)
+        if (nx, ny) != (x, y):
+            self.win.wm_geometry("+%d+%d" % (nx, ny))
+
+    def hide(self):
+        self.item = self.text = None
+        if self.win:
+            self.win.destroy()
+            self.win = None
+
+
 class App:
     SINGLE_COLS = [
         ("commodity", "COMMODITY", 96, "w"), ("station", "STATION", 210, "w"),
@@ -760,6 +852,14 @@ class App:
         self.cfg = load_config()
         self.entries = []
         self.copy_map = {}          # (widget name, item id) -> system name
+        self.info_map = {}          # (widget name, item id) -> the row behind it
+        self.row_tips = []          # the hover readouts over the two tables
+        # system -> {station: body}. EDSM answers a whole system per request,
+        # so one hover pays for every other row in the same place.
+        self.body_cache = {}
+        self.body_want = set()      # systems already queued for lookup
+        self.body_q = queue.Queue()
+        self.body_worker = None
         self.toast = None           # (window, after id) of the visible toast
         # Only exists while Settings is open; Ctrl+plus works either way.
         self.font_lbl = None
@@ -1030,6 +1130,24 @@ class App:
         ttk.Checkbutton(cb, text="Fleet carriers", variable=self.v_fc).pack(
             anchor="w", pady=(2, 0))
 
+        # Remembered, unlike the carrier box: whether you own the expansion is
+        # a fact about your account, not a knob you turn between searches.
+        self.v_ody = tk.BooleanVar(value=bool(self.cfg.get("odyssey", False)))
+        ob = ttk.Frame(row, style="Panel.TFrame")
+        ob.pack(side="left", padx=(0, 14))
+        ttk.Label(ob, text=" ", style="Cap.TLabel").pack(anchor="w")
+        ody = ttk.Checkbutton(ob, text="Odyssey", variable=self.v_ody,
+                              command=self._save_odyssey)
+        ody.pack(anchor="w", pady=(2, 0))
+        Tip(ody, "Include stations on a planet surface - settlements,\n"
+                 "planetary outposts and ports - in the search.\n\n"
+                 "Off, only orbital stations and carriers are ranked. A\n"
+                 "surface market is a different trip: a glide down, a pad on\n"
+                 "a rock, and a client that owns the expansion.\n\n"
+                 "Set from your journal the first time it sees a game, then\n"
+                 "it is yours. Hover a station to see which body it is on.",
+            self)
+
         self.v_eddn = tk.BooleanVar(value=bool(self.cfg.get("eddn_enabled", False)))
 
         sb = ttk.Frame(row, style="Panel.TFrame")
@@ -1090,6 +1208,9 @@ class App:
         t.tag_configure("child", foreground=TXT)
         t.tag_configure("muted", foreground=DIM)
         t.bind("<ButtonRelease-1>", self._copy_clicked)
+        self.row_tips.append(RowTip(t, self, lambda item, tr=t:
+                                    self._station_tip(
+                                        self.info_map.get((str(tr), item)))))
         return t
 
     def _forget_rows(self, tree):
@@ -1097,9 +1218,130 @@ class App:
         name = str(tree)
         for k in [k for k in self.copy_map if k[0] == name]:
             del self.copy_map[k]
+        for k in [k for k in self.info_map if k[0] == name]:
+            del self.info_map[k]
+        # A tip left up would now be describing whatever row inherited its id.
+        for tip in self.row_tips:
+            tip.hide()
 
-    def _remember(self, tree, item, system):
+    def _remember(self, tree, item, system, info=None):
+        """What this row is, for the click that copies and the hover that
+        explains. A commodity line under a station is remembered as the
+        station: the question the hover answers is about the place."""
         self.copy_map[(str(tree), item)] = system
+        self.info_map[(str(tree), item)] = info
+
+    # -- where a station actually is -------------------------------------
+    BODY_QUEUE_MAX = 12         # a pointer skimming rows is not a work queue
+
+    def _station_tip(self, info):
+        """The one thing the table cannot show: which body this is.
+
+        LS answers a different question. 500 Ls says how long the approach
+        is, not whether it ends at a ring of a starport or at a pad you have
+        to glide down to - and if it is a surface, which rock, because that
+        is what you set course for.
+        """
+        if not info:
+            return ""
+        name = info.get("station") or "?"
+        kind = info.get("stype") or ""
+        if info.get("carrier"):
+            return ("%s\n%s\norbits nothing - a carrier sits wherever its "
+                    "owner parked it, and can leave" % (name, kind or "Fleet Carrier"))
+        if info.get("planetary") is None:
+            # A row restored from a cache written before the body was
+            # recorded. EDSM can still name it; what it cannot say is
+            # whether you land on it or dock above it.
+            return "%s\n%s" % (name, self._orbit_of(info, verb="at"))
+        if info["planetary"]:
+            body = info.get("body")
+            where = "on %s" % body if body else "on a surface nothing names"
+            # %g, not a fixed two places: surface gravity spans three
+            # orders of magnitude out here, and an ice moon at 0.0014 g
+            # rounds to "0.00 g", which reads as no answer at all.
+            bits = [b for b in (info.get("body_kind") or "",
+                                "%.2g g" % info["gravity"]
+                                if info.get("gravity") else "") if b]
+            line = "%s  -  %s" % (kind or "Surface station", where)
+            return "%s\n%s%s" % (name, line,
+                                 "\n%s" % ", ".join(bits) if bits else "")
+        return "%s\n%s  -  %s" % (name, kind or "Orbital station",
+                                  self._orbit_of(info))
+
+    def _orbit_of(self, info, verb="orbiting"):
+        """Which body an orbital station is parked above.
+
+        Spansh does not carry it - not in the station index and not in the
+        system dump - so this is the one figure in the tooltip that has to be
+        fetched, and it is fetched only for a row someone actually pointed at.
+        """
+        system = info.get("system")
+        if not system or verify is None:
+            return "%s an unrecorded body" % verb
+        known = self.body_cache.get(system)
+        if known is None:
+            # Free if this system was already verified: same EDSM payload.
+            known = verify.system_bodies(system, cached_only=True)
+            if known is not None:
+                self.body_cache[system] = known
+        if known is None:
+            self._want_bodies(system)
+            return "%s ... (asking EDSM)" % verb
+        body = known.get(info.get("station"))
+        return ("%s %s" % (verb, body) if body
+                else "EDSM has no body for this station")
+
+    def _want_bodies(self, system):
+        """Queue one EDSM lookup for a system, at most once.
+
+        One request answers every station in the system, and EDSM throttles
+        hard enough that verify serialises its calls 0.8s apart. So this is a
+        single worker with a short queue, not a thread per hover: a pointer
+        run down forty rows must not become forty requests, and the ones it
+        skimmed past are not worth keeping.
+        """
+        if system in self.body_want or self.body_q.qsize() >= self.BODY_QUEUE_MAX:
+            return
+        self.body_want.add(system)
+        self.body_q.put(system)
+        if self.body_worker is None or not self.body_worker.is_alive():
+            self.body_worker = self._spawn(self._body_loop)
+
+    def _body_loop(self):
+        while not self.closing:
+            try:
+                system = self.body_q.get(timeout=0.5)
+            except queue.Empty:
+                continue
+            try:
+                bodies = verify.system_bodies(system)
+            except Exception:
+                # Cached as "asked, nothing there" rather than retried. A
+                # tooltip is not worth hammering a throttled API over.
+                bodies = {}
+            if self.closing:
+                return
+            self.q.put(("bodies", (system, bodies)))
+
+    def _save_odyssey(self):
+        self.cfg["odyssey"] = bool(self.v_ody.get())
+        save_config(self.cfg)
+
+    def _adopt_odyssey(self):
+        """Seed the planetary filter from the game, once.
+
+        LoadGame says whether this commander is running Odyssey, which is the
+        question the box asks. Only ever a seed: once it has been set, the
+        choice is theirs, and a deliberate "off" has to survive a journal
+        that says they own the expansion.
+        """
+        if "odyssey" in self.cfg or not self.watcher:
+            return
+        if self.watcher.odyssey is None:
+            return
+        self.v_ody.set(bool(self.watcher.odyssey))
+        self._save_odyssey()
 
     TOAST_MS = 1600             # long enough to read a long system name
 
@@ -1747,6 +1989,8 @@ class App:
         self._save_cal()
         self.closing = True
         self._hide_toast()          # an orphaned Toplevel outlives the root
+        for tip in self.row_tips:
+            tip.hide()
         # Give in-flight network calls a moment to notice and return.
         for w in list(self.workers):
             if w.is_alive():
@@ -1798,6 +2042,7 @@ class App:
                 self.sender = eddn.Sender(self.cfg.get("eddn_seen"))
             self.watcher, self.cal = w, w.cal
             self._show_cal()
+            self._adopt_odyssey()
             self._adopt_ship()
             self._measure_cycle()
             self._adopt_destination()
@@ -2541,6 +2786,7 @@ class App:
             "jump_laden": max(1.0, num(self.v_jl, JUMP_LADEN_DEFAULT)),
             "min_supply": max(0, num(self.v_ms, MIN_SUPPLY_DEFAULT, int)),
             "carriers": bool(self.v_fc.get()),
+            "odyssey": bool(self.v_ody.get()),
             "pad": self.pad,
             "dest": self.dest,
             "max_age_days": max(0, num(self.v_age, MAX_AGE_DEFAULT, int)),
@@ -2631,6 +2877,14 @@ class App:
                     found, redraw, allnames = payload
                     allnames[:] = found
                     redraw()
+                elif kind == "bodies":
+                    system, bodies = payload
+                    self.body_cache[system] = bodies
+                    self.body_want.discard(system)
+                    # The pointer has not moved, so the tip has to redraw
+                    # itself or the answer arrives where nobody is looking.
+                    for tip in self.row_tips:
+                        tip.refresh()
                 elif kind == "dest":
                     self._apply_destination(payload)
                 elif kind == "standing":
@@ -2743,14 +2997,14 @@ class App:
                         f"{p['cr_per_min']:,}", f"{p['total']:,}",
                         "%st" % f"{p['tonnes']:,}", "", ""),
                 tags=("head", "top") if p is best else ("head",))
-            self._remember(t, parent, p["system"])
+            self._remember(t, parent, p["system"], p)
             for m in p["mix"]:
                 child = t.insert(parent, "end", values=(
                     "", "", "      %s" % m["commodity"], "", "", "",
                     f"{m['value']:,}", "%st" % f"{m['tonnes']:,}",
                     f"{m['buy']:,}", "+%s" % f"{m['profit_per_t']:,}"),
                     tags=("child",))
-                self._remember(t, child, p["system"])
+                self._remember(t, child, p["system"], p)
 
     def _sort_mixed(self, col):
         if self.mixed_sort_key == col:
@@ -2790,7 +3044,7 @@ class App:
                 "%dm" % round(r["trip_minutes"]), f"{r['cr_per_min']:,}",
                 r["t_per_min"], age_text(r["updated"]),
                 "EDSM" if r.get("edsm") else "spansh"), tags=tags)
-            self._remember(t, iid, r["system"])
+            self._remember(t, iid, r["system"], r)
 
 
 # Window icon, embedded so the one-file build stays genuinely one file.
