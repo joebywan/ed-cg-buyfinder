@@ -148,12 +148,40 @@ def fetch_cg_arrival_ls(dest):
     return 0
 
 
+# Spansh sheds load rather than queueing: six concurrent searches against it
+# will draw 502s from its proxy on a busy evening. The same call a moment
+# later works, so a failed page is worth asking for again before a whole
+# commodity is written off.
+RETRY_CODES = (429, 500, 502, 503, 504)
+RETRY_ATTEMPTS = 3
+RETRY_PAUSE = 1.5          # seconds before the first retry, doubling after
+
+
+def worth_retrying(err):
+    """A busy server, not a bad question.
+
+    HTTPError is checked first because it is a subclass of both of the
+    others, and a 400 means the payload is wrong - asking again cannot fix
+    that and only costs the other commodities their share of the server.
+    """
+    if isinstance(err, urllib.error.HTTPError):
+        return err.code in RETRY_CODES
+    return isinstance(err, (urllib.error.URLError, TimeoutError, OSError))
+
+
 def fetch_sources(commodity, max_ly, min_supply, reference_system,
-                  page_size=500, max_pages=10):
+                  page_size=500, max_pages=10, on_fail=None,
+                  attempts=RETRY_ATTEMPTS, pause=RETRY_PAUSE):
     """Every market within max_ly that stocks `commodity`.
 
     Spansh caps results per request, so page through until we run past the
     radius. A single fixed page silently drops most candidates.
+
+    `on_fail(commodity, page, error)` is called when a page is given up on.
+    Page 0 failing means this commodity contributed nothing at all, which is
+    not something the caller may discover by finding no rows - an empty
+    answer and an unanswered question have to look different, or a ranking
+    quietly drops a quarter of the goal and says it covered all of it.
     """
     out = []
     for page in range(max_pages):
@@ -170,11 +198,22 @@ def fetch_sources(commodity, max_ly, min_supply, reference_system,
             "size": page_size, "page": page,
             "reference_system": reference_system,
         }
-        try:
-            res = post_json(SPANSH_SEARCH, payload).get("results", [])
-        except Exception as e:
+        res, err = None, None
+        for attempt in range(max(1, attempts)):
+            try:
+                res = post_json(SPANSH_SEARCH, payload).get("results", [])
+                break
+            except Exception as e:                 # noqa: BLE001 - reported
+                err = e
+                if attempt + 1 < attempts and worth_retrying(e):
+                    time.sleep(pause * (2 ** attempt))
+                else:
+                    break
+        if res is None:
             # A dropped connection must not abort every other commodity.
-            print("  ! %s page %d: %s" % (commodity, page, e), file=sys.stderr)
+            print("  ! %s page %d: %s" % (commodity, page, err), file=sys.stderr)
+            if on_fail:
+                on_fail(commodity, page, err)
             break
         out.extend(res)
         if len(res) < page_size or res[-1].get("distance", 0) > max_ly:
@@ -314,13 +353,20 @@ def build_rows(p, progress=None, cal=None):
     if not dest.get("station") or not dest.get("system") or not commodities:
         # Nothing to search for. Returning empty beats querying a stale
         # default the player has no connection to.
-        return [], {}, 0, 0
+        return [], {}, 0, 0, {"dropped": [], "partial": []}
     cg = fetch_cg_prices(dest)
     if not cg:
         raise RuntimeError("EDSM returned no market for %s - station renamed?"
                            % dest["station"])
     cg_ls = fetch_cg_arrival_ls(dest)
     rows, done, lock = [], 0, threading.Lock()
+    # Which commodities Spansh could not answer for. Kept apart from "found
+    # nothing", which is an answer.
+    lost = []
+
+    def note_fail(commodity, page, err):
+        with lock:
+            lost.append((commodity, page))
 
     def one(name):
         nonlocal done
@@ -329,7 +375,7 @@ def build_rows(p, progress=None, cal=None):
         if info and info["sell"] > 0:
             sell = info["sell"]
             for st in fetch_sources(name, p["range"], p["min_supply"],
-                                    dest["system"]):
+                                    dest["system"], on_fail=note_fail):
                 if not station_fits(st, p.get("pad", "L")):
                     continue
                 carrier = "Carrier" in str(st.get("type", ""))
@@ -433,7 +479,16 @@ def build_rows(p, progress=None, cal=None):
             progress(len(commodities), len(commodities),
                      "all rows older than %dd - showing them anyway" % max_age)
 
-    return rows, cg, cg_ls, hidden_stale
+    # Page 0 failing means the commodity is missing from the ranking
+    # entirely; a later page means the far end of the radius is short.
+    incomplete = {
+        "dropped": sorted({c for c, page in lost if page == 0}),
+        "partial": sorted({c for c, page in lost if page > 0}),
+    }
+    if incomplete["dropped"] and progress:
+        progress(len(commodities), len(commodities),
+                 "Spansh failed on %s" % ", ".join(incomplete["dropped"]))
+    return rows, cg, cg_ls, hidden_stale, incomplete
 
 
 def rescore(r, hold, cal, cg_ls, jump_empty, jump_laden):
@@ -2885,7 +2940,7 @@ class App:
 
     def _work(self, params):
         try:
-            rows, cg, cg_ls, hidden_stale = build_rows(
+            rows, cg, cg_ls, hidden_stale, incomplete = build_rows(
                 params, lambda d, t, n: self.q.put(("prog", (d, t, n))),
                 cal=self.cal)
             rows.sort(key=lambda r: -r["cr_per_min"])
@@ -2894,7 +2949,8 @@ class App:
             self.q.put(("done", {
                 "rows": rows, "mixed": build_mixed(rows, params["hold"]),
                 "cg": cg, "cg_ls": cg_ls, "params": params,
-                "hidden_stale": hidden_stale, "fetched_at": time.time(),
+                "hidden_stale": hidden_stale, "incomplete": incomplete,
+                "fetched_at": time.time(),
                 "dest": params.get("dest")}))
         except Exception as e:
             self.q.put(("err", "%s: %s" % (type(e).__name__, e)))
@@ -2977,6 +3033,7 @@ class App:
             text="%s sources across %d commodities%s"
                  % (f"{len(d['rows']):,}", len(d["cg"]),
                     "  (from cache)" if from_cache else ""), foreground=DIM)
+        self._show_incomplete(d)
         self._show_stale(d)
         self._fill_mixed()
         self._fill_single()
@@ -2985,6 +3042,25 @@ class App:
         if not from_cache:
             save_cache(d)
         self._tick_age()
+
+    def _show_incomplete(self, d):
+        """Say when a commodity is missing because Spansh would not answer.
+
+        The line above counts the commodities the DESTINATION prices, which
+        is not the same as the ones that got searched - so on a bad evening
+        it read "430 sources across 12 commodities" while three of the twelve
+        had contributed nothing at all. A ranking with a quarter of the goal
+        missing must not look like a complete one.
+        """
+        lost = (d.get("incomplete") or {}).get("dropped") or []
+        if not lost:
+            return
+        self.status.configure(
+            text="%s sources, but Spansh would not answer for %s  -  "
+                 "nothing from %s is in this ranking, so search again"
+                 % (f"{len(d.get('rows') or ()):,}", ", ".join(lost),
+                    "them" if len(lost) > 1 else "it"),
+            foreground=WARN)
 
     def _show_stale(self, d):
         """What the age filter did to this result, in its own line.

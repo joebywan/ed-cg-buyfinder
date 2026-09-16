@@ -1429,9 +1429,76 @@ class TestFetchSources(FakeNetTestCase):
 
         self.post_result = flaky
         with quiet_stderr() as err:
-            out = cgbuy.fetch_sources("Gold", 40, 1, "Sol", page_size=10)
+            out = cgbuy.fetch_sources("Gold", 40, 1, "Sol", page_size=10,
+                                      pause=0)
         self.assertEqual(len(out), 10)
         self.assertIn("Gold", err.getvalue())
+
+
+class TestFetchSourcesRetries(FakeNetTestCase):
+    """Spansh sheds load rather than queueing: six concurrent searches draw
+    502s from its proxy on a busy evening, and one of those used to cost the
+    whole commodity for the whole search."""
+
+    def fail_then(self, failures, then, exc=None):
+        """Raise `exc` for the first `failures` calls, then answer."""
+        state = {"n": 0}
+
+        def answer(url, p):
+            state["n"] += 1
+            if state["n"] <= failures:
+                raise exc or urllib.error.HTTPError(
+                    url, 502, "Bad Gateway", {}, None)
+            return then
+        self.post_result = answer
+        return state
+
+    def test_a_502_is_asked_again_and_the_answer_is_kept(self):
+        state = self.fail_then(2, spansh_results(3))
+        out = cgbuy.fetch_sources("Gold", 40, 1, "Sol", page_size=10, pause=0)
+        self.assertEqual(len(out), 3)
+        self.assertEqual(state["n"], 3)
+
+    def test_giving_up_reports_which_commodity_and_page(self):
+        self.fail_then(99, None)
+        told = []
+        with quiet_stderr():
+            out = cgbuy.fetch_sources("Silver", 40, 1, "Sol", page_size=10,
+                                      pause=0, on_fail=lambda *a: told.append(a))
+        self.assertEqual(out, [])
+        self.assertEqual(len(told), 1)
+        self.assertEqual(told[0][0], "Silver")
+        self.assertEqual(told[0][1], 0)
+
+    def test_the_attempts_are_bounded(self):
+        state = self.fail_then(99, None)
+        with quiet_stderr():
+            cgbuy.fetch_sources("Gold", 40, 1, "Sol", page_size=10, pause=0)
+        self.assertEqual(state["n"], cgbuy.RETRY_ATTEMPTS)
+
+    def test_a_bad_request_is_not_retried(self):
+        """A 400 means the payload is wrong. Asking again cannot fix it and
+        only costs the other commodities their share of a busy server."""
+        state = self.fail_then(99, None, exc=urllib.error.HTTPError(
+            "u", 400, "Bad Request", {}, None))
+        with quiet_stderr():
+            cgbuy.fetch_sources("Gold", 40, 1, "Sol", page_size=10, pause=0)
+        self.assertEqual(state["n"], 1)
+
+    def test_the_retry_codes_are_the_busy_ones(self):
+        for code in (429, 500, 502, 503, 504):
+            with self.subTest(code=code):
+                self.assertTrue(cgbuy.worth_retrying(
+                    urllib.error.HTTPError("u", code, "x", {}, None)))
+        for code in (400, 401, 404, 422):
+            with self.subTest(code=code):
+                self.assertFalse(cgbuy.worth_retrying(
+                    urllib.error.HTTPError("u", code, "x", {}, None)))
+
+    def test_a_timeout_or_reset_is_worth_retrying(self):
+        self.assertTrue(cgbuy.worth_retrying(TimeoutError()))
+        self.assertTrue(cgbuy.worth_retrying(OSError("connection reset")))
+        self.assertTrue(cgbuy.worth_retrying(urllib.error.URLError("down")))
 
 
 # --------------------------------------------------------------------------
@@ -1513,7 +1580,7 @@ class TestBuildRows(BuildRowsTestCase):
                                       commodity="Silver", buy=3000,
                                       supply=40)],
         }
-        rows, prices, cg_ls, hidden = self.build()
+        rows, prices, cg_ls, hidden, _ = self.build()
         self.assertEqual(sorted(r["commodity"] for r in rows),
                          ["Gold", "Silver"])
         by = {r["commodity"]: r for r in rows}
@@ -1526,14 +1593,22 @@ class TestBuildRows(BuildRowsTestCase):
         self.assertEqual(cg_ls, 300)
         self.assertEqual(hidden, 0)
 
-    def test_the_four_tuple_shape(self):
+    def test_the_returned_shape(self):
         self.sources = {"Gold": [source_station()]}
         out = self.build()
-        self.assertEqual(len(out), 4)
-        rows, prices, cg_ls, hidden = out
+        self.assertEqual(len(out), 5)
+        rows, prices, cg_ls, hidden, incomplete = out
         self.assertIsInstance(rows, list)
         self.assertIsInstance(prices, dict)
         self.assertIsInstance(hidden, int)
+        self.assertEqual(incomplete, {"dropped": [], "partial": []})
+
+    def test_a_search_with_no_destination_still_returns_the_shape(self):
+        """The early exit has to match, or a caller unpacking it raises
+        where it should simply have found nothing."""
+        out = cgbuy.build_rows(self.params(dest=dict(cgbuy.DEFAULT_DEST)))
+        self.assertEqual(len(out), 5)
+        self.assertEqual(out[4], {"dropped": [], "partial": []})
 
     def test_the_destination_from_p_is_used_end_to_end(self):
         dest = {"station": "Jameson Memorial", "system": "Shinrarta Dezhra",
@@ -1541,7 +1616,7 @@ class TestBuildRows(BuildRowsTestCase):
         self.sell = {"Tritium": 60000}
         self.sources = {"Tritium": [source_station(commodity="Tritium",
                                                    buy=40000)]}
-        rows, _, _, _ = self.build(dest=dest)
+        rows, _, _, _, _ = self.build(dest=dest)
         self.assertTrue(any("stationName=Jameson%20Memorial" in u
                             for u in self.gets))
         self.assertTrue(any("systemName=Shinrarta%20Dezhra" in u
@@ -1570,7 +1645,7 @@ class TestBuildRows(BuildRowsTestCase):
         """With no destination there is nothing to look up, so no requests
         go out at all - rather than quietly querying a stale default."""
         self.sell = {}
-        rows, _, _, _ = self.build(dest=dict(cgbuy.DEFAULT_DEST,
+        rows, _, _, _, _ = self.build(dest=dict(cgbuy.DEFAULT_DEST,
                                              station="X", system="Y"))
         self.assertEqual(rows, [])
         self.assertEqual(self.payloads(), [])
@@ -1585,7 +1660,7 @@ class TestBuildRows(BuildRowsTestCase):
         self.sell = {"Gold": 45000, "Silver": 0}
         self.sources = {"Gold": [source_station()],
                         "Silver": [source_station(commodity="Silver")]}
-        rows, _, _, _ = self.build()
+        rows, _, _, _, _ = self.build()
         self.assertEqual([r["commodity"] for r in rows], ["Gold"])
         self.assertEqual({p["filters"]["market"][0]["name"]
                           for p in self.payloads()}, {"Gold"})
@@ -1596,17 +1671,17 @@ class TestBuildRows(BuildRowsTestCase):
             source_station(name="Outpost", system="Sys B",
                            large=0, medium=2, small=2),
         ]}
-        big, _, _, _ = self.build(pad="L")
+        big, _, _, _, _ = self.build(pad="L")
         self.assertEqual([r["station"] for r in big], ["Coriolis"])
-        med, _, _, _ = self.build(pad="M")
+        med, _, _, _, _ = self.build(pad="M")
         self.assertEqual(sorted(r["station"] for r in med),
                          ["Coriolis", "Outpost"])
 
     def test_the_pad_comes_from_the_ship_the_commander_flies(self):
         self.sources = {"Gold": [source_station(name="Outpost", large=0,
                                                 medium=2, small=2)]}
-        anaconda, _, _, _ = self.build(pad=cgbuy.pad_for_ship("anaconda"))
-        python, _, _, _ = self.build(pad=cgbuy.pad_for_ship("python"))
+        anaconda, _, _, _, _ = self.build(pad=cgbuy.pad_for_ship("anaconda"))
+        python, _, _, _, _ = self.build(pad=cgbuy.pad_for_ship("python"))
         self.assertEqual(anaconda, [])
         self.assertEqual([r["station"] for r in python], ["Outpost"])
 
@@ -1616,9 +1691,9 @@ class TestBuildRows(BuildRowsTestCase):
             source_station(name="K7Q-BQL", system="Sys B",
                            stype="Drake-Class Carrier"),
         ]}
-        without, _, _, _ = self.build(carriers=False)
+        without, _, _, _, _ = self.build(carriers=False)
         self.assertEqual([r["station"] for r in without], ["Static"])
-        with_, _, _, _ = self.build(carriers=True)
+        with_, _, _, _, _ = self.build(carriers=True)
         self.assertEqual(sorted(r["station"] for r in with_),
                          ["K7Q-BQL", "Static"])
         carrier = next(r for r in with_ if r["station"] == "K7Q-BQL")
@@ -1630,7 +1705,7 @@ class TestBuildRows(BuildRowsTestCase):
             source_station(name="Dear", system="Sys B", buy=45000),
             source_station(name="Dearer", system="Sys C", buy=90000),
         ]}
-        rows, _, _, _ = self.build()
+        rows, _, _, _, _ = self.build()
         self.assertEqual([r["station"] for r in rows], ["Cheap"])
 
     def test_rows_with_no_supply_or_no_price_are_dropped(self):
@@ -1639,13 +1714,13 @@ class TestBuildRows(BuildRowsTestCase):
             source_station(name="Empty", system="Sys B", supply=0),
             source_station(name="Priceless", system="Sys C", buy=0),
         ]}
-        rows, _, _, _ = self.build()
+        rows, _, _, _, _ = self.build()
         self.assertEqual([r["station"] for r in rows], ["Stocked"])
 
     def test_a_station_not_selling_the_searched_commodity_is_dropped(self):
         odd = source_station(name="Odd", commodity="Water")
         self.sources = {"Gold": [odd]}
-        rows, _, _, _ = self.build()
+        rows, _, _, _, _ = self.build()
         self.assertEqual(rows, [])
 
     def test_results_beyond_the_radius_are_dropped(self):
@@ -1653,13 +1728,13 @@ class TestBuildRows(BuildRowsTestCase):
             source_station(name="Near", distance=12.0),
             source_station(name="Far", system="Sys B", distance=41.0),
         ]}
-        rows, _, _, _ = self.build(range=40)
+        rows, _, _, _, _ = self.build(range=40)
         self.assertEqual([r["station"] for r in rows], ["Near"])
 
     def test_derived_figures_are_consistent(self):
         self.sources = {"Gold": [source_station(buy=9000, supply=250,
                                                 distance=12.0, ls=250)]}
-        rows, _, cg_ls, _ = self.build(hold=100)
+        rows, _, cg_ls, _, _ = self.build(hold=100)
         r = rows[0]
         self.assertEqual(r["profit_per_t"], 36000)
         self.assertEqual(r["load"], 100)
@@ -1679,6 +1754,67 @@ class TestBuildRows(BuildRowsTestCase):
         self.assertTrue(all(s[1] == 2 for s in seen))
 
 
+class TestBuildRowsReportsWhatItCouldNotAsk(BuildRowsTestCase):
+    """An empty answer and an unanswered question must not look the same.
+
+    The status line counts the commodities the DESTINATION prices, not the
+    ones that got searched, so on a bad evening it read "430 sources across
+    12 commodities" while three of the twelve had contributed nothing at
+    all."""
+
+    def setUp(self):
+        super().setUp()
+        self.orig_fetch = cgbuy.fetch_sources
+        def no_wait(*a, **kw):
+            kw.setdefault("pause", 0)
+            return self.orig_fetch(*a, **kw)
+        self.patch(cgbuy, "fetch_sources", no_wait)
+
+    def spansh(self, broken=()):
+        def answer(url, payload):
+            name = payload["filters"]["market"][0]["name"]
+            if name in broken:
+                raise urllib.error.HTTPError(url, 502, "Bad Gateway", {}, None)
+            if payload["page"] > 0:
+                return {"results": []}
+            return {"results": [source_station(commodity=name, buy=9000)]}
+        self.post_result = answer
+
+    def test_a_commodity_spansh_would_not_answer_for_is_named(self):
+        self.spansh(broken=("Silver",))
+        with quiet_stderr():
+            _rows, _cg, _ls, _h, incomplete = self.build()
+        self.assertEqual(incomplete["dropped"], ["Silver"])
+        self.assertEqual(incomplete["partial"], [])
+
+    def test_a_clean_search_reports_nothing_missing(self):
+        self.spansh()
+        _rows, _cg, _ls, _h, incomplete = self.build()
+        self.assertEqual(incomplete, {"dropped": [], "partial": []})
+
+    def test_the_other_commodities_still_rank(self):
+        """One bad commodity must not cost the search."""
+        self.spansh(broken=("Silver",))
+        with quiet_stderr():
+            rows, _cg, _ls, _h, _i = self.build()
+        self.assertEqual({r["commodity"] for r in rows}, {"Gold"})
+
+    def test_a_failure_past_the_first_page_is_partial_not_dropped(self):
+        """Page 0 answered, so the commodity is in the ranking - just short
+        at the far end of the radius."""
+        def answer(url, payload):
+            if payload["page"] == 0:
+                return {"results": [source_station(
+                    commodity=payload["filters"]["market"][0]["name"],
+                    distance=1.0)] * 500}
+            raise urllib.error.HTTPError(url, 503, "Busy", {}, None)
+        self.post_result = answer
+        with quiet_stderr():
+            _rows, _cg, _ls, _h, incomplete = self.build()
+        self.assertEqual(incomplete["dropped"], [])
+        self.assertEqual(incomplete["partial"], ["Gold", "Silver"])
+
+
 class TestBuildRowsOdysseyFilter(BuildRowsTestCase):
     """Surface markets are a different trip - a glide down and a pad on a
     rock - and a client without the expansion cannot use half of them. The
@@ -1693,7 +1829,7 @@ class TestBuildRowsOdysseyFilter(BuildRowsTestCase):
         }
 
     def names(self, **kw):
-        rows, _p, _ls, _h = self.build(**kw)
+        rows, _p, _ls, _h, _i = self.build(**kw)
         return sorted(r["station"] for r in rows)
 
     def test_surface_stations_are_dropped_when_the_box_is_off(self):
@@ -1708,7 +1844,7 @@ class TestBuildRowsOdysseyFilter(BuildRowsTestCase):
         markets it cannot use."""
         p = self.params()
         del p["odyssey"]
-        rows, _p, _ls, _h = cgbuy.build_rows(p)
+        rows, _p, _ls, _h, _i = cgbuy.build_rows(p)
         self.assertEqual([r["station"] for r in rows], ["Alpha Hub"])
 
     def test_orbital_stations_are_never_touched_by_it(self):
@@ -1723,7 +1859,7 @@ class TestBuildRowsCarriesTheBody(BuildRowsTestCase):
 
     def row(self, **kw):
         self.sources = {"Gold": [source_station(**kw)]}
-        rows, _p, _ls, _h = self.build()
+        rows, _p, _ls, _h, _i = self.build()
         self.assertEqual(len(rows), 1)
         return rows[0]
 
@@ -1748,7 +1884,7 @@ class TestBuildRowsCarriesTheBody(BuildRowsTestCase):
             "Silver": [source_station(commodity="Silver", buy=3000,
                                       planetary=True, body="Oberon")],
         }
-        rows, _p, _ls, _h = self.build()
+        rows, _p, _ls, _h, _i = self.build()
         plan = cgbuy.build_mixed(rows, 100)[0]
         self.assertTrue(plan["planetary"])
         self.assertEqual(plan["body"], "Oberon")
@@ -1763,14 +1899,14 @@ class TestBuildRowsAgeFilter(BuildRowsTestCase):
 
     def test_stale_rows_are_hidden_and_counted(self):
         self.stations_of_ages(0, 1, 10, 30)
-        rows, _, _, hidden = self.build(max_age_days=7)
+        rows, _, _, hidden, _ = self.build(max_age_days=7)
         self.assertEqual(sorted(r["updated"] for r in rows),
                          sorted([days_ago(1), days_ago(0)]))
         self.assertEqual(hidden, 2)
 
     def test_the_boundary_day_is_kept(self):
         self.stations_of_ages(7, 8)
-        rows, _, _, hidden = self.build(max_age_days=7)
+        rows, _, _, hidden, _ = self.build(max_age_days=7)
         self.assertEqual([r["updated"] for r in rows], [days_ago(7)])
         self.assertEqual(hidden, 1)
 
@@ -1779,20 +1915,20 @@ class TestBuildRowsAgeFilter(BuildRowsTestCase):
         undated = source_station(name="Undated", system="Sys Z")
         undated["market_updated_at"] = None
         self.sources["Gold"].append(undated)
-        rows, _, _, hidden = self.build(max_age_days=7)
+        rows, _, _, hidden, _ = self.build(max_age_days=7)
         self.assertEqual([r["station"] for r in rows], ["St 0"])
         self.assertEqual(hidden, 1)
 
     def test_the_filter_never_empties_the_grid(self):
         # a stale answer beats no answer at all
         self.stations_of_ages(30, 60)
-        rows, _, _, hidden = self.build(max_age_days=7)
+        rows, _, _, hidden, _ = self.build(max_age_days=7)
         self.assertEqual(len(rows), 2)
         self.assertEqual(hidden, 0)
 
     def test_a_zero_max_age_disables_the_filter(self):
         self.stations_of_ages(0, 400)
-        rows, _, _, hidden = self.build(max_age_days=0)
+        rows, _, _, hidden, _ = self.build(max_age_days=0)
         self.assertEqual(len(rows), 2)
         self.assertEqual(hidden, 0)
 
@@ -1800,7 +1936,7 @@ class TestBuildRowsAgeFilter(BuildRowsTestCase):
         self.stations_of_ages(0, 30)
         p = self.params()
         del p["max_age_days"]
-        rows, _, _, hidden = cgbuy.build_rows(p)
+        rows, _, _, hidden, _ = cgbuy.build_rows(p)
         self.assertEqual(cgbuy.MAX_AGE_DEFAULT, 7)
         self.assertEqual([r["updated"] for r in rows], [days_ago(0)])
         self.assertEqual(hidden, 1)
@@ -2303,7 +2439,7 @@ class TestBuildRowsVerify(BuildRowsTestCase, VerifyTestCase):
                                                 buy=9000, supply=600)]}
         self.edsm_has("Sys A", "Alpha Hub", stamp=days_ago(0) + " 09:00:00",
                       Gold=(9100, 18))
-        rows, _, _, _ = self.build(verify_edsm=True, max_age_days=0)
+        rows, _, _, _, _ = self.build(verify_edsm=True, max_age_days=0)
         self.assertEqual(len(rows), 1)
         r = rows[0]
         self.assertTrue(r["edsm"])
@@ -2321,14 +2457,14 @@ class TestBuildRowsVerify(BuildRowsTestCase, VerifyTestCase):
                       Gold=(9100, 0))
         self.edsm_has("Sys B", "Beta Ring", stamp=days_ago(0) + " 09:00:00",
                       Gold=(9100, 400))
-        rows, _, _, _ = self.build(verify_edsm=True, max_age_days=0)
+        rows, _, _, _, _ = self.build(verify_edsm=True, max_age_days=0)
         self.assertEqual([r["station"] for r in rows], ["Beta Ring"])
 
     def test_verification_is_skipped_when_switched_off(self):
         self.sources = {"Gold": [source_station(name="Alpha Hub",
                                                 system="Sys A", supply=600)]}
         self.edsm_has("Sys A", "Alpha Hub", Gold=(9100, 18))
-        rows, _, _, _ = self.build(verify_edsm=False, max_age_days=0)
+        rows, _, _, _, _ = self.build(verify_edsm=False, max_age_days=0)
         self.assertEqual(rows[0]["supply"], 600)
         self.assertEqual(self.urls, [])
 
@@ -2337,7 +2473,7 @@ class TestBuildRowsVerify(BuildRowsTestCase, VerifyTestCase):
                                                 system="Sys A", supply=600)]}
         self.edsm_has("Sys A", "Alpha Hub", Gold=(9100, 18))
         self.limit_after = 0
-        rows, _, _, _ = self.build(verify_edsm=True, max_age_days=0)
+        rows, _, _, _, _ = self.build(verify_edsm=True, max_age_days=0)
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0]["supply"], 600)
         self.assertFalse(rows[0]["edsm"])
@@ -2351,7 +2487,7 @@ class TestBuildRowsVerify(BuildRowsTestCase, VerifyTestCase):
 
         verify._get = boom
         with quiet_stderr():
-            rows, _, _, _ = self.build(verify_edsm=True, max_age_days=0)
+            rows, _, _, _, _ = self.build(verify_edsm=True, max_age_days=0)
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0]["supply"], 600)
 

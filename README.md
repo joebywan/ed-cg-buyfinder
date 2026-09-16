@@ -208,6 +208,14 @@ game it sets the box for you from what that game is running; after that the
 choice is yours and it is remembered. Hover a row to see which body you would
 be landing on.
 
+**When Spansh will not answer for a commodity, the status bar says so.** It
+sheds load rather than queueing, so a busy evening returns 502s; those pages
+are asked for again, and a commodity it still will not answer for is named in
+amber, because nothing from it is in the ranking. The line above it counts what
+the *destination* pays for, which is not the same as what got searched — so
+without this a search missing a quarter of the goal read exactly like a
+complete one.
+
 **What the age filter did has its own line, under the table, always.** Sources
 older than the cutoff (Settings → DATA ACCURACY, 7 days by default) are dropped
 during the fetch, and the line says how many out of how many — or says nothing
