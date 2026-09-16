@@ -94,12 +94,7 @@ jobs:
       - name: Build
         run: |
           python -c "import shutil; shutil.copy('cgbuy', 'build_src.py')"
-          # PyInstaller bundles what cgbuy imports, not files a module opens:
-          # without this sco_table.json is missing and every hull reads as an
-          # estimate. Absolute because PyInstaller resolves relative paths
-          # against --specpath, not the working directory.
-          DATA_FLAG="--add-data=$(python -c "import os; print(os.path.abspath('sco_table.json') + os.pathsep + '.')")"
-          pyinstaller --onefile --name cgbuy --clean --noconfirm --windowed $DATA_FLAG \
+          pyinstaller --onefile --name cgbuy --clean --noconfirm --windowed \
             --distpath dist --workpath .build --specpath .build build_src.py
       - name: Smoke test, and check it reports the released version
         run: |
@@ -146,7 +141,6 @@ jobs:
           python -m nuitka --standalone --assume-yes-for-downloads \
             --enable-plugin=tk-inter --windows-console-mode=disable \
             --windows-icon-from-ico=icon.ico \
-            --include-data-files=sco_table.json=sco_table.json \
             --output-dir=nuitka --output-filename=cgbuy.exe build_src.py
       - name: Smoke test, and check it reports the released version
         shell: bash

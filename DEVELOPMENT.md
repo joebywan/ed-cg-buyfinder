@@ -16,8 +16,6 @@ point and has no `.py` extension, which is why the build scripts copy it to
 | `cg.py` | community goal discovery and parsing |
 | `eddn.py` | EDDN upload, `commodity/3` schema |
 | `journal.py` | journal tailing and trip-time calibration |
-| `sco_model.py` | SCO fuel/time model, backed by `sco_table.json` |
-| `status.py` | `Status.json` reading |
 | `notify.py` | per-OS notifications |
 | `update.py` | asks GitHub for the latest release tag; compares, never fetches |
 | `verify.py` | market re-checks against EDSM |
@@ -31,12 +29,6 @@ carry a literal each, and three had drifted to `2.0` while the app shipped
 `1.5` — harmless while nothing read it, which stopped being true when the
 update check started comparing against it. A test asserts nothing declares its
 own again.
-
-`sco_table.json` is **opened, not imported**, so every packager has to be told
-about it explicitly — PyInstaller with `--add-data`, Nuitka with
-`--include-data-files`. A test asserts each build script passes one of them,
-because forgetting it does not fail the build: it ships a binary where every
-hull silently reads as an estimate.
 
 ## Running it
 

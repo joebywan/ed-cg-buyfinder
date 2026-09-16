@@ -19,7 +19,6 @@ copy /y cgbuy build_src.py >nul
 .venv\Scripts\python -m nuitka --standalone --assume-yes-for-downloads ^
     --enable-plugin=tk-inter --windows-console-mode=disable ^
     --windows-icon-from-ico="%~dp0icon.ico" ^
-    --include-data-files="%~dp0sco_table.json=sco_table.json" ^
     --output-dir=nuitka --output-filename=cgbuy.exe build_src.py || goto :err
 
 if exist cgbuy-windows rmdir /s /q cgbuy-windows

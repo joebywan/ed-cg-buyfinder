@@ -46,8 +46,6 @@ import cg                                                     # noqa: E402
 import eddn                                                   # noqa: E402
 import journal                                                # noqa: E402
 import notify                                                 # noqa: E402
-import sco_model                                              # noqa: E402
-import status                                                 # noqa: E402
 import update                                                 # noqa: E402
 import verify                                                 # noqa: E402
 import version                                                # noqa: E402
@@ -1431,9 +1429,76 @@ class TestFetchSources(FakeNetTestCase):
 
         self.post_result = flaky
         with quiet_stderr() as err:
-            out = cgbuy.fetch_sources("Gold", 40, 1, "Sol", page_size=10)
+            out = cgbuy.fetch_sources("Gold", 40, 1, "Sol", page_size=10,
+                                      pause=0)
         self.assertEqual(len(out), 10)
         self.assertIn("Gold", err.getvalue())
+
+
+class TestFetchSourcesRetries(FakeNetTestCase):
+    """Spansh sheds load rather than queueing: six concurrent searches draw
+    502s from its proxy on a busy evening, and one of those used to cost the
+    whole commodity for the whole search."""
+
+    def fail_then(self, failures, then, exc=None):
+        """Raise `exc` for the first `failures` calls, then answer."""
+        state = {"n": 0}
+
+        def answer(url, p):
+            state["n"] += 1
+            if state["n"] <= failures:
+                raise exc or urllib.error.HTTPError(
+                    url, 502, "Bad Gateway", {}, None)
+            return then
+        self.post_result = answer
+        return state
+
+    def test_a_502_is_asked_again_and_the_answer_is_kept(self):
+        state = self.fail_then(2, spansh_results(3))
+        out = cgbuy.fetch_sources("Gold", 40, 1, "Sol", page_size=10, pause=0)
+        self.assertEqual(len(out), 3)
+        self.assertEqual(state["n"], 3)
+
+    def test_giving_up_reports_which_commodity_and_page(self):
+        self.fail_then(99, None)
+        told = []
+        with quiet_stderr():
+            out = cgbuy.fetch_sources("Silver", 40, 1, "Sol", page_size=10,
+                                      pause=0, on_fail=lambda *a: told.append(a))
+        self.assertEqual(out, [])
+        self.assertEqual(len(told), 1)
+        self.assertEqual(told[0][0], "Silver")
+        self.assertEqual(told[0][1], 0)
+
+    def test_the_attempts_are_bounded(self):
+        state = self.fail_then(99, None)
+        with quiet_stderr():
+            cgbuy.fetch_sources("Gold", 40, 1, "Sol", page_size=10, pause=0)
+        self.assertEqual(state["n"], cgbuy.RETRY_ATTEMPTS)
+
+    def test_a_bad_request_is_not_retried(self):
+        """A 400 means the payload is wrong. Asking again cannot fix it and
+        only costs the other commodities their share of a busy server."""
+        state = self.fail_then(99, None, exc=urllib.error.HTTPError(
+            "u", 400, "Bad Request", {}, None))
+        with quiet_stderr():
+            cgbuy.fetch_sources("Gold", 40, 1, "Sol", page_size=10, pause=0)
+        self.assertEqual(state["n"], 1)
+
+    def test_the_retry_codes_are_the_busy_ones(self):
+        for code in (429, 500, 502, 503, 504):
+            with self.subTest(code=code):
+                self.assertTrue(cgbuy.worth_retrying(
+                    urllib.error.HTTPError("u", code, "x", {}, None)))
+        for code in (400, 401, 404, 422):
+            with self.subTest(code=code):
+                self.assertFalse(cgbuy.worth_retrying(
+                    urllib.error.HTTPError("u", code, "x", {}, None)))
+
+    def test_a_timeout_or_reset_is_worth_retrying(self):
+        self.assertTrue(cgbuy.worth_retrying(TimeoutError()))
+        self.assertTrue(cgbuy.worth_retrying(OSError("connection reset")))
+        self.assertTrue(cgbuy.worth_retrying(urllib.error.URLError("down")))
 
 
 # --------------------------------------------------------------------------
@@ -1442,14 +1507,24 @@ class TestFetchSources(FakeNetTestCase):
 
 def source_station(name="Alpha Hub", system="Sys A", commodity="Gold",
                    buy=9000, supply=600, distance=12.0, ls=250, age_days=0,
-                   stype="Coriolis Starport", large=2, medium=4, small=8):
-    """A Spansh station result with one commodity, as build_rows reads it."""
-    return {"name": name, "system_name": system, "distance": distance,
-            "distance_to_arrival": ls, "type": stype,
-            "large_pads": large, "medium_pads": medium, "small_pads": small,
-            "market_updated_at": days_ago(age_days) + " 04:00:00",
-            "market": [{"commodity": commodity, "buy_price": buy,
-                        "supply": supply}]}
+                   stype="Coriolis Starport", large=2, medium=4, small=8,
+                   planetary=False, body=None, body_kind=None, gravity=None):
+    """A Spansh station result with one commodity, as build_rows reads it.
+
+    Spansh carries the body_* fields only for a station on a surface, which
+    is why they default to absent rather than empty."""
+    st = {"name": name, "system_name": system, "distance": distance,
+          "distance_to_arrival": ls, "type": stype,
+          "large_pads": large, "medium_pads": medium, "small_pads": small,
+          "market_updated_at": days_ago(age_days) + " 04:00:00",
+          "market": [{"commodity": commodity, "buy_price": buy,
+                      "supply": supply}]}
+    if planetary:
+        st["is_planetary"] = True
+        st["body_name"] = body or "Sys A 3 a"
+        st["body_subtype"] = body_kind or "Rocky body"
+        st["body_gravity"] = gravity if gravity is not None else 0.18
+    return st
 
 
 class BuildRowsTestCase(FakeNetTestCase):
@@ -1487,7 +1562,8 @@ class BuildRowsTestCase(FakeNetTestCase):
     def params(self, **kw):
         p = {"dest": self.DEST, "range": 40, "min_supply": 100, "hold": 100,
              "jump_empty": 30.0, "jump_laden": 25.0, "carriers": False,
-             "pad": "L", "verify_edsm": False, "max_age_days": 0}
+             "odyssey": True, "pad": "L", "verify_edsm": False,
+             "max_age_days": 0}
         p.update(kw)
         return p
 
@@ -1504,7 +1580,7 @@ class TestBuildRows(BuildRowsTestCase):
                                       commodity="Silver", buy=3000,
                                       supply=40)],
         }
-        rows, prices, cg_ls, hidden = self.build()
+        rows, prices, cg_ls, hidden, _ = self.build()
         self.assertEqual(sorted(r["commodity"] for r in rows),
                          ["Gold", "Silver"])
         by = {r["commodity"]: r for r in rows}
@@ -1517,14 +1593,22 @@ class TestBuildRows(BuildRowsTestCase):
         self.assertEqual(cg_ls, 300)
         self.assertEqual(hidden, 0)
 
-    def test_the_four_tuple_shape(self):
+    def test_the_returned_shape(self):
         self.sources = {"Gold": [source_station()]}
         out = self.build()
-        self.assertEqual(len(out), 4)
-        rows, prices, cg_ls, hidden = out
+        self.assertEqual(len(out), 5)
+        rows, prices, cg_ls, hidden, incomplete = out
         self.assertIsInstance(rows, list)
         self.assertIsInstance(prices, dict)
         self.assertIsInstance(hidden, int)
+        self.assertEqual(incomplete, {"dropped": [], "partial": []})
+
+    def test_a_search_with_no_destination_still_returns_the_shape(self):
+        """The early exit has to match, or a caller unpacking it raises
+        where it should simply have found nothing."""
+        out = cgbuy.build_rows(self.params(dest=dict(cgbuy.DEFAULT_DEST)))
+        self.assertEqual(len(out), 5)
+        self.assertEqual(out[4], {"dropped": [], "partial": []})
 
     def test_the_destination_from_p_is_used_end_to_end(self):
         dest = {"station": "Jameson Memorial", "system": "Shinrarta Dezhra",
@@ -1532,7 +1616,7 @@ class TestBuildRows(BuildRowsTestCase):
         self.sell = {"Tritium": 60000}
         self.sources = {"Tritium": [source_station(commodity="Tritium",
                                                    buy=40000)]}
-        rows, _, _, _ = self.build(dest=dest)
+        rows, _, _, _, _ = self.build(dest=dest)
         self.assertTrue(any("stationName=Jameson%20Memorial" in u
                             for u in self.gets))
         self.assertTrue(any("systemName=Shinrarta%20Dezhra" in u
@@ -1561,7 +1645,7 @@ class TestBuildRows(BuildRowsTestCase):
         """With no destination there is nothing to look up, so no requests
         go out at all - rather than quietly querying a stale default."""
         self.sell = {}
-        rows, _, _, _ = self.build(dest=dict(cgbuy.DEFAULT_DEST,
+        rows, _, _, _, _ = self.build(dest=dict(cgbuy.DEFAULT_DEST,
                                              station="X", system="Y"))
         self.assertEqual(rows, [])
         self.assertEqual(self.payloads(), [])
@@ -1576,7 +1660,7 @@ class TestBuildRows(BuildRowsTestCase):
         self.sell = {"Gold": 45000, "Silver": 0}
         self.sources = {"Gold": [source_station()],
                         "Silver": [source_station(commodity="Silver")]}
-        rows, _, _, _ = self.build()
+        rows, _, _, _, _ = self.build()
         self.assertEqual([r["commodity"] for r in rows], ["Gold"])
         self.assertEqual({p["filters"]["market"][0]["name"]
                           for p in self.payloads()}, {"Gold"})
@@ -1587,17 +1671,17 @@ class TestBuildRows(BuildRowsTestCase):
             source_station(name="Outpost", system="Sys B",
                            large=0, medium=2, small=2),
         ]}
-        big, _, _, _ = self.build(pad="L")
+        big, _, _, _, _ = self.build(pad="L")
         self.assertEqual([r["station"] for r in big], ["Coriolis"])
-        med, _, _, _ = self.build(pad="M")
+        med, _, _, _, _ = self.build(pad="M")
         self.assertEqual(sorted(r["station"] for r in med),
                          ["Coriolis", "Outpost"])
 
     def test_the_pad_comes_from_the_ship_the_commander_flies(self):
         self.sources = {"Gold": [source_station(name="Outpost", large=0,
                                                 medium=2, small=2)]}
-        anaconda, _, _, _ = self.build(pad=cgbuy.pad_for_ship("anaconda"))
-        python, _, _, _ = self.build(pad=cgbuy.pad_for_ship("python"))
+        anaconda, _, _, _, _ = self.build(pad=cgbuy.pad_for_ship("anaconda"))
+        python, _, _, _, _ = self.build(pad=cgbuy.pad_for_ship("python"))
         self.assertEqual(anaconda, [])
         self.assertEqual([r["station"] for r in python], ["Outpost"])
 
@@ -1607,9 +1691,9 @@ class TestBuildRows(BuildRowsTestCase):
             source_station(name="K7Q-BQL", system="Sys B",
                            stype="Drake-Class Carrier"),
         ]}
-        without, _, _, _ = self.build(carriers=False)
+        without, _, _, _, _ = self.build(carriers=False)
         self.assertEqual([r["station"] for r in without], ["Static"])
-        with_, _, _, _ = self.build(carriers=True)
+        with_, _, _, _, _ = self.build(carriers=True)
         self.assertEqual(sorted(r["station"] for r in with_),
                          ["K7Q-BQL", "Static"])
         carrier = next(r for r in with_ if r["station"] == "K7Q-BQL")
@@ -1621,7 +1705,7 @@ class TestBuildRows(BuildRowsTestCase):
             source_station(name="Dear", system="Sys B", buy=45000),
             source_station(name="Dearer", system="Sys C", buy=90000),
         ]}
-        rows, _, _, _ = self.build()
+        rows, _, _, _, _ = self.build()
         self.assertEqual([r["station"] for r in rows], ["Cheap"])
 
     def test_rows_with_no_supply_or_no_price_are_dropped(self):
@@ -1630,13 +1714,13 @@ class TestBuildRows(BuildRowsTestCase):
             source_station(name="Empty", system="Sys B", supply=0),
             source_station(name="Priceless", system="Sys C", buy=0),
         ]}
-        rows, _, _, _ = self.build()
+        rows, _, _, _, _ = self.build()
         self.assertEqual([r["station"] for r in rows], ["Stocked"])
 
     def test_a_station_not_selling_the_searched_commodity_is_dropped(self):
         odd = source_station(name="Odd", commodity="Water")
         self.sources = {"Gold": [odd]}
-        rows, _, _, _ = self.build()
+        rows, _, _, _, _ = self.build()
         self.assertEqual(rows, [])
 
     def test_results_beyond_the_radius_are_dropped(self):
@@ -1644,13 +1728,13 @@ class TestBuildRows(BuildRowsTestCase):
             source_station(name="Near", distance=12.0),
             source_station(name="Far", system="Sys B", distance=41.0),
         ]}
-        rows, _, _, _ = self.build(range=40)
+        rows, _, _, _, _ = self.build(range=40)
         self.assertEqual([r["station"] for r in rows], ["Near"])
 
     def test_derived_figures_are_consistent(self):
         self.sources = {"Gold": [source_station(buy=9000, supply=250,
                                                 distance=12.0, ls=250)]}
-        rows, _, cg_ls, _ = self.build(hold=100)
+        rows, _, cg_ls, _, _ = self.build(hold=100)
         r = rows[0]
         self.assertEqual(r["profit_per_t"], 36000)
         self.assertEqual(r["load"], 100)
@@ -1670,6 +1754,142 @@ class TestBuildRows(BuildRowsTestCase):
         self.assertTrue(all(s[1] == 2 for s in seen))
 
 
+class TestBuildRowsReportsWhatItCouldNotAsk(BuildRowsTestCase):
+    """An empty answer and an unanswered question must not look the same.
+
+    The status line counts the commodities the DESTINATION prices, not the
+    ones that got searched, so on a bad evening it read "430 sources across
+    12 commodities" while three of the twelve had contributed nothing at
+    all."""
+
+    def setUp(self):
+        super().setUp()
+        self.orig_fetch = cgbuy.fetch_sources
+        def no_wait(*a, **kw):
+            kw.setdefault("pause", 0)
+            return self.orig_fetch(*a, **kw)
+        self.patch(cgbuy, "fetch_sources", no_wait)
+
+    def spansh(self, broken=()):
+        def answer(url, payload):
+            name = payload["filters"]["market"][0]["name"]
+            if name in broken:
+                raise urllib.error.HTTPError(url, 502, "Bad Gateway", {}, None)
+            if payload["page"] > 0:
+                return {"results": []}
+            return {"results": [source_station(commodity=name, buy=9000)]}
+        self.post_result = answer
+
+    def test_a_commodity_spansh_would_not_answer_for_is_named(self):
+        self.spansh(broken=("Silver",))
+        with quiet_stderr():
+            _rows, _cg, _ls, _h, incomplete = self.build()
+        self.assertEqual(incomplete["dropped"], ["Silver"])
+        self.assertEqual(incomplete["partial"], [])
+
+    def test_a_clean_search_reports_nothing_missing(self):
+        self.spansh()
+        _rows, _cg, _ls, _h, incomplete = self.build()
+        self.assertEqual(incomplete, {"dropped": [], "partial": []})
+
+    def test_the_other_commodities_still_rank(self):
+        """One bad commodity must not cost the search."""
+        self.spansh(broken=("Silver",))
+        with quiet_stderr():
+            rows, _cg, _ls, _h, _i = self.build()
+        self.assertEqual({r["commodity"] for r in rows}, {"Gold"})
+
+    def test_a_failure_past_the_first_page_is_partial_not_dropped(self):
+        """Page 0 answered, so the commodity is in the ranking - just short
+        at the far end of the radius."""
+        def answer(url, payload):
+            if payload["page"] == 0:
+                return {"results": [source_station(
+                    commodity=payload["filters"]["market"][0]["name"],
+                    distance=1.0)] * 500}
+            raise urllib.error.HTTPError(url, 503, "Busy", {}, None)
+        self.post_result = answer
+        with quiet_stderr():
+            _rows, _cg, _ls, _h, incomplete = self.build()
+        self.assertEqual(incomplete["dropped"], [])
+        self.assertEqual(incomplete["partial"], ["Gold", "Silver"])
+
+
+class TestBuildRowsOdysseyFilter(BuildRowsTestCase):
+    """Surface markets are a different trip - a glide down and a pad on a
+    rock - and a client without the expansion cannot use half of them. The
+    box decides whether they are candidates at all."""
+
+    def setUp(self):
+        super().setUp()
+        self.sources = {
+            "Gold": [source_station(name="Alpha Hub"),
+                     source_station(name="Rakhmaninov Landing", planetary=True,
+                                    body="Sys A 3 a")],
+        }
+
+    def names(self, **kw):
+        rows, _p, _ls, _h, _i = self.build(**kw)
+        return sorted(r["station"] for r in rows)
+
+    def test_surface_stations_are_dropped_when_the_box_is_off(self):
+        self.assertEqual(self.names(odyssey=False), ["Alpha Hub"])
+
+    def test_surface_stations_are_ranked_when_the_box_is_on(self):
+        self.assertEqual(self.names(odyssey=True),
+                         ["Alpha Hub", "Rakhmaninov Landing"])
+
+    def test_an_absent_flag_is_read_as_off(self):
+        """A caller that has never heard of the filter must not get surface
+        markets it cannot use."""
+        p = self.params()
+        del p["odyssey"]
+        rows, _p, _ls, _h, _i = cgbuy.build_rows(p)
+        self.assertEqual([r["station"] for r in rows], ["Alpha Hub"])
+
+    def test_orbital_stations_are_never_touched_by_it(self):
+        self.sources = {"Gold": [source_station(name="Alpha Hub")]}
+        self.assertEqual(self.names(odyssey=False), ["Alpha Hub"])
+
+
+class TestBuildRowsCarriesTheBody(BuildRowsTestCase):
+    """Spansh names the body for a surface station and nothing for an orbital
+    one. Both answers have to survive into the row, because the hover text
+    tells them apart."""
+
+    def row(self, **kw):
+        self.sources = {"Gold": [source_station(**kw)]}
+        rows, _p, _ls, _h, _i = self.build()
+        self.assertEqual(len(rows), 1)
+        return rows[0]
+
+    def test_a_surface_station_carries_its_body(self):
+        r = self.row(planetary=True, body="Oberon", body_kind="Rocky body",
+                     gravity=0.035)
+        self.assertTrue(r["planetary"])
+        self.assertEqual(r["body"], "Oberon")
+        self.assertEqual(r["body_kind"], "Rocky body")
+        self.assertAlmostEqual(r["gravity"], 0.035)
+
+    def test_an_orbital_station_carries_its_type_and_no_body(self):
+        r = self.row(stype="Ocellus Starport")
+        self.assertFalse(r["planetary"])
+        self.assertEqual(r["stype"], "Ocellus Starport")
+        self.assertEqual(r["body"], "")
+        self.assertIsNone(r["gravity"])
+
+    def test_the_mixed_plan_inherits_it_from_the_station(self):
+        self.sources = {
+            "Gold": [source_station(planetary=True, body="Oberon")],
+            "Silver": [source_station(commodity="Silver", buy=3000,
+                                      planetary=True, body="Oberon")],
+        }
+        rows, _p, _ls, _h, _i = self.build()
+        plan = cgbuy.build_mixed(rows, 100)[0]
+        self.assertTrue(plan["planetary"])
+        self.assertEqual(plan["body"], "Oberon")
+
+
 class TestBuildRowsAgeFilter(BuildRowsTestCase):
 
     def stations_of_ages(self, *ages):
@@ -1679,14 +1899,14 @@ class TestBuildRowsAgeFilter(BuildRowsTestCase):
 
     def test_stale_rows_are_hidden_and_counted(self):
         self.stations_of_ages(0, 1, 10, 30)
-        rows, _, _, hidden = self.build(max_age_days=7)
+        rows, _, _, hidden, _ = self.build(max_age_days=7)
         self.assertEqual(sorted(r["updated"] for r in rows),
                          sorted([days_ago(1), days_ago(0)]))
         self.assertEqual(hidden, 2)
 
     def test_the_boundary_day_is_kept(self):
         self.stations_of_ages(7, 8)
-        rows, _, _, hidden = self.build(max_age_days=7)
+        rows, _, _, hidden, _ = self.build(max_age_days=7)
         self.assertEqual([r["updated"] for r in rows], [days_ago(7)])
         self.assertEqual(hidden, 1)
 
@@ -1695,20 +1915,20 @@ class TestBuildRowsAgeFilter(BuildRowsTestCase):
         undated = source_station(name="Undated", system="Sys Z")
         undated["market_updated_at"] = None
         self.sources["Gold"].append(undated)
-        rows, _, _, hidden = self.build(max_age_days=7)
+        rows, _, _, hidden, _ = self.build(max_age_days=7)
         self.assertEqual([r["station"] for r in rows], ["St 0"])
         self.assertEqual(hidden, 1)
 
     def test_the_filter_never_empties_the_grid(self):
         # a stale answer beats no answer at all
         self.stations_of_ages(30, 60)
-        rows, _, _, hidden = self.build(max_age_days=7)
+        rows, _, _, hidden, _ = self.build(max_age_days=7)
         self.assertEqual(len(rows), 2)
         self.assertEqual(hidden, 0)
 
     def test_a_zero_max_age_disables_the_filter(self):
         self.stations_of_ages(0, 400)
-        rows, _, _, hidden = self.build(max_age_days=0)
+        rows, _, _, hidden, _ = self.build(max_age_days=0)
         self.assertEqual(len(rows), 2)
         self.assertEqual(hidden, 0)
 
@@ -1716,7 +1936,7 @@ class TestBuildRowsAgeFilter(BuildRowsTestCase):
         self.stations_of_ages(0, 30)
         p = self.params()
         del p["max_age_days"]
-        rows, _, _, hidden = cgbuy.build_rows(p)
+        rows, _, _, hidden, _ = cgbuy.build_rows(p)
         self.assertEqual(cgbuy.MAX_AGE_DEFAULT, 7)
         self.assertEqual([r["updated"] for r in rows], [days_ago(0)])
         self.assertEqual(hidden, 1)
@@ -1749,6 +1969,7 @@ class VerifyTestCase(unittest.TestCase):
         self.urls = []
         self.systems = {}        # system -> {station: market timestamp}
         self.markets = {}        # (sys, stn) -> {commodity: (buy, stock)}
+        self.bodies = {}         # (sys, stn) -> the body EDSM records for it
         self.limit_after = None  # raise RateLimited from this request on
         old = verify._get
         verify._get = self.fake_verify_get
@@ -1765,9 +1986,13 @@ class VerifyTestCase(unittest.TestCase):
         sysname = q["systemName"][0]
         station = q.get("stationName", [None])[0]
         if station is None:
-            return {"stations": [
-                {"name": n, "updateTime": {"market": t}}
-                for n, t in self.systems.get(sysname, {}).items()]}
+            out = []
+            for n, t in self.systems.get(sysname, {}).items():
+                st = {"name": n, "updateTime": {"market": t}}
+                if (sysname, n) in self.bodies:
+                    st["body"] = {"id": 1, "name": self.bodies[(sysname, n)]}
+                out.append(st)
+            return {"stations": out}
         market = self.markets.get((sysname, station), {})
         return {"commodities": [
             {"name": c, "buyPrice": buy, "stock": stock,
@@ -1777,6 +2002,13 @@ class VerifyTestCase(unittest.TestCase):
     def edsm_has(self, system, station, stamp="2025-06-01 09:00:00", **goods):
         self.systems.setdefault(system, {})[station] = stamp
         self.markets[(system, station)] = goods
+
+    def edsm_body(self, system, station, body):
+        """EDSM records a parent body for orbital stations as well as surface
+        ones, which is the whole reason system_bodies exists."""
+        self.systems.setdefault(system, {}).setdefault(
+            station, "2025-06-01 09:00:00")
+        self.bodies[(system, station)] = body
 
 
 class TestVerifyRefresh(VerifyTestCase):
@@ -1941,6 +2173,259 @@ class TestVerifyRefresh(VerifyTestCase):
 # cgbuy.build_rows against a faked EDSM verification pass
 # --------------------------------------------------------------------------
 
+class TestSystemBodies(VerifyTestCase):
+    """Spansh names a body only for stations on a surface; the parent body of
+    an orbital starport is in neither its station index nor its system dump.
+    EDSM has both, in the payload the market re-check already fetches."""
+
+    def test_stations_are_mapped_to_the_body_edsm_records(self):
+        self.edsm_body("Ega", "Jameson Memorial", "Ega AB 2 i")
+        self.edsm_body("Ega", "Jameson Base", "Ega A 1")
+        self.assertEqual(verify.system_bodies("Ega"),
+                         {"Jameson Memorial": "Ega AB 2 i",
+                          "Jameson Base": "Ega A 1"})
+
+    def test_a_station_with_no_body_is_left_out_rather_than_guessed(self):
+        self.edsm_has("Ega", "P4X-N0W")           # a carrier: no body at all
+        self.edsm_body("Ega", "Metz Enterprise", "Ega 4")
+        self.assertEqual(verify.system_bodies("Ega"), {"Metz Enterprise": "Ega 4"})
+
+    def test_cached_only_never_reaches_the_network(self):
+        self.edsm_body("Ega", "Metz Enterprise", "Ega 4")
+        self.assertIsNone(verify.system_bodies("Ega", cached_only=True))
+        self.assertEqual(self.urls, [])
+
+    def test_cached_only_answers_once_the_system_has_been_fetched(self):
+        """A system already re-checked against EDSM must cost nothing: it is
+        the same payload, and it is already in hand."""
+        self.edsm_body("Ega", "Metz Enterprise", "Ega 4")
+        verify.system_market_times("Ega")
+        self.assertEqual(len(self.urls), 1)
+        self.assertEqual(verify.system_bodies("Ega", cached_only=True),
+                         {"Metz Enterprise": "Ega 4"})
+        self.assertEqual(len(self.urls), 1)
+
+    def test_a_second_ask_reuses_the_first_answer(self):
+        self.edsm_body("Ega", "Metz Enterprise", "Ega 4")
+        verify.system_bodies("Ega")
+        verify.system_bodies("Ega")
+        self.assertEqual(len(self.urls), 1)
+
+
+class FakeTree:
+    """Enough Treeview for RowTip: rows by y, and a timer queue we fire by
+    hand. No display, because none of what is being tested is drawing."""
+
+    ROW_H = 20
+
+    def __init__(self, rows=("r0", "r1", "r2")):
+        self.rows = list(rows)
+        self.timers = {}
+        self.cancelled = []
+        self.next_id = 0
+
+    def bind(self, *_a, **_k):
+        pass
+
+    def identify_row(self, y):
+        i = y // self.ROW_H
+        return self.rows[i] if 0 <= i < len(self.rows) else ""
+
+    def after(self, _ms, fn):
+        self.next_id += 1
+        self.timers[self.next_id] = fn
+        return self.next_id
+
+    def after_cancel(self, tid):
+        self.cancelled.append(tid)
+        self.timers.pop(tid, None)
+
+    def fire(self):
+        """Run whatever is still pending, as the event loop would."""
+        for fn in list(self.timers.values()):
+            fn()
+        self.timers.clear()
+
+
+class FakeMotion:
+    def __init__(self, y):
+        self.y, self.x_root, self.y_root = y, 500, 400 + y
+
+
+class TestRowTipWaitsForThePointerToStop(unittest.TestCase):
+    """A table is not a toolbar button. Popping on entry meant a cursor swept
+    down four hundred rows built and tore down a window per row - visibly
+    janky, a white flash per row, and an EDSM lookup queued for every system
+    it skimmed past. Nothing happens until the pointer settles."""
+
+    def setUp(self):
+        self.tree = FakeTree()
+        self.asked = []
+        self.tip = cgbuy.RowTip(self.tree, app=None, text_for=self.text_for)
+        self.tip._show = lambda text, x, y: self.shown.append((text, x, y))
+        self.shown = []
+
+    def text_for(self, item):
+        self.asked.append(item)
+        return "about %s" % item
+
+    def sweep(self, *ys):
+        for y in ys:
+            self.tip._move(FakeMotion(y))
+
+    def test_a_sweep_across_rows_asks_nothing(self):
+        self.sweep(5, 25, 45)
+        self.assertEqual(self.asked, [])
+        self.assertEqual(self.shown, [])
+
+    def test_resting_on_a_row_asks_once(self):
+        self.sweep(5)
+        self.tree.fire()
+        self.assertEqual(self.asked, ["r0"])
+        self.assertEqual(len(self.shown), 1)
+        self.assertEqual(self.tip.shown, "r0")
+
+    def test_only_the_row_rested_on_is_asked_about(self):
+        self.sweep(5, 25, 45)
+        self.tree.fire()
+        self.assertEqual(self.asked, ["r2"])
+
+    def test_leaving_a_row_cancels_its_pending_pop(self):
+        self.sweep(5, 25)
+        self.assertEqual(len(self.tree.cancelled), 1)
+        self.tree.fire()
+        self.assertEqual(self.asked, ["r1"])
+
+    def test_moving_within_one_row_does_not_restart_the_wait(self):
+        """Otherwise a hand that never quite stops never sees an answer."""
+        self.sweep(5, 8, 12)
+        self.assertEqual(self.tree.cancelled, [])
+        self.tree.fire()
+        self.assertEqual(self.asked, ["r0"])
+
+    def test_the_tip_follows_the_pointer_within_the_row(self):
+        self.sweep(5, 12)
+        self.tree.fire()
+        self.assertEqual(self.shown[0][2], FakeMotion(12).y_root + 20)
+
+    def test_the_header_is_not_a_row(self):
+        self.sweep(999)
+        self.tree.fire()
+        self.assertEqual(self.asked, [])
+
+    def test_leaving_the_table_drops_a_pending_pop(self):
+        self.sweep(5)
+        self.tip.hide()
+        self.tree.fire()
+        self.assertEqual(self.asked, [])
+
+    def test_a_late_answer_reaches_a_tip_already_on_screen(self):
+        self.sweep(5)
+        self.tree.fire()
+        self.tip.label = FakeLabel()
+        self.tip.text = "about r0"
+        self.answer = "orbiting Ega 4"
+        self.text_for = lambda item: self.answer
+        self.tip.text_for = self.text_for
+        self.tip.refresh()
+        self.assertEqual(self.tip.label.text, "orbiting Ega 4")
+
+    def test_refresh_does_nothing_when_no_tip_is_up(self):
+        self.tip.refresh()          # must not raise on a bare instance
+        self.assertIsNone(self.tip.shown)
+
+
+class FakeLabel:
+    def __init__(self):
+        self.text = None
+
+    def configure(self, **kw):
+        self.text = kw.get("text", self.text)
+
+
+class TipStub:
+    """Just enough App to ask for a station's hover text.
+
+    _station_tip reads the body cache and, when an orbital station is not in
+    it, asks for a lookup. Neither touches a widget, so none is built here -
+    the point of the test is the wording, which is the whole feature.
+    """
+
+    _station_tip = cgbuy.App._station_tip
+    _orbit_of = cgbuy.App._orbit_of
+    BODY_QUEUE_MAX = cgbuy.App.BODY_QUEUE_MAX
+
+    def __init__(self, cache=None):
+        self.body_cache = dict(cache or {})
+        self.wanted = []
+
+    def _want_bodies(self, system):
+        self.wanted.append(system)
+
+
+class TestStationTip(VerifyTestCase):
+    """What the hover says. The table has a column for everything except the
+    one thing a commander needs before setting course: which body this is."""
+
+    def tip(self, cache=None, **info):
+        self.app = TipStub(cache)
+        return self.app._station_tip(info)
+
+    def test_a_surface_station_says_which_planet_it_is_on(self):
+        t = self.tip(station="Awolowo Mineralogic Base", system="Sol",
+                     planetary=True, stype="Settlement", body="Actaea",
+                     body_kind="Rocky Ice world", gravity=0.0014)
+        self.assertIn("Awolowo Mineralogic Base", t)
+        self.assertIn("on Actaea", t)
+        self.assertIn("Rocky Ice world", t)
+        # Not "0.00 g": surface gravity out here runs from an ice moon to a
+        # heavy rock, and two fixed places rounds the light end to nothing.
+        self.assertIn("0.0014 g", t)
+        self.assertNotIn("orbiting", t)
+
+    def test_a_heavy_world_still_reads_in_the_usual_two_places(self):
+        t = self.tip(station="Ehrlich City", system="Sol", planetary=True,
+                     stype="Planetary Port", body="Mercury", gravity=0.38)
+        self.assertIn("0.38 g", t)
+
+    def test_an_orbital_station_says_which_body_it_orbits(self):
+        t = self.tip(cache={"Ega": {"Jameson Memorial": "Ega AB 2 i"}},
+                     station="Jameson Memorial", system="Ega",
+                     planetary=False, stype="Orbis Starport")
+        self.assertIn("orbiting Ega AB 2 i", t)
+        self.assertNotIn("on Ega", t)
+
+    def test_an_unknown_orbit_is_asked_for_and_says_so_meanwhile(self):
+        t = self.tip(station="Jameson Memorial", system="Ega", planetary=False)
+        self.assertIn("asking EDSM", t)
+        self.assertEqual(self.app.wanted, ["Ega"])
+
+    def test_a_system_edsm_cannot_place_is_not_asked_twice(self):
+        t = self.tip(cache={"Ega": {}}, station="Jameson Memorial",
+                     system="Ega", planetary=False)
+        self.assertIn("no body", t)
+        self.assertEqual(self.app.wanted, [])
+
+    def test_a_carrier_is_told_apart_from_a_station(self):
+        t = self.tip(station="P4X-N0W", system="Ega", carrier=True,
+                     planetary=False, stype="Drake-Class Carrier")
+        self.assertIn("orbits nothing", t)
+        self.assertEqual(self.app.wanted, [])
+
+    def test_a_row_from_an_older_cache_is_placed_without_being_labelled(self):
+        """Rows saved before the body was recorded carry no planetary flag.
+        EDSM can still name the body; what it cannot say is whether you land
+        on it or dock above it, so the wording commits to neither."""
+        t = self.tip(cache={"Ega": {"Old Station": "Ega 4"}},
+                     station="Old Station", system="Ega")
+        self.assertIn("at Ega 4", t)
+        self.assertNotIn("orbiting", t)
+        self.assertNotIn("on Ega 4", t)
+
+    def test_no_row_means_no_tip(self):
+        self.assertEqual(TipStub()._station_tip(None), "")
+
+
 class TestBuildRowsVerify(BuildRowsTestCase, VerifyTestCase):
     """Both halves faked at once: Spansh discovers, EDSM corrects."""
 
@@ -1954,7 +2439,7 @@ class TestBuildRowsVerify(BuildRowsTestCase, VerifyTestCase):
                                                 buy=9000, supply=600)]}
         self.edsm_has("Sys A", "Alpha Hub", stamp=days_ago(0) + " 09:00:00",
                       Gold=(9100, 18))
-        rows, _, _, _ = self.build(verify_edsm=True, max_age_days=0)
+        rows, _, _, _, _ = self.build(verify_edsm=True, max_age_days=0)
         self.assertEqual(len(rows), 1)
         r = rows[0]
         self.assertTrue(r["edsm"])
@@ -1972,14 +2457,14 @@ class TestBuildRowsVerify(BuildRowsTestCase, VerifyTestCase):
                       Gold=(9100, 0))
         self.edsm_has("Sys B", "Beta Ring", stamp=days_ago(0) + " 09:00:00",
                       Gold=(9100, 400))
-        rows, _, _, _ = self.build(verify_edsm=True, max_age_days=0)
+        rows, _, _, _, _ = self.build(verify_edsm=True, max_age_days=0)
         self.assertEqual([r["station"] for r in rows], ["Beta Ring"])
 
     def test_verification_is_skipped_when_switched_off(self):
         self.sources = {"Gold": [source_station(name="Alpha Hub",
                                                 system="Sys A", supply=600)]}
         self.edsm_has("Sys A", "Alpha Hub", Gold=(9100, 18))
-        rows, _, _, _ = self.build(verify_edsm=False, max_age_days=0)
+        rows, _, _, _, _ = self.build(verify_edsm=False, max_age_days=0)
         self.assertEqual(rows[0]["supply"], 600)
         self.assertEqual(self.urls, [])
 
@@ -1988,7 +2473,7 @@ class TestBuildRowsVerify(BuildRowsTestCase, VerifyTestCase):
                                                 system="Sys A", supply=600)]}
         self.edsm_has("Sys A", "Alpha Hub", Gold=(9100, 18))
         self.limit_after = 0
-        rows, _, _, _ = self.build(verify_edsm=True, max_age_days=0)
+        rows, _, _, _, _ = self.build(verify_edsm=True, max_age_days=0)
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0]["supply"], 600)
         self.assertFalse(rows[0]["edsm"])
@@ -2002,7 +2487,7 @@ class TestBuildRowsVerify(BuildRowsTestCase, VerifyTestCase):
 
         verify._get = boom
         with quiet_stderr():
-            rows, _, _, _ = self.build(verify_edsm=True, max_age_days=0)
+            rows, _, _, _, _ = self.build(verify_edsm=True, max_age_days=0)
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0]["supply"], 600)
 
@@ -2612,433 +3097,13 @@ class TestBaseTitle(unittest.TestCase):
         self.assertEqual(root.title(), "* second - CG Buy Finder - B")
 
 
-class StatusTestCase(unittest.TestCase):
-    """A watcher over a temp Status.json, with a clock we control."""
-
-    SUPERCRUISE = status.IN_SUPERCRUISE | (1 << 24)
-
-    def setUp(self):
-        self.tmp = tempfile.TemporaryDirectory(prefix="cgbuy-test-status-")
-        self.addCleanup(self.tmp.cleanup)
-        self.now = 1000.0
-        self.w = status.StatusWatcher(self.tmp.name, clock=lambda: self.now)
-        self.path = os.path.join(self.tmp.name, "Status.json")
-        self.nudge = 0
-
-    def write(self, flags2, flags=None, at=None):
-        """Replace Status.json and advance the clock, the way the game does."""
-        if at is not None:
-            self.now = at
-        self.nudge += 1
-        with open(self.path, "w") as fh:
-            json.dump({"timestamp": "2025-01-01T12:00:00Z", "event": "Status",
-                       "Flags": self.SUPERCRUISE if flags is None else flags,
-                       "Flags2": flags2, "pad": "x" * self.nudge}, fh)
-        self.w.poll()
-
-
-class TestStatusWatcher(StatusTestCase):
-
-    def test_sco_bit_is_seen_and_timed(self):
-        self.write(0, at=100.0)
-        self.write(status.SCO_ACTIVE, at=110.0)
-        self.assertTrue(self.w.sco)
-        self.write(0, at=119.0)
-        self.assertFalse(self.w.sco)
-        self.assertEqual(self.w.windows, [(110.0, 119.0)])
-
-    def test_hyperdrive_charging_bit_is_not_sco(self):
-        """Bit 19 spans StartJump to arrival and would otherwise be counted."""
-        self.write(1 << 19, at=100.0)
-        self.assertFalse(self.w.sco)
-        self.assertEqual(self.w.windows, [])
-
-    def test_sco_outside_supercruise_is_discarded(self):
-        """The drive cannot be overcharged in normal space; a reading there
-        means the file was caught mid-write."""
-        self.write(status.SCO_ACTIVE, flags=1 << 24, at=100.0)
-        self.assertFalse(self.w.sco)
-
-    def test_unchanged_file_is_not_reparsed(self):
-        self.write(status.SCO_ACTIVE, at=100.0)
-        seen = []
-        self.w.on_sco = lambda on, t: seen.append((on, t))
-        self.now = 200.0
-        self.w.poll()
-        self.w.poll()
-        self.assertEqual(seen, [])
-
-    def test_half_written_file_is_ignored(self):
-        self.write(status.SCO_ACTIVE, at=100.0)
-        with open(self.path, "w") as fh:
-            fh.write('{"Flags": 16777232, "Flags2": ')
-        self.now = 110.0
-        self.w.poll()
-        self.assertTrue(self.w.sco)      # last good reading stands
-        self.assertEqual(self.w.windows, [])
-
-    def test_missing_file_is_survivable(self):
-        self.w.poll()
-        self.assertIsNone(self.w.flags2)
-
-    def test_callback_fires_on_both_edges(self):
-        seen = []
-        self.w.on_sco = lambda on, t: seen.append((on, t))
-        self.write(0, at=100.0)
-        self.write(status.SCO_ACTIVE, at=105.0)
-        self.write(0, at=112.0)
-        self.assertEqual(seen, [(True, 105.0), (False, 112.0)])
-
-
-class TestScoSecondsBetween(StatusTestCase):
-
-    def test_burn_inside_the_window_counts_whole(self):
-        self.write(0, at=100.0)
-        self.write(status.SCO_ACTIVE, at=110.0)
-        self.write(0, at=119.0)
-        self.assertAlmostEqual(self.w.seconds_between(100.0, 200.0), 9.0)
-
-    def test_burn_is_clipped_to_the_window(self):
-        self.write(0, at=100.0)
-        self.write(status.SCO_ACTIVE, at=110.0)
-        self.write(0, at=130.0)
-        self.assertAlmostEqual(self.w.seconds_between(120.0, 125.0), 5.0)
-
-    def test_burn_still_running_counts_up_to_the_end(self):
-        self.write(status.SCO_ACTIVE, at=110.0)
-        self.assertAlmostEqual(self.w.seconds_between(100.0, 130.0), 20.0)
-
-    def test_two_burns_add_up(self):
-        self.write(0, at=100.0)
-        self.write(status.SCO_ACTIVE, at=110.0)
-        self.write(0, at=114.0)
-        self.write(status.SCO_ACTIVE, at=120.0)
-        self.write(0, at=125.0)
-        self.assertAlmostEqual(self.w.seconds_between(100.0, 200.0), 9.0)
-
-    def test_unrelated_burn_does_not_count(self):
-        self.write(0, at=100.0)
-        self.write(status.SCO_ACTIVE, at=110.0)
-        self.write(0, at=119.0)
-        self.assertAlmostEqual(self.w.seconds_between(500.0, 600.0), 0.0)
-
-    def test_first_lit_is_the_start_of_the_burn(self):
-        self.write(0, at=100.0)
-        self.write(status.SCO_ACTIVE, at=110.0)
-        self.write(0, at=119.0)
-        self.assertAlmostEqual(self.w.first_lit(100.0, 200.0), 110.0)
-
-    def test_first_lit_is_none_without_a_burn(self):
-        self.write(0, at=100.0)
-        self.assertIsNone(self.w.first_lit(100.0, 200.0))
-
-
-class TestScoModel(unittest.TestCase):
-    """The braking law: range to run, as a function of speed."""
-
-    # (range at cut, speed at cut, overshot) - every captured approach.
-    OBS = [(172.0, 70.0, True), (296.0, 75.3, False), (273.0, 76.4, False),
-           (284.0, 91.9, False), (1120.0, 242.0, False),
-           (2950.0, 300.0, False), (3590.0, 452.0, False)]
-
-    def test_brake_distance_grows_with_speed(self):
-        self.assertLess(sco_model.brake_distance(70), sco_model.brake_distance(2000))
-
-    def test_brake_distance_refuses_nonsense(self):
-        self.assertIsNone(sco_model.brake_distance(0))
-        self.assertIsNone(sco_model.brake_distance(-5))
-        self.assertIsNone(sco_model.brake_distance("fast"))
-
-    def test_required_countdown_falls_as_speed_rises(self):
-        """Why a single seconds-to-target figure never worked: the same law
-        reads 4s at 70c and under 1s at 2,000c."""
-        secs = [sco_model.cut_range(v) / v for v in (70, 250, 1000, 2000)]
-        self.assertEqual(secs, sorted(secs, reverse=True))
-        self.assertGreater(secs[0], 3.0)
-        self.assertLess(secs[-1], 1.0)
-
-    # The 35,000 Ls report: cut near the cap with roughly 3,000 Ls to run and
-    # the ship ended too slow to arrive on, so the true requirement is below it.
-    BOUNDS = [(2000.0, 3000.0)]
-
-    def test_shipped_law_separates_the_observations(self):
-        """The cut that overshot falls below the line and the clean ones above,
-        bar one sitting 1.4% under - which is inside the reading error on a
-        speed taken off a screenshot. Checked without the safety margin, which
-        is advice rather than fit."""
-        t = sco_model.terms("panthermkii")
-        wrong = [(d, v) for d, v, over in self.OBS
-                 if (d < sco_model.brake_distance(v, t["a"], t["p"])) != over]
-        self.assertLessEqual(len(wrong), 1)
-        for d, v in wrong:
-            need = sco_model.brake_distance(v, t["a"], t["p"])
-            self.assertLess(abs(d - need) / d, 0.05)
-
-    def test_advice_clears_the_measured_overshoot(self):
-        self.assertGreater(sco_model.cut_range(70, "panthermkii"), 172.0)
-
-    def test_fit_reports_an_envelope_not_a_point(self):
-        got = sco_model.fit(self.OBS, tolerance=0.05)
-        self.assertGreater(got["fits"], 1)
-        self.assertLess(got["p_min"], got["p_max"])
-
-    def test_captured_approaches_alone_do_not_exclude_a_constant_ratio(self):
-        """Worth pinning down: the case against a fixed seconds-to-target rests
-        on the 35,000 Ls report, not on anything captured. Without that bound
-        the traces happily admit exponents above 1."""
-        self.assertGreater(sco_model.fit(self.OBS, tolerance=0.05)["p_max"], 1.0)
-        self.assertIsNotNone(sco_model.fit(self.OBS, exponents=[100],
-                                           tolerance=0.05))
-
-    def test_the_report_is_what_rules_a_constant_ratio_out(self):
-        got = sco_model.fit(self.OBS, bounds=self.BOUNDS, tolerance=0.05)
-        self.assertLess(got["p_max"], 1.0)
-        self.assertIsNone(sco_model.fit(self.OBS, exponents=[100],
-                                        bounds=self.BOUNDS, tolerance=0.05))
-
-    def test_fit_of_nothing_is_nothing(self):
-        self.assertIsNone(sco_model.fit([]))
-
-    def test_plan_is_ordered_and_complete(self):
-        rows = sco_model.plan("panthermkii")
-        self.assertTrue(all(d for _, d in rows))
-        self.assertEqual([v for v, _ in rows], sorted(v for v, _ in rows))
-
-
-class TestScoTable(unittest.TestCase):
-
-    TABLE = {"fallback": {"law": {"a": 30.0, "p": 0.5}},
-             "ships": {"panthermkii": {"law": {"a": 30.0, "p": 0.5},
-                                       "source": "measured", "samples": 9}}}
-
-    def test_measured_hull_is_marked_measured(self):
-        self.assertEqual(sco_model.terms("panthermkii", self.TABLE)["source"],
-                         "measured")
-
-    def test_ship_name_is_case_insensitive(self):
-        self.assertEqual(sco_model.terms("PantherMkII", self.TABLE)["source"],
-                         "measured")
-
-    def test_unmeasured_hull_falls_back_and_admits_it(self):
-        t = sco_model.terms("sidewinder", self.TABLE)
-        self.assertEqual(t["source"], "estimate")
-        self.assertIn("estimate", sco_model.summary("sidewinder", 250, self.TABLE))
-
-    def test_missing_table_file_is_survivable(self):
-        self.assertEqual(sco_model.load_table("/nonexistent.json"), {})
-        self.assertEqual(sco_model.terms("panthermkii",
-                                         path="/nonexistent.json")["source"],
-                         "estimate")
-
-    def test_shipped_table_is_usable(self):
-        real = sco_model.load_table()
-        t = sco_model.terms("panthermkii", real)
-        self.assertEqual(t["source"], "measured")
-        self.assertTrue(t["bracket"])
-
-
-class TestObservedApproaches(StatusTestCase):
-
-    def test_approach_predating_the_watcher_is_not_scored(self):
-        self.assertFalse(self.w.observed(self.now - 60.0))
-
-    def test_approach_started_under_watch_is_scored(self):
-        self.assertTrue(self.w.observed(self.now + 60.0))
-
-
-class TestScoBands(unittest.TestCase):
-
-    def test_bands_split_where_the_flight_changes_shape(self):
-        self.assertEqual(journal.sco_band(357), "short")
-        self.assertEqual(journal.sco_band(999), "short")
-        self.assertEqual(journal.sco_band(5394), "mid")
-        self.assertEqual(journal.sco_band(19999), "mid")
-        self.assertEqual(journal.sco_band(200000), "long")
-
-
-class TestScoAdvice(unittest.TestCase):
-
-    def cal(self, samples):
-        c = journal.Calibration()
-        for s in samples:
-            c.add_sco_sample(*s)
-        return c
-
-    def test_nothing_to_say_below_the_sample_floor(self):
-        c = self.cal([(5394, 135, 9, 4), (5394, 140, 9, 4)])
-        self.assertIsNone(c.sco_advice(5394))
-
-    def test_fastest_arrival_supplies_the_advice(self):
-        c = self.cal([(5394, 135, 9, 4), (5394, 121, 4, 3), (5394, 156, 14, 5)])
-        a = c.sco_advice(5394)
-        self.assertEqual(a["hold"], 4.0)
-        self.assertEqual(a["total"], 121.0)
-        self.assertEqual(a["worst_hold"], 14.0)
-        self.assertEqual(a["n"], 3)
-
-    def test_samples_are_kept_per_ship(self):
-        """A Panther's approach says nothing about a Cobra's."""
-        c = journal.Calibration()
-        for s in [(5394, 135, 9, 4, "panthermkii"), (5394, 121, 4, 3, "panthermkii"),
-                  (5394, 200, 30, 4, "panthermkii"), (5394, 60, 2, 1, "cobramkiii")]:
-            c.add_sco_sample(*s)
-        a = c.sco_advice(5394, "panthermkii")
-        self.assertEqual(a["n"], 3)
-        self.assertEqual(a["total"], 121.0)
-        self.assertTrue(a["ship_specific"])
-
-    def test_thin_ship_history_falls_back_to_the_mixed_pool(self):
-        c = journal.Calibration()
-        for s in [(5394, 135, 9, 4, "panthermkii"), (5394, 121, 4, 3, "panthermkii"),
-                  (5394, 150, 12, 4, "cobramkiii")]:
-            c.add_sco_sample(*s)
-        a = c.sco_advice(5394, "panthermkii")
-        self.assertEqual(a["n"], 3)
-        self.assertFalse(a["ship_specific"])
-
-    def test_legacy_samples_are_not_credited_to_the_current_ship(self):
-        """Samples written before ships were tracked carry no hull, and must
-        not be silently attributed to whatever is in the bay now."""
-        old = {"sco_samples": [[5394, 135, 9, 4]] * 3}
-        c = journal.Calibration(old)
-        self.assertEqual(c.sco_samples[0][4], None)
-        self.assertFalse(c.sco_advice(5394, "panthermkii")["ship_specific"])
-
-    def test_other_bands_do_not_contaminate(self):
-        c = self.cal([(357, 96, 0, None), (357, 150, 4, 11),
-                      (357, 118, 2, 9), (5394, 135, 9, 4)])
-        a = c.sco_advice(357)
-        self.assertEqual(a["n"], 3)
-        self.assertEqual(a["hold"], 0.0)
-
-    def test_one_habit_repeated_is_not_an_experiment(self):
-        """Twenty samples of the same burn say what you always do, not what
-        works. spread is what the UI leans on to ask for a different run."""
-        c = self.cal([(5394, 135, 9, 4)] * 5)
-        self.assertEqual(c.sco_advice(5394)["spread"], 1)
-
-    def test_spread_counts_distinct_burns(self):
-        c = self.cal([(5394, 135, 9, 4), (5394, 121, 4, 3), (5394, 150, 20, 4)])
-        self.assertEqual(c.sco_advice(5394)["spread"], 3)
-
-    def test_samples_survive_a_config_round_trip(self):
-        c = self.cal([(5394, 135, 9, 4), (5394, 121, 4, None)])
-        again = journal.Calibration(json.loads(json.dumps(c.to_dict())))
-        self.assertEqual(again.sco_samples, c.sco_samples)
-
-
-class TestApproachCallback(WatcherTestCase):
-
-    def setUp(self):
-        super().setUp()
-        self.seen = []
-        self.w.on_approach = lambda *a: self.seen.append(a)
-
-    def live(self, *events):
-        return [self.w._handle(json.dumps(e) + "\n", live=True) for e in events]
-
-    def test_jump_to_drop_is_reported_with_the_arrival_distance(self):
-        self.live(
-            {"timestamp": ts(12, 0, 0), "event": "FSDJump", "StarSystem": "Ega"},
-            {"timestamp": ts(12, 2, 15), "event": "SupercruiseDestinationDrop",
-             "Type": "Metz Enterprise"},
-            {"timestamp": ts(12, 2, 18), "event": "SupercruiseExit"},
-            {"timestamp": ts(12, 4, 0), "event": "Docked",
-             "StationName": "Metz Enterprise", "DistFromStarLS": 5394.0},
-        )
-        self.assertEqual(len(self.seen), 1)
-        ls, start, drop, st = self.seen[0]
-        self.assertEqual(ls, 5394.0)
-        self.assertEqual(drop - start, 135.0)
-        self.assertEqual(st, "Metz Enterprise")
-
-    def test_destination_drop_wins_over_the_later_exit(self):
-        """SupercruiseExit trails the drop by a few seconds and would inflate
-        every arrival if it were taken as the end of the approach."""
-        self.live(
-            {"timestamp": ts(12, 0, 0), "event": "FSDJump", "StarSystem": "Ega"},
-            {"timestamp": ts(12, 2, 0), "event": "SupercruiseDestinationDrop",
-             "Type": "X"},
-            {"timestamp": ts(12, 2, 30), "event": "SupercruiseExit"},
-            {"timestamp": ts(12, 4, 0), "event": "Docked",
-             "StationName": "X", "DistFromStarLS": 900.0},
-        )
-        self.assertEqual(self.seen[0][2] - self.seen[0][1], 120.0)
-
-    def test_manual_drop_falls_back_to_the_exit(self):
-        self.live(
-            {"timestamp": ts(12, 0, 0), "event": "FSDJump", "StarSystem": "Ega"},
-            {"timestamp": ts(12, 2, 0), "event": "SupercruiseExit"},
-            {"timestamp": ts(12, 4, 0), "event": "Docked",
-             "StationName": "X", "DistFromStarLS": 900.0},
-        )
-        self.assertEqual(self.seen[0][2] - self.seen[0][1], 120.0)
-
-    def test_re_entering_supercruise_restarts_the_approach(self):
-        """Dropping out and resuming is a different flight from the one that
-        began at the jump, and timing it from the jump would be nonsense."""
-        self.live(
-            {"timestamp": ts(12, 0, 0), "event": "FSDJump", "StarSystem": "Ega"},
-            {"timestamp": ts(12, 5, 0), "event": "SupercruiseEntry"},
-            {"timestamp": ts(12, 6, 0), "event": "SupercruiseDestinationDrop",
-             "Type": "X"},
-            {"timestamp": ts(12, 7, 0), "event": "Docked",
-             "StationName": "X", "DistFromStarLS": 900.0},
-        )
-        self.assertEqual(self.seen[0][2] - self.seen[0][1], 60.0)
-
-    def test_dock_without_a_drop_reports_nothing(self):
-        self.live(
-            {"timestamp": ts(12, 0, 0), "event": "FSDJump", "StarSystem": "Ega"},
-            {"timestamp": ts(12, 4, 0), "event": "Docked",
-             "StationName": "X", "DistFromStarLS": 900.0},
-        )
-        self.assertEqual(self.seen, [])
-
-    def test_second_dock_does_not_reuse_the_first_approach(self):
-        self.live(
-            {"timestamp": ts(12, 0, 0), "event": "FSDJump", "StarSystem": "Ega"},
-            {"timestamp": ts(12, 2, 0), "event": "SupercruiseDestinationDrop",
-             "Type": "A"},
-            {"timestamp": ts(12, 3, 0), "event": "Docked",
-             "StationName": "A", "DistFromStarLS": 900.0},
-            {"timestamp": ts(12, 6, 0), "event": "Undocked"},
-            {"timestamp": ts(12, 20, 0), "event": "Docked",
-             "StationName": "B", "DistFromStarLS": 90000.0},
-        )
-        self.assertEqual(len(self.seen), 1)
-
-
 class TestParseTsIsUtc(unittest.TestCase):
 
     def test_timestamps_line_up_with_the_wall_clock(self):
-        """Status.json transitions are stamped with time.time(); a journal
-        timestamp has to land on the same scale or the pairing is hours out."""
+        """A journal timestamp is UTC, and time.mktime would read it as local
+        time - which cancels out when two are subtracted, and does not across
+        a DST boundary."""
         self.assertEqual(journal.parse_ts("2025-01-01T00:00:00Z"), 1735689600)
-
-
-class TestBuildsBundleTheScoTable(unittest.TestCase):
-    """Both packagers follow imports, not open() calls. Told nothing, they ship
-    no sco_table.json and even a measured hull reads as an estimate.
-
-    Linux builds with PyInstaller and Windows with Nuitka, which spell the same
-    instruction differently, so either flag counts -- what matters is that no
-    build script forgets the table."""
-
-    BUILDS = (".github/workflows/build.yml", ".github/workflows/release.yml",
-              "build.sh", "build.bat")
-    DATA_FLAGS = ("--add-data", "--include-data-files")
-
-    def test_every_build_adds_the_table_as_data(self):
-        for name in self.BUILDS:
-            with open(os.path.join(PROJECT_DIR, name), encoding="utf-8") as fh:
-                text = fh.read()
-            with self.subTest(build=name):
-                self.assertTrue(
-                    any(flag in text for flag in self.DATA_FLAGS),
-                    f"{name} passes neither {' nor '.join(self.DATA_FLAGS)}")
-                self.assertIn("sco_table.json", text)
-
 
 
 class TestWindowsIsNotBuiltAsOneFile(unittest.TestCase):
@@ -3294,7 +3359,7 @@ class TestFontSettingReachesEveryReadout(unittest.TestCase):
     """
 
     # attribute -> multiple of the font setting the widget should render at
-    CHROME = {"standing_lbl": 0, "fetch_lbl": 0, "sco_lbl": 0,
+    CHROME = {"standing_lbl": 0, "fetch_lbl": 0,
               "status": 0, "cg_lbl": 0, "update_lbl": 0}
 
     def setUp(self):
@@ -3307,7 +3372,6 @@ class TestFontSettingReachesEveryReadout(unittest.TestCase):
             self.skipTest("no usable Tk display: %s" % e)
         self.addCleanup(self.root.destroy)
         self.app = cgbuy.App(self.root, autosearch=False)
-        self.app._show_sco()
         self.app._show_update("9.9")
 
     def effective(self, widget):
