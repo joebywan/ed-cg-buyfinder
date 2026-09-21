@@ -317,16 +317,39 @@ the estimate follows within two or three runs.
 
 ## EDDN sharing
 
-**Off by default, opt-in in Settings.** When on, every time the game writes
-`Market.json` (a `Market` journal event) the tool sends that station's commodity
-table to EDDN under the `commodity/3` schema, the same way EDMC does.
+**Off by default, opt-in in Settings.** When on, every time the game writes one
+of its station files — a `Market`, `Outfitting` or `Shipyard` journal event —
+the tool sends that station's list to EDDN, the same way EDMC does:
 
-What is sent: system name, station name, market ID, timestamp, station type, the
-Horizons/Odyssey flags, and the price/stock/demand table the game already wrote.
-Limpets and non-marketable goods are stripped. Nothing else — no position, no
-ship, no cargo. **Your commander name is the uploader ID**, exactly as every
-other uploader does it: public and pseudonymous. Messages are validated locally
-against the schema before sending, and each market snapshot is sent at most once.
+| Schema | From | What it carries |
+| --- | --- | --- |
+| `commodity/3` | `Market.json` | the price/stock/demand table |
+| `outfitting/2` | `Outfitting.json` | the module names on sale |
+| `shipyard/2` | `Shipyard.json` | the hulls on sale |
+
+Only the first is data this tool reads back. The other two are given rather
+than taken — they cost nothing, because those files are already in the folder
+being tailed, and somebody else's route planner needs them.
+
+Every message carries the system, station, market ID, timestamp and the
+Horizons/Odyssey flags, and nothing else — no position, no ship, no cargo.
+Limpets and non-marketable goods are stripped from the market table; the
+planet approach suite is stripped from the module list, because every hull has
+one and its presence says nothing about the station. Module names are spelled
+the way EDMC spells them, so consumers see one string from both uploaders.
+
+**Your commander name is the uploader ID**, exactly as every other uploader
+does it: public and pseudonymous. Messages are validated locally against the
+schema before sending — all three set `additionalProperties: false`, so one
+stray key rejects a whole message — and each snapshot is sent at most once.
+
+Two details worth knowing, both learned from real files. The game repeats
+module names (484 entries, 465 distinct in one reading) and the schema demands
+unique ones, so the list is de-duplicated or it would be rejected outright.
+And `Outfitting.json` and `Shipyard.json` sit on disk from the last station
+that *had* that service, so each upload is checked against the market ID the
+journal event just named — otherwise a shipyard three systems back gets
+republished as this one.
 
 Everything this tool reads came from someone else doing this, which is the
 argument for turning it on.

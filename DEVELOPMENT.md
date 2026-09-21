@@ -14,7 +14,7 @@ point and has no `.py` extension, which is why the build scripts copy it to
 |---|---|
 | `cgbuy` | the app: UI, search orchestration, ranking, config and cache |
 | `cg.py` | community goal discovery and parsing |
-| `eddn.py` | EDDN upload, `commodity/3` schema |
+| `eddn.py` | EDDN upload: `commodity/3`, `outfitting/2`, `shipyard/2` |
 | `journal.py` | journal tailing and trip-time calibration |
 | `notify.py` | per-OS notifications |
 | `update.py` | asks GitHub for the latest release tag; compares, never fetches |

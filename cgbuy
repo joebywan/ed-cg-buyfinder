@@ -2806,6 +2806,9 @@ class App:
 
     SHIP_EVENTS = ("Loadout", "ShipyardSwap", "ShipyardNew", "LoadGame",
                    "FSDJump")
+    # Each of these means "I have just rewritten the matching .json file".
+    # Market is the only one this tool reads back; the other two are given.
+    EDDN_EVENTS = ("Market", "Outfitting", "Shipyard")
 
     def _on_journal_event(self, e):
         ev = e.get("event")
@@ -2818,17 +2821,27 @@ class App:
             # None of it should need a restart to be believed.
             self._adopt_ship()
             return
-        if ev != "Market" or not self.v_eddn.get():
-            return                      # the game just rewrote Market.json
+        if ev not in self.EDDN_EVENTS or not self.v_eddn.get():
+            return              # the game just rewrote one of its .json files
         if not (eddn and self.sender and self.watcher):
             return
-        path = os.path.join(self.watcher.dir, "Market.json")
-        args = (path, self.watcher.commander, self.watcher.horizons,
-                self.watcher.odyssey, self.watcher.gameversion,
-                self.watcher.gamebuild)
+        w = self.watcher
+
+        if ev == "Market":
+            path = os.path.join(w.dir, "Market.json")
+            send = lambda: self.sender.maybe_send(          # noqa: E731
+                path, w.commander, w.horizons, w.odyssey,
+                w.gameversion, w.gamebuild)
+        else:
+            # The event names the station whose list this is; the file on disk
+            # may still be the last station that had the service.
+            market_id = e.get("MarketID")
+            send = lambda: self.sender.maybe_send_station(  # noqa: E731
+                ev, w.dir, w.commander, w.odyssey, w.gameversion, w.gamebuild,
+                market_id=market_id)
 
         def worker():
-            ok, msg = self.sender.maybe_send(*args)
+            ok, msg = send()
             if not self.closing:
                 self.q.put(("eddn", (ok, msg)))
 

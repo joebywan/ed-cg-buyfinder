@@ -229,6 +229,252 @@ class TestBuildMessage(unittest.TestCase):
         self.assertEqual(eddn.validate(again), [])
 
 
+def fake_outfitting(**over):
+    """A miniature Outfitting.json, duplicates and all."""
+    d = {
+        "timestamp": "2025-01-01T12:00:00Z", "event": "Outfitting",
+        "MarketID": 3230679808, "StationName": "Metz Enterprise",
+        "StarSystem": "Ega", "Horizons": True,
+        "Items": [
+            {"id": 1, "Name": "hpt_slugshot_gimbal_large", "BuyPrice": 1707264},
+            {"id": 2, "Name": "int_engine_size3_class5", "BuyPrice": 5000},
+            # The game really does repeat names - 484 entries, 465 distinct in
+            # one real file - and the schema demands uniqueItems.
+            {"id": 3, "Name": "hpt_slugshot_gimbal_large", "BuyPrice": 1707264},
+            {"id": 4, "Name": "adder_armour_grade1", "BuyPrice": 1000},
+            {"id": 5, "Name": "int_planetapproachsuite", "BuyPrice": 0},
+        ],
+    }
+    d.update(over)
+    return d
+
+
+def fake_shipyard(**over):
+    d = {
+        "timestamp": "2025-01-01T12:00:00Z", "event": "Shipyard",
+        "MarketID": 128666762, "StationName": "Jameson Memorial",
+        "StarSystem": "Shinrarta Dezhra", "Horizons": True,
+        "AllowCobraMkIV": False,
+        "PriceList": [
+            {"id": 0, "ShipType": "sidewinder", "ShipPrice": 164384},
+            {"id": 0, "ShipType": "anaconda", "ShipPrice": 146969451},
+        ],
+    }
+    d.update(over)
+    return d
+
+
+class TestBuildOutfitting(unittest.TestCase):
+    """outfitting/2: a station, a timestamp, and a list of module names."""
+
+    def setUp(self):
+        self.env = eddn.build_outfitting(fake_outfitting(), "TestCmdr", True)
+        self.msg = self.env["message"]
+
+    def test_the_envelope_names_the_outfitting_schema(self):
+        self.assertEqual(self.env["$schemaRef"], eddn.OUTFITTING_SCHEMA)
+        self.assertEqual(self.env["header"]["uploaderID"], "TestCmdr")
+
+    def test_the_station_and_when_it_was_read(self):
+        self.assertEqual(self.msg["systemName"], "Ega")
+        self.assertEqual(self.msg["stationName"], "Metz Enterprise")
+        self.assertEqual(self.msg["marketId"], 3230679808)
+        self.assertEqual(self.msg["timestamp"], "2025-01-01T12:00:00Z")
+        self.assertIs(self.msg["horizons"], True)
+        self.assertIs(self.msg["odyssey"], True)
+
+    def test_duplicates_are_collapsed(self):
+        """The schema sets uniqueItems, and the game's own file repeats
+        names - so sending it as written would be rejected outright."""
+        self.assertEqual(self.msg["modules"].count("Hpt_slugshot_gimbal_large"), 1)
+
+    def test_the_universal_module_is_dropped(self):
+        """Every hull has a planet approach suite, so its presence says
+        nothing about the station. EDMC drops it; a list that disagrees with
+        EDMC's for the same station is worse than either alone."""
+        self.assertNotIn("int_planetapproachsuite", self.msg["modules"])
+        self.assertNotIn("Int_planetapproachsuite", self.msg["modules"])
+
+    def test_names_are_spelled_the_way_edmc_spells_them(self):
+        self.assertIn("Hpt_slugshot_gimbal_large", self.msg["modules"])
+        self.assertIn("Int_engine_size3_class5", self.msg["modules"])
+        self.assertIn("adder_Armour_grade1", self.msg["modules"])
+
+    def test_the_list_is_sorted(self):
+        self.assertEqual(self.msg["modules"], sorted(self.msg["modules"]))
+
+    def test_every_name_matches_the_schema_pattern(self):
+        for m in self.msg["modules"]:
+            self.assertRegex(m, eddn.MODULE_RE)
+
+    def test_horizons_comes_off_the_file_not_the_commander(self):
+        """It is the game saying what this station's list was drawn from."""
+        env = eddn.build_outfitting(fake_outfitting(Horizons=False), "X", True)
+        self.assertIs(env["message"]["horizons"], False)
+
+    def test_an_unknown_odyssey_flag_is_left_out(self):
+        env = eddn.build_outfitting(fake_outfitting(), "X", None)
+        self.assertNotIn("odyssey", env["message"])
+
+    def test_a_file_missing_its_station_is_refused(self):
+        for k in ("StarSystem", "StationName", "MarketID", "timestamp"):
+            d = fake_outfitting()
+            del d[k]
+            with self.subTest(key=k):
+                self.assertRaises(ValueError, eddn.build_outfitting, d, "X")
+
+    def test_it_validates(self):
+        self.assertEqual(
+            eddn.validate_list_message(self.env, "modules", eddn.OUTFITTING_KEYS), [])
+
+
+class TestBuildShipyard(unittest.TestCase):
+
+    def setUp(self):
+        self.env = eddn.build_shipyard(fake_shipyard(), "TestCmdr", False)
+        self.msg = self.env["message"]
+
+    def test_the_envelope_names_the_shipyard_schema(self):
+        self.assertEqual(self.env["$schemaRef"], eddn.SHIPYARD_SCHEMA)
+
+    def test_hulls_are_listed_sorted_and_unique(self):
+        self.assertEqual(self.msg["ships"], ["anaconda", "sidewinder"])
+
+    def test_allow_cobra_mkiv_is_not_sent(self):
+        """It sits in the file and not in the schema, which sets
+        additionalProperties false - so it would reject the whole message."""
+        self.assertNotIn("AllowCobraMkIV", self.msg)
+        self.assertEqual(
+            eddn.validate_list_message(self.env, "ships", eddn.SHIPYARD_KEYS), [])
+
+    def test_the_other_spelling_of_the_price_list_is_accepted(self):
+        """The journal file says PriceList; EDMC reads Pricelist. Take both
+        rather than depend on which of them is the typo."""
+        d = fake_shipyard()
+        d["Pricelist"] = d.pop("PriceList")
+        env = eddn.build_shipyard(d, "X")
+        self.assertEqual(env["message"]["ships"], ["anaconda", "sidewinder"])
+
+
+class TestValidateListMessage(unittest.TestCase):
+
+    def env(self, **over):
+        e = eddn.build_outfitting(fake_outfitting(), "TestCmdr", True)
+        e["message"].update(over)
+        return e
+
+    def check(self, e):
+        return eddn.validate_list_message(e, "modules", eddn.OUTFITTING_KEYS)
+
+    def test_an_undeclared_key_is_caught_here_not_at_eddn(self):
+        self.assertIn("undeclared", " ".join(self.check(self.env(extra=1))))
+
+    def test_an_empty_list_is_a_failed_reading_not_an_empty_station(self):
+        self.assertIn("no modules", " ".join(self.check(self.env(modules=[]))))
+
+    def test_duplicates_are_caught(self):
+        e = self.env(modules=["Hpt_a", "Hpt_a"])
+        self.assertIn("duplicates", " ".join(self.check(e)))
+
+    def test_a_name_outside_the_pattern_is_caught(self):
+        e = self.env(modules=["paintjob_cobramkiii_default"])
+        self.assertIn("pattern", " ".join(self.check(e)))
+
+    def test_a_missing_header_field_is_caught(self):
+        e = self.env()
+        e["header"]["softwareVersion"] = ""
+        self.assertIn("softwareVersion", " ".join(self.check(e)))
+
+
+class TestSenderStationFiles(unittest.TestCase):
+    """The .json files persist from the last station that HAD the service, so
+    a Shipyard.json from three systems ago is the normal case."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(prefix="cgbuy-test-eddn-")
+        self.addCleanup(self.tmp.cleanup)
+        self.sender = eddn.Sender()
+        self.uploads = []
+        old = eddn.upload
+        eddn.upload = self.fake_upload
+        self.addCleanup(setattr, eddn, "upload", old)
+        self.ok = True
+
+    def fake_upload(self, envelope, timeout=20):
+        self.uploads.append(envelope)
+        return (self.ok, "200 OK" if self.ok else "HTTP 400")
+
+    def write(self, name, data):
+        with open(os.path.join(self.tmp.name, name), "w") as fh:
+            json.dump(data, fh)
+
+    def send(self, kind="Outfitting", **kw):
+        return self.sender.maybe_send_station(
+            kind, self.tmp.name, "TestCmdr", True, **kw)
+
+    def test_an_outfitting_file_is_sent_once(self):
+        self.write("Outfitting.json", fake_outfitting())
+        ok, msg = self.send()
+        self.assertTrue(ok, msg)
+        self.assertEqual(len(self.uploads), 1)
+        self.assertEqual(self.uploads[0]["$schemaRef"], eddn.OUTFITTING_SCHEMA)
+        ok2, msg2 = self.send()
+        self.assertFalse(ok2)
+        self.assertIn("already sent", msg2)
+        self.assertEqual(len(self.uploads), 1)
+
+    def test_another_stations_file_is_not_republished_as_this_one(self):
+        """The event names the station whose list this is. A file that does
+        not match is simply one the game has not rewritten yet."""
+        self.write("Shipyard.json", fake_shipyard())      # MarketID 128666762
+        ok, msg = self.send("Shipyard", market_id=999)
+        self.assertFalse(ok)
+        self.assertIn("another station", msg)
+        self.assertEqual(self.uploads, [])
+        self.assertEqual(self.sender.failed, 0, "not a failure, just not ours")
+
+    def test_a_matching_market_id_goes(self):
+        self.write("Shipyard.json", fake_shipyard())
+        ok, _ = self.send("Shipyard", market_id=128666762)
+        self.assertTrue(ok)
+        self.assertEqual(len(self.uploads), 1)
+
+    def test_outfitting_and_shipyard_do_not_share_a_dedup_key(self):
+        """Both files can carry the same MarketID and timestamp."""
+        stamp = "2025-01-01T12:00:00Z"
+        self.write("Outfitting.json", fake_outfitting(MarketID=7, timestamp=stamp))
+        self.write("Shipyard.json", fake_shipyard(MarketID=7, timestamp=stamp))
+        self.assertTrue(self.send("Outfitting")[0])
+        self.assertTrue(self.send("Shipyard")[0])
+        self.assertEqual(len(self.uploads), 2)
+
+    def test_a_missing_file_is_reported_not_raised(self):
+        ok, msg = self.send()
+        self.assertFalse(ok)
+        self.assertIn("cannot read", msg)
+
+    def test_a_rejected_upload_is_not_remembered(self):
+        self.write("Outfitting.json", fake_outfitting())
+        self.ok = False
+        self.assertFalse(self.send()[0])
+        self.ok = True
+        self.assertTrue(self.send()[0], "a retry must still be allowed")
+
+    def test_nothing_invalid_reaches_the_network(self):
+        self.write("Outfitting.json", fake_outfitting(Items=[]))
+        ok, msg = self.send()
+        self.assertFalse(ok)
+        self.assertIn("invalid", msg)
+        self.assertEqual(self.uploads, [])
+
+    def test_a_dry_run_builds_and_sends_nothing(self):
+        self.write("Outfitting.json", fake_outfitting())
+        ok, msg = self.send(dry_run=True)
+        self.assertTrue(ok)
+        self.assertIn("DRY RUN", msg)
+        self.assertEqual(self.uploads, [])
+
+
 class TestValidateCatchesProblems(unittest.TestCase):
     """validate() exists because the schema sets additionalProperties=false."""
 
