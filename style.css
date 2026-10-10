@@ -157,8 +157,9 @@ th {
 }
 th { vertical-align: bottom; line-height: 1.15; }
 .tabs .cols-btn { margin-left: auto; color: var(--or); }
-.cols-panel { border: 1px solid var(--or-dim); padding: 6px 10px; margin: 6px 0; max-width: 28em; }
-.cols-panel .row { display: flex; align-items: center; gap: 6px; padding: 1px 0; }
+.cols-panel { border: 1px solid var(--or-dim); padding: 6px 10px; margin: 6px 0; columns: 3 14em; }
+.cols-panel .row { display: flex; align-items: center; gap: 4px; padding: 0; break-inside: avoid; }
+.cols-panel button { padding: 0 6px; }
 .cols-panel .row label { flex: 1; }
 .cols-panel .row.off { color: var(--dim); }
 th.sortable { cursor: pointer; }
