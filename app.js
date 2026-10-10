@@ -59,7 +59,7 @@ const S = {
   view: "mixed",
   sort: { mixed: null, single: { key: "cr_per_min", desc: true } },
   expanded: null,
-  watch: new Watcher(),
+  watch: new Watcher({ shown: TOP_STATIONS }),
   watchGen: 0,      // the search whose first results are the baseline
   alert: null,
   gen: 0,           // bumped per search; older ones' background EDSM work goes quiet

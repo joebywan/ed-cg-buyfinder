@@ -11,8 +11,9 @@ const slot = (x) => ({ key: keyOf(x), station: x.station, system: x.system });
 const nth = (n) => `#${n}`;
 
 export class Watcher {
-  constructor({ now = Date.now, quiet = 10_000 } = {}) {
+  constructor({ now = Date.now, quiet = 10_000, shown = Infinity } = {}) {
     this.now = now;
+    this.shown = shown;          // rows on screen: a rank past this is off the list
     this.quiet = quiet;          // min ms between sounds
     this.ack = [];               // top N the user has seen
     this.target = null;          // {key, station, system, rank}: the station last copied
@@ -20,7 +21,7 @@ export class Watcher {
     this.lastSound = -Infinity;
   }
 
-  #rank(plans, key) { const i = plans.findIndex((x) => keyOf(x) === key); return i < 0 ? 0 : i + 1; }
+  #rank(plans, key) { const i = plans.findIndex((x) => keyOf(x) === key); return i < 0 || i >= this.shown ? 0 : i + 1; }
 
   /** First render of a search: what is on screen now is the baseline. A
    *  copied target is still compared, since the new results may disagree. */
@@ -69,8 +70,10 @@ export class Watcher {
     this.ack.forEach((a, i) => {
       const r = this.#rank(plans, a.key);
       if (r === i + 1) return;
-      bits.push(r ? `${a.station} ${nth(i + 1)} -> ${nth(r)}` : `${a.station} ${nth(i + 1)} dropped out`);
+      bits.push(r ? `${a.station} ${nth(i + 1)} -> ${nth(r)}` : `${a.station} ${nth(i + 1)} dropped off the list`);
     });
+    const was = new Set(this.ack.map((a) => a.key));
+    now.forEach((x, i) => { if (i && !was.has(keyOf(x))) bits.push(`${x.station} up to ${nth(i + 1)}`); });
     const best = plans[0];
     if (best && best.station !== this.ack[0]?.station) bits.push(`${best.station} is now #1`);
     const keys = new Set(now.map(keyOf).filter((k, i) => k !== this.ack[i]?.key));

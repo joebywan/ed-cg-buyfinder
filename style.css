@@ -142,7 +142,9 @@ body > .dest-panel { max-height: 40vh; overflow: auto; }
 .log-view { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; }
 main[data-view="log"] #empty, main[data-view="log"] #age-line { display: none; }
 
-.table-wrap { overflow-x: auto; }
+/* main scrolls both ways, so the sideways scrollbar sits above the pinned
+   footer instead of at the far end of a long table */
+.table-wrap { overflow-x: visible; }
 table { width: 100%; border-collapse: collapse; white-space: nowrap; }
 th {
   position: sticky;

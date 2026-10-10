@@ -21,7 +21,7 @@ test("a changed top 5 says what moved and who leads", () => {
   assert.match(a.text, /B is now #1/);
   assert.equal(a.copy.plan.station, "B");
   const d = w.check(list("B", "C", "D", "E", "F", "A"));
-  assert.match(d.text, /A #1 dropped out|A #1 -> #6/);
+  assert.match(d.text, /A #1 dropped off the list|A #1 -> #6/);
 });
 
 test("bursts coalesce: one alert, one sound per 10s, cleared when the ranking returns", () => {
@@ -69,4 +69,12 @@ test("a dropped target says so; a new search compares it too; clearing silences 
   assert.match(again.text, /B moved #2 -> #3/);
   w.clearTarget();
   assert.equal(w.begin(list("C", "A", "B")), null);
+});
+
+test("a station pushed past the rows on screen reads as off the list, and newcomers are named", () => {
+  const w = new Watcher({ now: () => 0, shown: 6 });
+  w.begin(list("A", "B", "C", "D", "E", "F", "G"));
+  const a = w.check(list("A", "B", "G", "D", "E", "F", "C"));
+  assert.match(a.text, /C #3 dropped off the list/);
+  assert.match(a.text, /G up to #3/);
 });
