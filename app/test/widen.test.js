@@ -76,3 +76,50 @@ test("widening that adds farther stations below the copied target raises no aler
   const after = [...before, plan("D", 40), plan("E", 30)];
   assert.equal(w.check(after, {}), null);
 });
+
+// Ardent probes see `a`; the full source (Spansh) sees `s`, a superset.
+const two = (a, s) => {
+  const calls = [], probed = [], shown = [];
+  const mk = (at, log) => async (range) => { log.push(range); return { rows: at.filter((d) => d <= range) }; };
+  return { calls, probed, shown, probe: mk(a, probed), run: mk(s, calls), count: (r) => r.rows.length,
+           rows: (r) => r.rows.length, onProbe: (r, range) => shown.push(range) };
+};
+
+test("probes use only Ardent, show each step, then ONE full run at the final radius", async () => {
+  const w = two([50, 100, 150, 170, 200], [50, 90, 100, 150, 170, 200, 250]);
+  const o = await go(w, { label: "Spansh" });
+  assert.deepEqual(w.probed, [120, 180, 270]);
+  assert.deepEqual(w.shown, [120, 180, 270]);
+  assert.deepEqual(w.calls, [270]);
+  assert.deepEqual(o.said, [
+    "120 ly found 2 stations - not enough for a top 5, widening to 180 ly…",
+    "180 ly found 4 stations - not enough for a top 5, widening to 270 ly…",
+    "270 ly picked from Ardent's quick count - searching Spansh at 270 ly…",
+  ]);
+  assert.equal(o.note, "Widened to 270 ly to find 5 stations (your radius: 120 ly) (radius picked from Ardent's quick count)");
+  assert.ok(o.steps.some((s) => s.final));
+});
+
+test("enough at the user's radius: probe once, full once, no messages", async () => {
+  const w = two([1, 2, 3, 4, 5], [1, 2, 3, 4, 5, 6]);
+  const o = await go(w);
+  assert.deepEqual([w.probed, w.calls, o.said, o.note], [[120], [120], [], ""]);
+});
+
+test("full source still short of 5: ONE more widening step, with its message", async () => {
+  const w = two([50, 100, 150, 170, 200], [50, 100, 150, 170, 200, 300]);
+  w.run = async (r) => { w.calls.push(r); return { rows: [50, 100, 150, 170, 200].filter((d) => d <= r).slice(0, r < 300 ? 4 : 5) }; };
+  const o = await go(w);
+  assert.deepEqual(w.probed, [120, 180, 270]);
+  assert.deepEqual(w.calls, [270, 410]);
+  assert.match(o.said.at(-1), /^270 ly found 4 stations - not enough for a top 5, widening to 410 ly…$/);
+  assert.equal(o.n, 5);
+});
+
+test("continuing from a shown result probes with Ardent from the next step", async () => {
+  const w = two([50, 100, 150, 170, 200], [50, 100, 150, 170, 200]);
+  const o = await go(w, { range: 120, n: 2, baseRows: 7 });
+  assert.deepEqual(w.probed, [180, 270]);
+  assert.deepEqual(w.calls, [270]);
+  assert.equal(o.res.rows.length, 5);
+});

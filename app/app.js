@@ -450,11 +450,11 @@ async function search({ more = false } = {}) {
   let keepPanel = false;
   try {
     const source = DESKTOP && p.source in SOURCES ? p.source : "ardent";
-    const run = (range) => {
+    const run = (range, src = source) => {
       const my = ++step, q = { ...p, range };
       const mine = () => !stale() && my === step;
-      const widened = range > user;
-      return searchSources(source, q, {
+      const widened = range > user, quiet = widened || !!cont;   // the target alert waits for the final result
+      return searchSources(src, q, {
         ardent: buildRows,
         spansh: (qq, o) => spanshRows(qq, { ...o, fetchJson: tauriFetchJson }),
       }, {
@@ -468,34 +468,42 @@ async function search({ more = false } = {}) {
         // EDSM confirmations land after the results are up: swap them in without
         // moving the scroll position (open rows are keyed by station, so they stay).
         onUpdate: (r) => {
-          if (!mine() || S.widening) return;
+          if (!mine()) return;
           const main = document.querySelector("main");
           const top = main.scrollTop;
           S.result = { ...r, p, eff: range, note: S.result?.note, at: S.result?.at ?? Date.now() };
           render();
           main.scrollTop = top;
-          watchResult(gen);
+          if (!quiet) watchResult(gen);
         },
-        onPartial: widened || cont ? undefined : (r, waiting) => {
+        onPartial: src !== source ? undefined : (r, waiting) => {
           S.result = { ...r, p, eff: range, at: Date.now() };
           renderCredit();
           render();
-          watchResult(gen);
+          if (!quiet) watchResult(gen);
           setStatus(`Showing ${SOURCES[r.sources[0]]} - still waiting on ${waiting}…`);
         },
       });
     };
+    const probe = source !== "ardent" && ui.prefs.widen ? (r) => run(r, "ardent") : null;
     const out = await widen({
-      user, cap, run, ...cont,
+      user, cap, run, probe, label: SOURCE_NAME[source], ...cont,
+      onProbe: (r, range) => {
+        if (stale()) return;
+        S.result = { ...r, p, eff: range, at: Date.now() };
+        renderCredit();
+        render();
+      },
       count: (r) => stationsIn(r.rows, p.hold),
       rows: (r) => r.rows.length,
       say: (t) => setStatus(t),
       cancelled: stale,
       onStep: (ev) => {
         S.widening = !ev.end;
-        if (!ev.end) prog = new Progress();
+        if (!ev.end) prog = new Progress();   // each step gets fresh provider bars
         radiusEv = { provider: "radius", stage: ev.end ? "done" : "widen", done: ev.done, total: ev.total,
-                     detail: ev.end ? "" : `widening to ${ev.range} ly` };
+                     detail: ev.end ? "" : ev.final ? `${ev.range} ly picked from Ardent's quick count`
+                       : `widening to ${ev.range} ly` };
         prog.update(radiusEv);
         renderProgress(prog);
       },

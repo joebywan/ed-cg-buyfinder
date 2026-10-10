@@ -17,40 +17,72 @@ export function stepsTo(from, cap) {
 
 const stations = (n) => `${n} station${n === 1 ? "" : "s"}`;
 
-/** `run(range)` -> result; `count(result)` -> stations passing the view filters;
- *  `rows(result)` -> its row count (for the no-progress check).
- *  Start fresh with `user` (searches at it), or continue with `range`, `n` and
- *  `baseRows` from a result already on screen. Returns {res, range, n, note, steps}:
- *  `res` is null when nothing needed fetching; `note` is the sentence to show. */
-export async function widen({ user, cap, run, count, rows, range = null, n = 0, baseRows = 0,
-                              say = () => {}, onStep = () => {}, cancelled = () => false }) {
-  let res = null, steps = 0, stalls = 0, last = baseRows;
+/** `run(range)` -> result for the user's chosen source(s); `count(result)` ->
+ *  stations passing the view filters; `rows(result)` -> its row count.
+ *  `probe(range)` (optional) is a fast Ardent-only run: when given, the radius is
+ *  decided with probes (each shown through `onProbe(res, range)`), then `run`
+ *  goes ONCE at the final radius, plus at most one more step if it still finds
+ *  fewer than WANT. Without `probe`, every step is a `run`.
+ *  Start fresh with `user`, or continue with `range` and `n` from a result
+ *  already on screen. Returns {res, range, n, note, steps}; `res` is null when
+ *  nothing needed fetching. */
+export async function widen({ user, cap, run, probe = null, count, rows, range = null, n = 0, baseRows = 0,
+                              label = "the full search", say = () => {}, onStep = () => {}, onProbe = () => {},
+                              cancelled = () => false }) {
+  let res = null, steps = 0, stalls = 0, last = probe && range != null ? -1 : baseRows;
   const total = stepsTo(user, cap);
-  const done = () => stepsTo(user, range);
+  const done = () => Math.min(total, stepsTo(user, range));
+  const step = async (go, text, tail) => {
+    const next = nextRange(range, cap);
+    say(text(next)); log("widen", text(next));
+    onStep({ done: done(), total, range: next, text: text(next) });
+    const r = await go(next);
+    if (cancelled()) return null;
+    range = next; steps++; tail?.(r);
+    return r;
+  };
+  let probing = !!probe;
   if (range == null) {
     range = user;
-    res = await run(range);
-    n = count(res);
-    last = rows(res);
+    res = await (probe ?? run)(range);
+    n = count(res); last = rows(res);
+    if (probe) { onProbe(res, range); probing = n < WANT && cap > user; }
   }
-  while (n < WANT && range < cap && stalls < 2 && !cancelled()) {
-    const next = nextRange(range, cap);
-    const text = `${range} ly found ${stations(n)} - not enough for a top ${WANT}, widening to ${next} ly…`;
-    say(text); log("widen", text);
-    onStep({ done: done(), total, range: next, text });
-    const r = await run(next);
+  const msg = (r, next) => `${r} ly found ${stations(n)} - not enough for a top ${WANT}, widening to ${next} ly…`;
+  if (probing || !probe) {
+    while (n < WANT && range < cap && stalls < 2 && !cancelled()) {
+      const from = range;
+      const r = await step(probe ?? run, (next) => msg(from, next), (r) => {
+        n = count(r); stalls = rows(r) === last ? stalls + 1 : 0; last = rows(r);
+        if (probe) onProbe(r, range);
+        res = r;
+      });
+      if (!r) return { res: null, range, n, note: "", steps, cancelled: true };
+    }
+  }
+  let picked = "";
+  if (probe) {
+    const t = `${n >= WANT ? `${range} ly picked from Ardent's quick count` : `Ardent found only ${stations(n)} by ${range} ly`}`
+      + ` - searching ${label} at ${range} ly…`;
+    if (range > user || n < WANT) { say(t); log("widen", t); }
+    onStep({ done: done(), total, range, text: t, final: true });
+    res = await run(range);
     if (cancelled()) return { res: null, range, n, note: "", steps, cancelled: true };
-    res = r; range = next; steps++;
     n = count(res);
-    stalls = rows(res) === last ? stalls + 1 : 0;
-    last = rows(res);
+    picked = range > user ? " (radius picked from Ardent's quick count)" : "";
+    if (n < WANT && range < cap) {
+      const from = range;
+      const r = await step(run, (next) => msg(from, next), (r) => { n = count(r); res = r; });
+      if (!r) return { res: null, range, n, note: "", steps, cancelled: true };
+    }
   }
   let note = "";
   if (n >= WANT) {
-    if (range > user) note = `Widened to ${range} ly to find ${WANT} stations (your radius: ${user} ly)`;
+    if (range > user) note = `Widened to ${range} ly to find ${WANT} stations (your radius: ${user} ly)${picked}`;
   } else if (range >= cap) note = `Widening stopped: reached the ${cap} ly limit - only ${stations(n)} exist within it`;
   else if (stalls >= 2) note = `Widening stopped: ${range} ly added nothing new - only ${stations(n)} found`;
+  else if (range > user) note = `Widened to ${range} ly - only ${stations(n)} found`;
   if (note) log("widen", note);
-  if (steps) onStep({ done: total, total, range, text: note, end: true });
+  if (steps || probe) onStep({ done: total, total, range, text: note, end: true });
   return { res, range, n, note, steps };
 }
