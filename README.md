@@ -236,7 +236,7 @@ already re-checked against EDSM costs nothing, because it is the same response.
 
 ## Interface
 
-Inputs across the top: hold size, radius (30 ly), jump range empty and laden,
+Inputs across the top: hold size, radius (120 ly), jump range empty and laden,
 minimum supply (200), landing pad, how old a source may be, the SOURCE, and
 toggles for fleet carriers and Odyssey. Enter or SEARCH runs it.
 
