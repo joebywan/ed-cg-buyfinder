@@ -25,7 +25,7 @@ import { MAX_AGE_DEFAULT, ageTag, ageText, buildMixed, compareValues, hiddenBy, 
 const $ = (id) => document.getElementById(id);
 const fmt = (n) => (n == null || n === "" ? "" : Number(n).toLocaleString("en-US"));
 
-const DEFAULTS = { hold: 64, range: 30, jump_empty: 20, jump_laden: 15, min_supply: 200,
+const DEFAULTS = { hold: 64, range: 120, jump_empty: 20, jump_laden: 15, min_supply: 200,
                    pad: "L", carriers: false, odyssey: false,
                    max_age_days: MAX_AGE_DEFAULT, source: "both" };
 const FIELDS = Object.keys(DEFAULTS);
