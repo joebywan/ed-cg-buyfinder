@@ -56,3 +56,12 @@ test("loadStore prefers store over legacy, migrates legacy, saves debounced", as
   const m = await loadStore(mk({ store: null, legacy: { odyssey: true } }), 5);
   assert.deepEqual(m.get("cgbuy.settings"), { odyssey: true });
 });
+
+test("mapLegacy carries the settings-window prefs and journal folder", () => {
+  const m = mapLegacy({ font_size: 12, cache_fresh_minutes: "5", verify_top: 0, verify_edsm: false,
+    notifications: true, journal_dir: "/j" });
+  assert.deepEqual(m["cgbuy.prefs"], { font_size: 12, cache_fresh_minutes: 5, verify_top: 0,
+    notifications: true, verify_edsm: false });
+  assert.equal(m["cgbuy.journalDir"], "/j");
+  assert.deepEqual(mapLegacy({ font_size: "x", journal_dir: null }), {});
+});

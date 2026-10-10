@@ -144,6 +144,7 @@ export function ladenJumpRange(maxRange, unladenMass, fuel, cargo, observed = nu
 export class JournalState {
   constructor(cal = null) {
     this.cal = cal || new Calibration();
+    this.calAfter = 0;            // epoch secs: older events teach nothing (RESET TIMINGS)
     this.system = null;
     this.station = null;
     this.docked = false;
@@ -201,7 +202,7 @@ export class JournalState {
     if (!e || typeof e !== "object" || Array.isArray(e)) return false;
     const ev = e.event;
     const t = parseTs(e.timestamp);
-    const cal = this.cal;
+    const cal = t && t <= this.calAfter ? new Calibration() : this.cal;   // scratch: discarded
     let learned = false;
 
     if (ev === "FSDJump") {

@@ -14,6 +14,17 @@ export async function tauriFetchJson(url, init) {
   return res.json();
 }
 
+/** The old app's font_size is tk points (9 = normal), the same scale as prefs.font_size. */
+function legacyPrefs(l) {
+  const out = {};
+  for (const k of ["font_size", "cache_fresh_minutes", "verify_top"]) {
+    const n = Number(l[k]);
+    if (l[k] !== "" && l[k] != null && Number.isFinite(n) && n >= 0) out[k] = Math.round(n);
+  }
+  for (const k of ["notifications", "verify_edsm"]) if (typeof l[k] === "boolean") out[k] = l[k];
+  return out;
+}
+
 /** The old Python app's cgbuy.json as this page's store keys. Only what maps
  *  cleanly: search boxes, odyssey, the hand-set destination, EDDN on/off. */
 export function mapLegacy(legacy) {
@@ -29,6 +40,9 @@ export function mapLegacy(legacy) {
   if (typeof legacy.odyssey === "boolean") settings.odyssey = legacy.odyssey;
   if (Object.keys(settings).length) out["cgbuy.settings"] = settings;
   if (typeof legacy.eddn_enabled === "boolean") out["cgbuy.eddn"] = legacy.eddn_enabled;
+  const prefs = legacyPrefs(legacy);
+  if (Object.keys(prefs).length) out["cgbuy.prefs"] = prefs;
+  if (typeof legacy.journal_dir === "string" && legacy.journal_dir) out["cgbuy.journalDir"] = legacy.journal_dir;
   const d = legacy.dest;
   if (legacy.dest_manual && d?.system && d.station && d.commodities?.length) {
     out["cgbuy.dest"] = { system: d.system, station: d.station, commodities: d.commodities,

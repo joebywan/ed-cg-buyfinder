@@ -13,6 +13,7 @@ const PROTON_TAIL: &str = "steamapps/compatdata/359320/pfx/drive_c/users/steamus
 #[derive(Default)]
 struct AppState {
     journal: Mutex<Option<Option<PathBuf>>>, // outer None = not yet detected
+    pinned: Mutex<Option<Option<String>>>,   // set_journal_dir this session; Some(None) = cleared
 }
 
 fn home() -> String {
@@ -83,14 +84,43 @@ fn find_journal_dir(override_dir: Option<&str>, patterns: &[String]) -> Option<P
     best.map(|(d, _)| d)
 }
 
+/// The folder the user chose: this session's pick, else the page's saved one
+/// ("" = chose auto-detect), else the old Python app's `journal_dir`.
+fn override_dir(pinned: Option<Option<String>>, store: Option<&Value>, legacy: Option<&Value>) -> Option<String> {
+    let nonempty = |s: &str| (!s.is_empty()).then(|| s.to_string());
+    pinned.unwrap_or_else(|| match store.and_then(|v| v["cgbuy.journalDir"].as_str()) {
+        Some(s) => nonempty(s),
+        None => legacy.and_then(|v| v["journal_dir"].as_str()).and_then(nonempty),
+    })
+}
+
 fn journal_path(state: &AppState) -> Option<PathBuf> {
     let mut g = state.journal.lock().unwrap();
     g.get_or_insert_with(|| {
-        let legacy = read_json(&config_dir().join("cgbuy.json"));
-        let o = legacy.as_ref().and_then(|l| l["journal_dir"].as_str());
-        find_journal_dir(o, &journal_patterns())
+        let d = config_dir();
+        let o = override_dir(
+            state.pinned.lock().unwrap().clone(),
+            read_json(&d.join("cgbuy-desktop.json")).as_ref(),
+            read_json(&d.join("cgbuy.json")).as_ref(),
+        );
+        find_journal_dir(o.as_deref(), &journal_patterns())
     })
     .clone()
+}
+
+/// Point the journal reader at `path` (None = back to auto-detect) and return
+/// the folder now in use. The page saves the choice in its own store.
+#[tauri::command]
+fn set_journal_dir(state: State<AppState>, path: Option<String>) -> Result<Option<String>, String> {
+    let path = path.filter(|p| !p.trim().is_empty());
+    if let Some(p) = &path {
+        if !Path::new(p).is_dir() {
+            return Err(format!("{p} is not a folder"));
+        }
+    }
+    *state.pinned.lock().unwrap() = Some(path);
+    *state.journal.lock().unwrap() = None;
+    Ok(journal_path(&state).map(|p| p.to_string_lossy().into_owned()))
 }
 
 fn safe_name(name: &str) -> bool {
@@ -166,9 +196,11 @@ fn config_save(store: Value) -> Result<(), String> {
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_http::init())
+        .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_notification::init())
         .manage(AppState::default())
         .invoke_handler(tauri::generate_handler![
-            journal_dir, journal_list, journal_read, config_load, config_save
+            journal_dir, set_journal_dir, journal_list, journal_read, config_load, config_save
         ])
         .run(tauri::generate_context!())
         .expect("error while running cgbuy");
@@ -178,6 +210,20 @@ fn main() {
 mod tests {
     use super::*;
     use std::time::{Duration, SystemTime};
+
+    #[test]
+    fn override_order() {
+        let store = serde_json::json!({ "cgbuy.journalDir": "/s" });
+        let legacy = serde_json::json!({ "journal_dir": "/l" });
+        let o = |p, s, l| override_dir(p, s, l);
+        assert_eq!(o(None, Some(&store), Some(&legacy)).as_deref(), Some("/s"));
+        assert_eq!(o(None, None, Some(&legacy)).as_deref(), Some("/l"));
+        assert_eq!(o(Some(Some("/p".into())), Some(&store), None).as_deref(), Some("/p"));
+        assert_eq!(o(Some(None), Some(&store), Some(&legacy)), None);
+        assert_eq!(o(None, None, None), None);
+        let cleared = serde_json::json!({ "cgbuy.journalDir": "" });
+        assert_eq!(o(None, Some(&cleared), Some(&legacy)), None);
+    }
 
     #[test]
     fn names() {
