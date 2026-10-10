@@ -53,7 +53,8 @@ export function worthRetrying(err) {
 }
 
 /**
- * Every market within maxLy that stocks `commodity`.
+ * Every market between minLy and maxLy that stocks `commodity` (minLy > 0 asks
+ * for just a ring, so widening never re-pages inner distances).
  *
  * Spansh caps results per request, so page through until we run past the
  * radius. A single fixed page silently drops most candidates.
@@ -68,13 +69,13 @@ export function worthRetrying(err) {
  * quarter of the goal and says it covered all of it.
  */
 export async function fetchSources(commodity, maxLy, minSupply, referenceSystem,
-    { fetchJson = defaultFetchJson, pageSize = 500, maxPages = 10, onFail = null,
+    { fetchJson = defaultFetchJson, pageSize = 500, maxPages = 10, onFail = null, minLy = 0,
       onPage = null, attempts = RETRY_ATTEMPTS, pause = RETRY_PAUSE, sleep = sleepMs } = {}) {
   const out = [];
   for (let page = 0; page < maxPages; page++) {
     const body = JSON.stringify({
       filters: {
-        distance: { comparison: "<=>", value: [0, maxLy] },
+        distance: { comparison: "<=>", value: [minLy, maxLy] },
         market: [{ name: commodity, supply: { comparison: "<=>", value: [minSupply, 100000000] } }],
       },
       sort: [{ distance: { direction: "asc" } }],
@@ -288,32 +289,39 @@ export async function buildRows(p, { fetchJson = defaultFetchJson, cal = null, n
   } });
   // Any community-goal multiplier is already baked into what the station
   // reports, so it is never applied here.
-  const mkt = await edsm.market(dest.system, dest.station);
-  edsmDone++;
-  const cg = {};
-  for (const c of mkt?.commodities ?? []) {
-    if (dest.commodities.includes(c.name)) cg[c.name] = { sell: c.sellPrice, demand: c.demand };
+  // A widening step brings the destination's prices and arrival distance with
+  // it (`p.held`), so they are not asked of EDSM again.
+  const held = p.held;
+  let cg = {}, cgLs = 0;
+  if (held) ({ cg, cgLs } = held);
+  else {
+    const mkt = await edsm.market(dest.system, dest.station);
+    for (const c of mkt?.commodities ?? []) {
+      if (dest.commodities.includes(c.name)) cg[c.name] = { sell: c.sellPrice, demand: c.demand };
+    }
+    if (!Object.keys(cg).length) {
+      throw new Error(`EDSM returned no market for ${dest.station} - station renamed?`);
+    }
+    try {
+      cgLs = ((await edsm.system(dest.system)).stations ?? [])
+        .find((s) => s.name === dest.station)?.distanceToArrival || 0;
+    } catch { /* arrival distance is only a trip-time input */ }
   }
-  if (!Object.keys(cg).length) {
-    throw new Error(`EDSM returned no market for ${dest.station} - station renamed?`);
-  }
-  let cgLs = 0;
-  try {
-    cgLs = ((await edsm.system(dest.system)).stations ?? [])
-      .find((s) => s.name === dest.station)?.distanceToArrival || 0;
-  } catch { /* arrival distance is only a trip-time input */ }
-  edsmDone++;
+  edsmDone += 2;
   discovering = false;
   emitE(verify ? "waiting" : "done", verify ? "waiting for Spansh candidates" : "");
 
   const errors = [];
-  let rows = [];
+  // Widening: `p.held.rows` are what the inner rings already found, and this
+  // search asks only for the ring from p.minLy out to p.range.
+  let rows = [...(held?.rows ?? [])];
+  const have = new Set(rows.map((r) => `${r.system}\0${r.station}\0${r.commodity}`));
   await mapLimit(dest.commodities, PARALLEL, async (name) => {
     const sell = cg[name]?.sell;
     if (sell > 0) {
       const lost = [];
       const found = await fetchSources(name, p.range, p.min_supply, dest.system,
-        { fetchJson, sleep, onFail: (c, page, err) => lost.push([page, err]),
+        { fetchJson, sleep, minLy: p.minLy ?? 0, onFail: (c, page, err) => lost.push([page, err]),
           onPage: (page, got, retry) => {
             if (got !== null) pages[name].n = page + 1;
             emitS("discovery", got !== null ? `${name}, page ${page + 1} done (${comDone}/${ncom} commodities)`
@@ -332,6 +340,9 @@ export async function buildRows(p, { fetchJson = defaultFetchJson, cal = null, n
         if (dist > p.range) continue;
         const profit = sell - e.buy_price;
         if (profit <= 0) continue;
+        const key = `${st.system_name}\0${st.name}\0${name}`;
+        if (have.has(key)) continue;   // on a ring's edge twice
+        have.add(key);
         const ls = st.distance_to_arrival || 0;
         const mins = tripMinutes(dist, ls, cgLs, p.jump_empty, p.jump_laden, cal);
         const load = Math.min(e.supply, p.hold);
@@ -369,7 +380,8 @@ export async function buildRows(p, { fetchJson = defaultFetchJson, cal = null, n
         gone.push(`${r.system}\0${r.station}\0${r.commodity}`);
       }
     }
-    return { rows: aged.rows, cg, cgLs, hiddenStale: aged.hidden, allStale: aged.allStale, errors, dropped, gone };
+    return { rows: aged.rows, cg, cgLs, hiddenStale: aged.hidden, allStale: aged.allStale, errors, dropped, gone,
+             held: { rows, cg, cgLs } };
   };
   const first = snapshot();
   if (!verify) return first;
@@ -378,7 +390,8 @@ export async function buildRows(p, { fetchJson = defaultFetchJson, cal = null, n
     for (const r of rows) if (r.edsm) rescore(r, p.hold, cgLs, p, cal);
     if (!cancelled?.()) onUpdate?.(snapshot());
   };
-  first.verifying = (async () => {
+  let tail = Promise.resolve();
+  const startVerify = () => (tail = first.verifying = (async () => {
     try {
       const v = await refresh(rows, edsm, { top, cancelled, rank: p.rank ?? undefined, skip: handled, onApply: apply, onStation: (k, n, stn) => {
         edsmDone = 2 + k;
@@ -393,10 +406,11 @@ export async function buildRows(p, { fetchJson = defaultFetchJson, cal = null, n
     }
     emitE("done", "");
     apply();
-  })();
+  })());
+  // p.defer_verify: a widening search checks EDSM once, on the final rows.
+  if (p.defer_verify) first.startVerify = startVerify; else startVerify();
   // The view filters changed and rows came into sight: confirm just the ones
   // that now make the verified top N, after the pass in flight.
-  let tail = first.verifying;
   first.verifyMore = (rank, onProgress) => (tail = tail.then(async () => {
     const queue = rows.filter((r) => rank(r) != null && !handled.has(`${r.system}\n${r.station}`));
     if (!queue.length || cancelled?.()) return;

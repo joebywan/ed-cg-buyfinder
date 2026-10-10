@@ -410,6 +410,7 @@ const stationsIn = (rows, hold) => buildMixed(viewRows(rows, viewOpts()), hold).
 function maybeWiden() {
   const r = S.result;
   if (!r || S.searching || !ui.prefs.widen || !sameDest(r.p.dest, S.dest)) return;
+  if (!S.held && r.sources?.includes("spansh")) return;     // nothing to build the next ring on
   if ((r.eff ?? r.p.range) >= Math.max(ui.prefs.widen_max, r.p.range) || plansNow().length >= WANT) return;
   search({ more: true });
 }
@@ -437,11 +438,10 @@ async function search({ more = false } = {}) {
   const gen = ++S.gen;
   const stale = () => gen !== S.gen;
   let prog = new Progress();
-  let radiusEv = null, step = 0;
   const user = p.range;
   const cap = ui.prefs.widen ? Math.max(ui.prefs.widen_max, user) : user;
-  const cont = more && S.result ? { range: S.result.eff ?? S.result.p.range, n: plansNow().length, baseRows: S.result.rows.length } : null;
-  S.widening = !!cont;
+  const cont = more && S.result ? { range: S.result.eff ?? user, n: plansNow().length, baseRows: S.result.rows.length } : null;
+  let step = 0, first = true;
   const t0 = Date.now();
   $("prog-panel").hidden = false;
   renderProgress(prog);
@@ -450,11 +450,14 @@ async function search({ more = false } = {}) {
   let keepPanel = false;
   try {
     const source = DESKTOP && p.source in SOURCES ? p.source : "ardent";
-    const run = (range, src = source) => {
-      const my = ++step, q = { ...p, range };
-      const mine = () => !stale() && my === step;
-      const widened = range > user, quiet = widened || !!cont;   // the target alert waits for the final result
-      return searchSources(src, q, {
+    const run = (range, prev) => {
+      const my = ++step, mine = () => !stale() && my === step;
+      const ring = prev ? `${prev}-${range} ly` : `${range} ly`;
+      // Spansh is asked for the new ring only (minLy) and given the rows it already
+      // found; Ardent takes a max distance only, so it is simply asked again.
+      const q = { ...p, range, minLy: prev || 0, defer_verify: cap > user && source !== "ardent",
+                  held: prev ? S.held : undefined };
+      return searchSources(source, q, {
         ardent: buildRows,
         spansh: (qq, o) => spanshRows(qq, { ...o, fetchJson: tauriFetchJson }),
       }, {
@@ -462,7 +465,8 @@ async function search({ more = false } = {}) {
         cancelled: () => !mine(),
         onProgress: (ev) => {
           if (!mine()) return;
-          prog.update(widened && ev.detail ? { ...ev, detail: `widening to ${range} ly: ${ev.detail}` } : ev);
+          const own = ev.provider === "ardent" ? `0-${range} ly` : ev.provider === "spansh" ? ring : "";
+          prog.update(own && ev.detail ? { ...ev, detail: `${own}: ${ev.detail}` } : ev);
           renderProgress(prog);
         },
         // EDSM confirmations land after the results are up: swap them in without
@@ -471,47 +475,50 @@ async function search({ more = false } = {}) {
           if (!mine()) return;
           const main = document.querySelector("main");
           const top = main.scrollTop;
-          S.result = { ...r, p, eff: range, note: S.result?.note, at: S.result?.at ?? Date.now() };
+          S.result = { ...r, p, eff: S.result?.eff ?? range, note: S.result?.note, at: S.result?.at ?? Date.now() };
           render();
           main.scrollTop = top;
-          if (!quiet) watchResult(gen);
+          watchResult(gen);
         },
-        onPartial: src !== source ? undefined : (r, waiting) => {
+        onPartial: !first || cont ? undefined : (r, waiting) => {
           S.result = { ...r, p, eff: range, at: Date.now() };
           renderCredit();
           render();
-          if (!quiet) watchResult(gen);
+          watchResult(gen);
           setStatus(`Showing ${SOURCES[r.sources[0]]} - still waiting on ${waiting}…`);
         },
       });
     };
-    const probe = source !== "ardent" && ui.prefs.widen ? (r) => run(r, "ardent") : null;
+    let last = null;
     const out = await widen({
-      user, cap, run, probe, label: SOURCE_NAME[source], ...cont,
-      onProbe: (r, range) => {
-        if (stale()) return;
-        S.result = { ...r, p, eff: range, at: Date.now() };
-        renderCredit();
-        render();
-      },
+      user, cap, run, ...cont,
+      label: source === "both" ? "Ardent + Spansh" : SOURCES[source],
       count: (r) => stationsIn(r.rows, p.hold),
       rows: (r) => r.rows.length,
       say: (t) => setStatus(t),
       cancelled: stale,
       onStep: (ev) => {
-        S.widening = !ev.end;
-        if (!ev.end) prog = new Progress();   // each step gets fresh provider bars
-        radiusEv = { provider: "radius", stage: ev.end ? "done" : "widen", done: ev.done, total: ev.total,
-                     detail: ev.end ? "" : ev.final ? `${ev.range} ly picked from Ardent's quick count`
-                       : `widening to ${ev.range} ly` };
-        prog.update(radiusEv);
+        if (ev.end) { prog.update({ provider: "radius", stage: "done", done: ev.done, total: ev.total }); renderProgress(prog); return; }
+        // Each step gets fresh bars; the Radius row is "step k of at most n".
+        prog = new Progress();
+        prog.update({ provider: "radius", stage: "step", done: ev.done, total: ev.total,
+                      detail: `step ${ev.done + 1} of ${ev.total}: ${ev.prev ? `${ev.prev}-` : "0-"}${ev.range} ly` });
         renderProgress(prog);
       },
+      onResult: (r, range) => {
+        first = false;
+        last = r;
+        if (stale()) return;
+        S.held = r.held;
+        S.result = { ...r, p, at: Date.now(), eff: range };      // the table grows with each step
+        renderCredit();
+        render();
+      },
     });
-    S.widening = false;
-    const res = out.res;
+    const res = out.res ?? last;
     if (!res || stale()) return;
-    S.result = { ...res, p, at: Date.now(), eff: out.range, note: ui.prefs.widen ? out.note : "" };
+    S.result = { ...res, p, at: Date.now(), eff: out.range, note: out.note };
+    if (res.startVerify) res.verifying = res.startVerify();
     S.verifyMore = res.verifyMore;
     renderCredit();
     S.expanded = null;
@@ -530,7 +537,6 @@ async function search({ more = false } = {}) {
     log("search", `finished in ${((Date.now() - t0) / 1000).toFixed(1)}s: ${res.rows.length} sources`
       + `${res.errors.length ? `, ${res.errors.length} errors` : ""}`);
   } catch (err) {
-    S.widening = false;
     setStatus(`Search failed: ${err.message}`, true);
     log("search", `failed: ${err.message}`);
   } finally {
@@ -546,7 +552,7 @@ const WHY = {
   ardent: "Ardent",
   spansh: "Spansh: large pages, typically ~10s each",
   edsm: "EDSM: days fresher than Spansh, one request per station",
-  radius: "Radius: each step searches 1.5x further out, up to your max radius",
+  radius: "Radius: each step asks every source again, a little further out",
 };
 function renderProgress(prog) {
   $("progress-bar").style.width = `${100 * prog.overall()}%`;
