@@ -11,6 +11,8 @@ test("loadPrefs fills defaults and clamps junk", () => {
   assert.equal(p.verify_top, 18);
   assert.equal(p.verify_edsm, true);
   assert.equal(clampFont(1), 7);
+  assert.equal(p.update_check, true);                       // on unless switched off
+  assert.equal(loadPrefs({ update_check: false }).update_check, false);
 });
 
 test("RESET TIMINGS: events at or before calAfter teach nothing", () => {

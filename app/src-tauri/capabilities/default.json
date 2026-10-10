@@ -6,6 +6,7 @@
     "core:default",
     "dialog:allow-open",
     "notification:default",
+    "opener:default",
     {
       "identifier": "http:default",
       "allow": [
@@ -14,7 +15,8 @@
         { "url": "https://api.ardent-insight.com/*" },
         { "url": "https://ardent-insight.com/*" },
         { "url": "https://api.orerve.net/*" },
-        { "url": "https://eddn.edcd.io/*" }
+        { "url": "https://eddn.edcd.io/*" },
+        { "url": "https://api.github.com/*" }
       ]
     }
   ]

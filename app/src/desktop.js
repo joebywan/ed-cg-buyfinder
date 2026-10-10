@@ -14,6 +14,19 @@ export async function tauriFetchJson(url, init) {
   return res.json();
 }
 
+/** target=_blank links would otherwise open inside the app window, which has
+ *  no address bar and no way back. Hand them to the default browser instead.
+ *  Delegated on the document so links built later (credits, the update link)
+ *  are covered too. */
+export function openLinksExternally(root = document, opener = () => window.__TAURI__.opener) {
+  root.addEventListener("click", (e) => {
+    const a = e.target.closest?.("a[target=_blank][href^='http']");
+    if (!a) return;
+    e.preventDefault();
+    opener().openUrl(a.href).catch(() => {});
+  });
+}
+
 /** The old app's font_size is tk points (9 = normal), the same scale as prefs.font_size. */
 function legacyPrefs(l) {
   const out = {};
@@ -21,7 +34,7 @@ function legacyPrefs(l) {
     const n = Number(l[k]);
     if (l[k] !== "" && l[k] != null && Number.isFinite(n) && n >= 0) out[k] = Math.round(n);
   }
-  for (const k of ["notifications", "verify_edsm"]) if (typeof l[k] === "boolean") out[k] = l[k];
+  for (const k of ["notifications", "verify_edsm", "update_check"]) if (typeof l[k] === "boolean") out[k] = l[k];
   return out;
 }
 
@@ -100,4 +113,5 @@ export class DesktopDir {
 }
 
 export const desktopStore = DESKTOP ? await loadStore() : null;
+if (DESKTOP) openLinksExternally();
 export const journalDir = DESKTOP ? await tauriInvoke("journal_dir").catch(() => null) : null;

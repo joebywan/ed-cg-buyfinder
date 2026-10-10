@@ -15,6 +15,7 @@ export const PREF_DEFAULTS = {
   cols_single: DEFAULT_SINGLE, // ALL SOURCES columns, in order
   colw_mixed: {},            // dragged widths in px by column id; absent = default
   colw_single: {},
+  update_check: true,        // desktop only: say so in the header when a newer release exists
   alert_sound: true,         // chime when the top 5 or your copied target changes
   calAfter: 0,               // epoch secs, set by RESET TIMINGS
 };
@@ -32,6 +33,7 @@ export function loadPrefs(saved) {
   p.verify_edsm = p.verify_edsm !== false;
   p.notifications = p.notifications === true;
   p.alert_sound = p.alert_sound !== false;
+  p.update_check = p.update_check !== false;
   for (const v of ["mixed", "single"]) {
     p[`cols_${v}`] = cleanCols(p[`cols_${v}`], v);
     p[`colw_${v}`] = cleanWidths(p[`colw_${v}`], v);

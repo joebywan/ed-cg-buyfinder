@@ -17,6 +17,7 @@ import { buildRows as spanshRows } from "./src/spansh.js";
 import { JournalTail, readJournalFiles, readStationFile } from "./src/tail.js";
 import { Watcher, keyOf } from "./src/watch.js";
 import { VERSION } from "./src/version.js";
+import { checkForUpdate } from "./src/update.js";
 import { MAX_AGE_DEFAULT, ageTag, ageText, buildMixed, compareValues, mixedSortValue, padForShip,
   whereItIs } from "./src/model.js";
 
@@ -1044,6 +1045,15 @@ async function main() {
   const r = S.result;
   const fresh = r && sameDest(r.p.dest, S.dest) && (Date.now() - r.at) / 60000 < ui.prefs.cache_fresh_minutes;
   if (S.dest && !fresh && !S.searching) search();
+  // Last, so it never delays the first search; failure is silence (update.js).
+  if (DESKTOP && ui.prefs.update_check) {
+    const v = await checkForUpdate(VERSION, (u) => tauriFetchJson(u, { headers: { Accept: "application/vnd.github+json" } }));
+    if (v) {
+      const a = $("update-link");
+      a.textContent = `New version ${v} available`;
+      a.hidden = false;
+    }
+  }
 }
 
 main();

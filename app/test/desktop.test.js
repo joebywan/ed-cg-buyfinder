@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { DesktopDir, loadStore, mapLegacy } from "../src/desktop.js";
+import { DesktopDir, loadStore, mapLegacy, openLinksExternally } from "../src/desktop.js";
 import { JournalTail } from "../src/tail.js";
 
 function fakeInvoke(files) {
@@ -64,4 +64,23 @@ test("mapLegacy carries the settings-window prefs and journal folder", () => {
     notifications: true, verify_edsm: false });
   assert.equal(m["cgbuy.journalDir"], "/j");
   assert.deepEqual(mapLegacy({ font_size: "x", journal_dir: null }), {});
+});
+
+test("legacy update_check maps into prefs", () => {
+  assert.deepEqual(mapLegacy({ update_check: false })["cgbuy.prefs"], { update_check: false });
+  assert.deepEqual(mapLegacy({ update_check: true })["cgbuy.prefs"], { update_check: true });
+  assert.equal(mapLegacy({ update_check: "yes" })["cgbuy.prefs"], undefined);
+});
+
+test("external links go to the opener; other clicks are left alone", () => {
+  let handler;
+  const opened = [];
+  openLinksExternally({ addEventListener: (_, h) => (handler = h) },
+    () => ({ openUrl: async (u) => opened.push(u) }));
+  let prevented = 0;
+  const click = (a) => handler({ target: { closest: () => a }, preventDefault: () => prevented++ });
+  click({ href: "https://ardent-insight.com/" });
+  click(null);                                    // not on a matching link
+  assert.deepEqual(opened, ["https://ardent-insight.com/"]);
+  assert.equal(prevented, 1);
 });

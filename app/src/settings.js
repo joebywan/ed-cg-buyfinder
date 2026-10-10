@@ -47,6 +47,7 @@ export function initSettings(ctx) {
   num("s-fresh", "cache_fresh_minutes");
   num("s-vtop", "verify_top");
   $("s-verify").onchange = () => { prefs.verify_edsm = $("s-verify").checked; save(); };
+  $("s-update").onchange = () => { prefs.update_check = $("s-update").checked; save(); };
   $("s-sound").onchange = () => { prefs.alert_sound = $("s-sound").checked; save(); };
 
   $("s-reset").onclick = () => {
@@ -100,6 +101,7 @@ export function initSettings(ctx) {
     $("s-vtop").value = prefs.verify_top;
     $("s-verify").checked = prefs.verify_edsm;
     $("s-sound").checked = prefs.alert_sound;
+    $("s-update").checked = prefs.update_check;
     $("s-notify").checked = prefs.notifications;
     const j = ctx.journal();
     $("s-cal").textContent = j ? j.cal.summary() : "no journal data";
@@ -111,7 +113,6 @@ export function initSettings(ctx) {
     }
   }
 
-  // Ponytail: no "check for a new version at startup" - this app has no release channel yet.
   return {
     prefs, refresh, save,
     /** Desktop notification, if switched on. */

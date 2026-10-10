@@ -198,6 +198,7 @@ fn main() {
         .plugin(tauri_plugin_http::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_opener::init())
         .manage(AppState::default())
         .invoke_handler(tauri::generate_handler![
             journal_dir, set_journal_dir, journal_list, journal_read, config_load, config_save
