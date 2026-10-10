@@ -30,7 +30,12 @@ export class EdsmGate {
     this.queue = [];
     this.running = false;
     this.paused = false;         // a pause is open and not yet logged as over
+    this.since = null;           // when the current run of 429s began; a good reply ends it
+    this.lastHit = -Infinity;
   }
+
+  /** ms EDSM has been rate-limiting without a good reply in between; 0 when it is not. */
+  stalledMs() { return this.since == null ? 0 : this.now() - this.since; }
 
   /** ms timestamp the pause ends, or 0 when EDSM may be asked. */
   coolingUntil() { return this.until > this.now() ? this.until : 0; }
@@ -77,6 +82,7 @@ export class EdsmGate {
       try {
         const res = await it.fetchJson(it.url);
         this.pause = PAUSE_FIRST;
+        this.since = null;
         return res;
       } catch (e) {
         if (e.status !== 429) throw e;
@@ -84,6 +90,9 @@ export class EdsmGate {
         this.pause = Math.min(this.pause * 2, PAUSE_MAX);
         this.until = this.now() + ms;
         this.paused = true;
+        // 429s further apart than a full pause are separate episodes (idle in between).
+        if (this.since == null || this.now() - this.lastHit > 2 * PAUSE_MAX) this.since = this.now();
+        this.lastHit = this.now();
         log("edsm", `rate limited (429): pausing EDSM requests until ${hhmmss(this.until)}`
           + `${e.retryAfter != null ? " (Retry-After)" : ""}`);
       }

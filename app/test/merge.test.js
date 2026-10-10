@@ -60,10 +60,12 @@ test("an EDSM drop survives Both mode: reason in the alert, no resurrection from
   }, { onUpdate: (r) => { got = r; } });
   let got;
   const w = new Watcher();
-  w.begin(buildMixed(first.rows, 100), first.dropped);
+  const plans = buildMixed(first.rows, 100);
+  w.begin(plans, first.dropped);
+  w.setTarget(plans.find((p) => p.station === "B"), plans);
   update();
   assert.equal(got.rows.some((r) => r.station === "B"), false);       // Ardent's older B stays dropped
   assert.deepEqual(got.dropped, { "B\0B-sys": "sold out" });
   const a = w.check(buildMixed(got.rows, 100), got.dropped);
-  assert.match(a.text, /B #2 dropped off the list \(EDSM: sold out\)/);
+  assert.match(a.text, /Your target B is gone from the results \(EDSM: sold out\)/);
 });

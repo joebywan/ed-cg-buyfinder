@@ -1,15 +1,15 @@
-// Noticing when later results for the same search reshuffle BEST MIXED LOADS:
-// the top five, and the one station the user last copied (their "target").
+// Noticing when later results for the same search move the one station the
+// user last copied (their "target"), and when EDSM has been rate-limiting long
+// enough that the unconfirmed rows are not going to firm up soon.
 // Pure bookkeeping over buildMixed's plans (ranked by cr/min); app.js shows it.
 //
 // Changes are always measured against what the user last acknowledged, so a
 // burst of EDSM confirmations updates one alert instead of stacking, and an
 // alert clears itself if the ranking drifts back.
-export const TOP_N = 5;
+export const STALL_MS = 5 * 60_000;      // EDSM rate-limited this long = worth saying so
 export const keyOf = (x) => `${x.station}\0${x.system}`;
 const slot = (x) => ({ key: keyOf(x), station: x.station, system: x.system });
 const nth = (n) => `#${n}`;
-const MAX_BANNER = 170;       // longer alerts are cut for the banner; the tooltip and log keep it all
 const num = (n) => Math.round(n).toLocaleString("en-US");
 
 /** The numbers a plan is judged by, kept so a later change can be explained. */
@@ -46,7 +46,6 @@ export class Watcher {
     this.now = now;
     this.shown = shown;          // rows on screen: a rank past this is off the list
     this.quiet = quiet;          // min ms between sounds
-    this.ack = [];               // top N the user has seen
     this.snap = new Map();       // key -> snapshot of every plan the user has seen
     this.target = null;          // {key, station, system, rank}: the station last copied
     this.sig = "";               // the alert last shown, to beep once per change
@@ -54,7 +53,6 @@ export class Watcher {
   }
 
   #see(plans) {
-    this.ack = plans.slice(0, TOP_N).map(slot);
     this.snap = new Map(plans.map((x) => [keyOf(x), snapshot(x)]));
   }
 
@@ -87,16 +85,9 @@ export class Watcher {
   }
 
   /** The user changed a view filter: the new ranking is the baseline (no
-   *  "top 5 changed"), but a target the filter hides is reported, naming
-   *  the filter (`hidden` is its reason, or "" when it still shows). An
-   *  unacknowledged top-5 alert is not the filter's to clear: it is judged
-   *  again against the new view, silently. */
+   *  alert), but a target the filter hides is reported, naming the filter
+   *  (`hidden` is its reason, or "" when it still shows). */
   rebase(plans, hidden = "", dropped = {}) {
-    if (this.sig && this.kind === "top5") {
-      const a = this.#top5(plans, dropped);
-      this.sig = a?.text ?? "";
-      return a && { ...a, beep: false };
-    }
     this.#see(plans);
     this.sig = "";
     const t = this.target;
@@ -110,7 +101,7 @@ export class Watcher {
     const t = this.target, best = plans[0];
     const lead = best ? `${best.station} (${best.system}) is now #1` : "nothing is shown";
     return { kind: "target", text: `Your target ${t.station} is hidden by the ${t.hiddenBy} - ${lead}. New destination?`,
-      keys: new Set([t.key, ...(best ? [keyOf(best)] : [])]),
+      keys: new Set([t.key]),
       copy: best ? { label: "COPY NEW #1", plan: best } : null, ok: "KEEP" };
   }
 
@@ -132,34 +123,14 @@ export class Watcher {
     const text = rank
       ? `Your target ${t.station} moved ${nth(t.rank)} -> ${nth(rank)}${tag(r)} - ${lead}. New destination?`
       : `Your target ${t.station} is gone from the results (${dropped[t.key] ? `EDSM: ${dropped[t.key]}` : "sold out or no profit"}) - ${lead}. New destination?`;
-    return { kind: "target", text, keys: new Set([t.key, ...(best ? [keyOf(best)] : [])]),
+    return { kind: "target", text, keys: new Set([t.key]),
              copy: best ? { label: "COPY NEW #1", plan: best } : null, ok: "KEEP" };
-  }
-
-  #top5(plans, dropped) {
-    const now = plans.slice(0, TOP_N);
-    if (now.length === this.ack.length && now.every((x, i) => keyOf(x) === this.ack[i].key)) return null;
-    const bits = [];
-    const reason = (key) => { const p = plans.find((x) => keyOf(x) === key); return p ? tag(why(this.snap.get(key), snapshot(p))) : ""; };
-    this.ack.forEach((a, i) => {
-      const r = this.#rank(plans, a.key);
-      if (r === i + 1) return;
-      bits.push(r ? `${a.station} ${nth(i + 1)} -> ${nth(r)}${reason(a.key)}` : `${a.station} ${nth(i + 1)} dropped off the list${tag(dropped[a.key] && `EDSM: ${dropped[a.key]}`)}`);
-    });
-    const was = new Set(this.ack.map((a) => a.key));
-    now.forEach((x, i) => { if (i && !was.has(keyOf(x))) bits.push(`${x.station} up to ${nth(i + 1)}${reason(keyOf(x))}`); });
-    const best = plans[0];
-    if (best && best.station !== this.ack[0]?.station) bits.push(`${best.station} is now #1${was.has(keyOf(best)) ? "" : reason(keyOf(best))}`);
-    const keys = new Set(now.map(keyOf).filter((k, i) => k !== this.ack[i]?.key));
-    const detail = `Top ${TOP_N} changed: ${bits.join("; ")}`;
-    return { kind: "top5", text: detail.length > MAX_BANNER ? `${detail.slice(0, MAX_BANNER - 1)}…` : detail, detail, keys,
-             copy: best ? { label: "COPY SYSTEM", plan: best } : null, ok: "GOT IT" };
   }
 
   /** A later update to the same search. Returns the alert to show, or null.
    *  `beep` is true once per change and at most once per `quiet` ms. */
   check(plans, dropped = {}) {
-    const a = this.#target(plans, dropped) ?? this.#top5(plans, dropped);
+    const a = this.#target(plans, dropped);
     if (!a) { this.sig = ""; return null; }
     return this.#beep(a);
   }
@@ -172,4 +143,12 @@ export class Watcher {
     this.sig = a.text;
     return a;
   }
+}
+
+/** The banner for an EDSM that has been rate-limiting for STALL_MS or more
+ *  (`stalledMs` from EdsmGate) while `pending` stations still wait on it. */
+export function stallAlert(stalledMs, pending) {
+  if (stalledMs < STALL_MS || !pending) return null;
+  return { kind: "edsm", title: "EDSM is rate-limiting", keys: new Set(), copy: null, ok: "GOT IT", beep: true,
+    text: `EDSM has been rate-limiting for 5+ min - ${pending} stations still unconfirmed (shown with ?). Results are Spansh/Ardent data until it recovers.` };
 }

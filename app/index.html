@@ -19,8 +19,8 @@
     <input id="journal-files" type="file" webkitdirectory multiple hidden>
     <label id="eddn-label" class="check" hidden><input id="f-eddn" type="checkbox"> SHARE TO EDDN</label>
     <span id="eddn-status" class="dim"></span>
-    <a id="update-link" href="https://github.com/joebywan/ed-cg-buyfinder/releases/latest" target="_blank" rel="noopener" hidden></a>
   </div>
+  <div id="standing" class="standing"></div>
 </header>
 
 <div id="alert" class="alert" role="alert" hidden>
@@ -35,6 +35,8 @@
 </div>
 
 <form id="controls" class="controls">
+  <span id="ctl-summary" class="ctl-summary" hidden></span>
+  <button id="ctl-edit" type="button" hidden title="Show the search controls and the destination">✎ EDIT</button>
   <label>HOLD <input id="f-hold" type="number" min="1" step="1" inputmode="numeric"></label>
   <label>RADIUS LY <input id="f-range" type="number" min="1" max="500" step="1"></label>
   <label>JUMP EMPTY <input id="f-jump_empty" type="number" min="1" step="0.1"></label>
@@ -68,6 +70,7 @@
   <button id="tab-single" type="button" role="tab" aria-selected="false">ALL SOURCES</button>
   <button id="tab-log" type="button" role="tab" aria-selected="false">LOGS</button>
   <button id="tab-settings" type="button" role="tab" aria-selected="false">SETTINGS</button>
+  <button id="tab-info" type="button" role="tab" aria-selected="false">INFO</button>
   <button id="cols-btn" type="button" class="cols-btn" aria-expanded="false" title="Choose and reorder this table's columns; you can also drag headers to move them and their right edges to resize">COLUMNS</button>
 </nav>
 
@@ -91,7 +94,7 @@
     <p class="dim small">Extra minutes a planetary landing costs you - glide, risk, hassle - so surface markets only rank high when they're clearly worth it. Added to the round trip of surface stations before credits per minute is worked out; 0 treats them like any other. Changes re-rank straight away.</p>
     <div class="desktop-only">
       <label class="row check"><input id="s-verify" type="checkbox"> Re-check top results against EDSM</label>
-      <label class="row check" title="A chime when the top 5, or the station you last copied, changes after the results are up."><input id="s-sound" type="checkbox"> Sound on changes</label>
+      <label class="row check" title="A chime when the station you last copied moves or drops out of the results, or EDSM has been rate-limiting for 5+ minutes."><input id="s-sound" type="checkbox"> Sound on changes</label>
       <label class="row">Stations to check <input id="s-vtop" type="number" min="0" step="1"></label>
       <p class="dim small">Spansh finds candidates but lags days; EDSM follows EDDN live. EDSM rate-limits, so only the best few are re-checked. Applies to Spansh results.</p>
     </div>
@@ -112,6 +115,18 @@
     <p id="s-cal" class="dim"></p>
     <button id="s-reset" type="button">RESET TIMINGS</button>
   </section>
+  <section id="wrap-info" class="settings" hidden>
+    <h2>DATA</h2>
+    <p>Market data from <span id="credit-src"><a href="https://ardent-insight.com" target="_blank" rel="noopener">Ardent Insight</a></span>, goals from Frontier.</p>
+    <p>Click a row to copy its system.</p>
+    <h2>ROW MARKERS</h2>
+    <p><span class="lg-top">▌</span> best cr/min &nbsp; <span class="lg-moved">▌</span> your copied station moved (see the alert) &nbsp; <span class="copied-tag">◂</span> the station you last copied</p>
+    <p><span class="ok">✓</span> confirmed by EDSM &nbsp; <span class="dim">?</span> Spansh data still awaiting EDSM &nbsp; <span class="surface">⏚</span> surface station &nbsp; <span class="fc">FC</span> fleet carrier</p>
+    <p class="dim small">The footer lists whichever of these are on screen.</p>
+    <h2>VERSION</h2>
+    <p>cgbuy <span id="info-version"></span> <span id="update-status" class="dim"></span>
+      <a id="update-link" href="https://github.com/joebywan/ed-cg-buyfinder/releases/latest" target="_blank" rel="noopener" hidden></a></p>
+  </section>
   <p id="empty" class="empty" hidden></p>
   <p id="age-line" class="age-line dim"></p>
 </main>
@@ -123,8 +138,6 @@
   </div>
   <div id="legend" class="dim small" hidden></div>
   <div id="status" class="status"></div>
-  <div id="calibration" class="dim small"></div>
-  <div class="dim small">Market data from <span id="credit-src"><a href="https://ardent-insight.com" target="_blank" rel="noopener">Ardent Insight</a></span>, goals from Frontier. Click a row to copy its system.</div>
 </footer>
 
 <div id="toast" class="toast" hidden></div>

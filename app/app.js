@@ -15,7 +15,8 @@ import { SOURCES, searchSources } from "./src/merge.js";
 import { Progress } from "./src/progress.js";
 import { buildRows as spanshRows } from "./src/spansh.js";
 import { JournalTail, readJournalFiles, readStationFile } from "./src/tail.js";
-import { Watcher, keyOf } from "./src/watch.js";
+import { Watcher, keyOf, stallAlert } from "./src/watch.js";
+import { edsmGate } from "./src/edsm.js";
 import { VERSION } from "./src/version.js";
 import { checkForUpdate } from "./src/update.js";
 import { MAX_AGE_DEFAULT, ageTag, ageText, buildMixed, compareValues, hiddenBy, mixedSortValue, padForShip,
@@ -31,7 +32,7 @@ const FIELDS = Object.keys(DEFAULTS);
 const SHIP_FIELDS = ["hold", "jump_empty", "jump_laden", "pad"];
 let ui;                           // the SETTINGS tab: ui.prefs, ui.notify
 const TOP_STATIONS = 40;
-const EXPANDED_BY_DEFAULT = 5;
+const HINT = "Click a row to copy its system.";
 const POLL_MS = 2000;
 const JOURNAL_FILES = 12;
 // Chrome and Edge can keep a folder open and tail it. Firefox can only be
@@ -163,6 +164,27 @@ function renderControls() {
   }
 }
 
+const SOURCE_NAME = { ardent: "Ardent", spansh: "Spansh", both: "Both" };
+
+/** Controls fold to one line once there are results to look at; EDIT unfolds them until the next search. */
+function renderCollapse() {
+  const folded = !!(S.result && S.dest) && !ui.prefs.controls_open;
+  $("controls").classList.toggle("collapsed", folded);
+  $("dest-panel").hidden = folded;
+  $("ctl-summary").hidden = $("ctl-edit").hidden = !folded;
+  if (!folded) return;
+  const p = { ...S.settings, ...shipFigures() };
+  $("ctl-summary").textContent = [`${fmt(p.hold)} t`, `${p.range} ly`, `jump ${p.jump_empty}/${p.jump_laden}`, `min ${fmt(p.min_supply)}`,
+    `${p.pad} pad`, `max ${p.max_age_days} d`, DESKTOP && SOURCE_NAME[p.source], p.carriers && "carriers",
+    `Odyssey ${p.odyssey ? "on" : "off"}`].filter(Boolean).join(" · ");
+}
+
+function setControlsOpen(open) {
+  ui.prefs.controls_open = open;
+  ui.save();
+  render();
+}
+
 function readControls() {
   for (const k of FIELDS) {
     const el = $(`f-${k}`);
@@ -218,13 +240,13 @@ function runFigures() {
 
 /** Where you stand in the goal you joined; updates on journal events and Frontier feed refreshes. */
 function renderStanding() {
-  const line = $("dest-line");
-  line.querySelector(".standing")?.remove();
+  const line = $("standing");
   const hist = historyFromLines(S.cgLines);
   const cur = hist.at(-1);
   const st = standing(hist, S.live.find((g) => cur && String(g.id) === String(cur.cgid)));
   const [text, tip] = standingText(st, runFigures());
-  if (text) line.append(h("div", { class: "sub standing", title: `${text}\n${tip}` }, text));
+  line.textContent = text || "";
+  line.title = text ? `${text}\n${tip}` : "";
   if (!st) return;
   const { next, notes } = standingChanges(S.lastStanding, st);
   S.lastStanding = next;
@@ -291,6 +313,14 @@ function chime() {
   });
 }
 
+/** EDSM rate-limited 5+ min with stations still waiting on it: say so once, clear it on recovery. */
+function checkStall() {
+  const a = stallAlert(edsmGate.stalledMs(), plansNow().filter((x) => x.pending).length);
+  if (!edsmGate.stalledMs()) S.stallShown = false;
+  if (S.alert?.kind === "edsm" && !a) showAlert(null);
+  else if (a && !S.stallShown && !S.alert) { S.stallShown = true; showAlert(a); }
+}
+
 const plansNow = () => (S.result ? buildMixed(viewed(), S.result.p.hold) : []);
 
 /** Show (or clear) the one banner; sound and notify only when the watcher says so. */
@@ -306,14 +336,14 @@ function showAlert(a) {
   if (a.beep) {
     log("alert", a.detail ?? a.text);
     chime();
-    if (!document.hasFocus()) ui.notify(a.title ?? (a.kind === "target" ? "Your target moved" : "Top 5 changed"), a.text);
+    if (!document.hasFocus()) ui.notify(a.title ?? "Your target moved", a.text);
   }
 }
 
 /** Results for search `gen` just changed: baseline if it is the first, else compare. */
 function watchResult(gen) {
   const plans = plansNow();
-  const keep = S.alert?.kind === "standing";       // a band change stays until acknowledged
+  const keep = ["standing", "edsm"].includes(S.alert?.kind);   // these stay until acknowledged (or EDSM recovers)
   let a;
   if (S.watchGen !== gen) { S.watchGen = gen; a = S.watch.begin(plans, S.result?.dropped); }
   else a = S.watch.check(plans, S.result?.dropped);
@@ -345,7 +375,7 @@ const FILTER_NAME = { odyssey: "ODYSSEY filter (surface station)", carriers: "CA
 
 /** ODYSSEY, CARRIERS, PAD or the surface penalty changed: re-show the cached rows.
  *
- *  The user did this, so the new ranking is the baseline - no "top 5 changed".
+ *  The user did this, so the new ranking is the baseline.
  *  The one thing worth saying is a copied target the filters now hide. Rows
  *  that came into sight may make the verified top N: confirm just those. */
 function viewChanged() {
@@ -354,7 +384,7 @@ function viewChanged() {
   const raw = t && S.result.rows.find((r) => r.station === t.station && r.system === t.system);
   const why = raw && hiddenBy(raw, viewOpts());
   const a = S.watch.rebase(plansNow(), why && (FILTER_NAME[why] ?? `PAD filter (largest pad is ${raw.pad || "unknown"})`), S.result.dropped);
-  if (a || S.alert?.kind !== "standing") showAlert(a);
+  if (a || !["standing", "edsm"].includes(S.alert?.kind)) showAlert(a);
   render();
   const more = S.verifyMore;
   if (!more) return;
@@ -381,6 +411,7 @@ async function search() {
   }
   S.rerun = false;
   readControls();
+  if (ui.prefs.controls_open) setControlsOpen(false);
   const p = params();
   if (!p.dest) {
     setStatus("No destination: open DESTINATION and set one.");
@@ -521,6 +552,7 @@ const colsFor = (view) => ui.prefs[`cols_${view}`]
 /** Render a table: header, body, then fixed-layout widths and drag handles. */
 function putTable(view, cols, head, body) {
   const table = $(`t-${view}`);
+  table.title = HINT;
   table.replaceChildren(head, body);
   const em = parseFloat(getComputedStyle(table).fontSize) || 14;
   const saved = ui.prefs[`colw_${view}`];
@@ -556,14 +588,14 @@ function stationTitle(x) {
                                          waiting: bodies.waiting(x.system) })}`;
 }
 
-const stationCell = (x, ...extra) =>
+const stationCell = (x, extra = [], commodity = null) =>
   h("td", { class: "station", title: stationTitle(x),
             "data-station": x.station, "data-stype": x.stype || "",
             "data-body": x.body || null,
             // A carrier orbits nothing, so there is nothing to look up and
             // nothing to rewrite.
             "data-carrier": x.carrier || null },
-    ...extra, x.station, x.planetary ? h("span", { class: "surface", title: `Surface station${x.body ? ` on ${x.body}` : ""}` }, " ⏚") : null,
+    ...extra, x.station, commodity ? h("span", { class: "sub" }, ` · ${commodity}`) : null, x.planetary ? h("span", { class: "surface", title: `Surface station${x.body ? ` on ${x.body}` : ""}` }, " ⏚") : null,
     x.carrier ? h("span", { class: "fc" }, " FC") : null,
     keyOf(x) === S.watch.target?.key ? h("span", { class: "copied-tag", title: "the station you last copied" }, " ◂ copied") : null);
 
@@ -607,12 +639,15 @@ const penaltyTip = (c, x, m) => (c.id === "trip_minutes" && !m && x.penalty ? `+
 
 /** One cell of a mixed-loads row: station row when `m` is null, else the commodity sub-row. */
 function mixedCell(c, plan, m, open, k) {
-  if (c.id === "station" && !m) return stationCell(plan,
+  // One commodity: one line, its figures on the station row. Only a mix expands.
+  const one = !m && plan.mix.length === 1 ? plan.mix[0] : null;
+  if (c.id === "station" && one) return stationCell(plan, [h("span", { class: "toggle" })], one.commodity);
+  if (c.id === "station" && !m) return stationCell(plan, [
     h("button", { class: "toggle", type: "button", "aria-expanded": String(open),
-      onclick: () => { open ? S.expanded.delete(k) : S.expanded.add(k); render(); } }, open ? "▾" : "▸"));
+      onclick: () => { open ? S.expanded.delete(k) : S.expanded.add(k); render(); } }, open ? "▾" : "▸")]);
   if (c.id === "station") return h("td", { class: "station", title: whereItIs(plan) }, m.commodity);
   if (c.id === "updated" && !m) return ageCell({ ...plan, edsm: plan.confirmed });
-  const v = m ? c.ch?.(m, plan) : c.st?.(plan);
+  const v = m ? c.ch?.(m, plan) : c.st ? c.st(plan) : one && c.ch?.(one, plan);
   const text = typeof v === "number" && !c.raw ? fmt(v) : v;
   const short = c.id === "tonnes" && !m && plan.short > 0;
   return h("td", { class: c.num ? `num${short ? " short" : ""}` : null,
@@ -639,12 +674,12 @@ function renderMixed(r) {
   const plans = buildMixed(viewed(r), hold).slice(0, TOP_STATIONS);
   const key = (x) => `${x.station}\0${x.system}`;
   const best = plans[0] && key(plans[0]);
-  if (!S.expanded) S.expanded = new Set(plans.slice(0, EXPANDED_BY_DEFAULT).map(key));
+  S.expanded ??= new Set();
   const body = h("tbody", { onclick: copySystem, onmouseover: wantBody, onmouseout: dropBody });
   const cols = colsFor("mixed");
   for (const plan of sorted(plans, S.sort.mixed)) {
     const k = key(plan);
-    const open = S.expanded.has(k);
+    const open = plan.mix.length > 1 && S.expanded.has(k);
     const moved = S.alert?.keys.has(k);
     body.append(h("tr", { class: `row head${k === best ? " top" : ""}${moved ? " moved" : ""}`, "data-system": plan.system,
       title: [k === best && "Best credits per minute", moved && "Moved since you last pressed GOT IT - see the banner above"].filter(Boolean).join(". ") || null },
@@ -726,11 +761,13 @@ function render() {
   $("tab-single").setAttribute("aria-selected", String(S.view === "single"));
   $("wrap-settings").hidden = S.view !== "settings";
   $("tab-settings").setAttribute("aria-selected", String(S.view === "settings"));
+  $("wrap-info").hidden = S.view !== "info";
+  $("tab-info").setAttribute("aria-selected", String(S.view === "info"));
+  renderCollapse();
   renderCols();
   $("legend").hidden = true;                 // renderMixed brings it back
   if (S.view === "settings") ui.refresh();
   renderDest();
-  renderCalibration();
   const r = S.result;
   const stale = r && S.dest && !sameDest(r.p.dest, S.dest);
   if (!r) {
@@ -742,6 +779,7 @@ function render() {
     return;
   }
   const stations = renderMixed(r);
+  if (S.view !== "mixed") $("legend").hidden = true;   // the markers are the table's
   renderSingle(r);
   const shown = viewed(r).length;
   $("empty").hidden = shown > 0;
@@ -763,12 +801,6 @@ function renderCredit() {
   const parts = used.filter((u) => link[u]).map((u) => h("a", { href: link[u][0], target: "_blank", rel: "noopener" }, link[u][1]));
   if (used.includes("spansh")) parts.push(h("a", { href: "https://www.edsm.net", target: "_blank", rel: "noopener" }, "EDSM"));
   $("credit-src").replaceChildren(...parts.flatMap((a, i) => (i ? [", ", a] : [a])));
-}
-
-function renderCalibration() {
-  $("calibration").textContent = S.journal
-    ? `Trip timings: ${S.journal.cal.summary()}`
-    : "Trip timings: estimates. Add your journal folder to calibrate them to your flying.";
 }
 
 // -- journal --------------------------------------------------------------------
@@ -912,7 +944,6 @@ function adoptJournal({ state, lines }) {
   };
   renderControls();
   renderJournal();
-  renderCalibration();
   renderEddn();
   // A snapshot has no live events, so the files it holds get their only
   // chance here. The Sender refuses anything too old to be worth sending,
@@ -973,8 +1004,7 @@ async function connectJournal(dir) {
       if (await S.tail.poll()) {
         renderControls();
         renderJournal();
-        renderCalibration();
-        const k = shipKey();
+              const k = shipKey();
         const shipChanged = k !== S.shipKey && !!S.journal.cargoCapacity;
         if (k !== S.shipKey && S.journal.cargoCapacity) S.shipKey = k;
         if (resolveDest() || shipChanged) search();
@@ -1073,6 +1103,8 @@ function bind() {
   $("s-cols-reset").onclick = () => { resetCols("single"); resetCols("mixed"); };
   $("tab-single").onclick = () => { S.view = "single"; render(); };
   $("tab-settings").onclick = () => { S.view = "settings"; render(); };
+  $("tab-info").onclick = () => { S.view = "info"; render(); };
+  $("ctl-edit").onclick = () => setControlsOpen(true);
   $("tab-log").onclick = () => { S.view = "log"; render(); };
   $("log-clear").onclick = clearLog;
   $("log-copy").onclick = (ev) => navigator.clipboard.writeText(formatLog()).then(
@@ -1122,6 +1154,7 @@ function bind() {
     if (e.key === "Escape") $("dest-panel").open = false;
   });
   setInterval(() => renderDest(), 30000);
+  setInterval(checkStall, 5000);
 }
 
 async function main() {
@@ -1135,6 +1168,8 @@ async function main() {
   window.addEventListener("cgbuy-font", () => render());   // unsaved column widths follow the font
   setupJournalButton();
   $("source-label").hidden = !DESKTOP;
+  $("info-version").textContent = VERSION;
+  $("update-status").textContent = DESKTOP ? (ui.prefs.update_check ? "checking for updates…" : "update check is off (SETTINGS)") : "";
   renderControls();
   renderCredit();
   render();
@@ -1153,10 +1188,12 @@ async function main() {
   // Last, so it never delays the first search; failure is silence (update.js).
   if (DESKTOP && ui.prefs.update_check) {
     const v = await checkForUpdate(VERSION, (u) => tauriFetchJson(u, { headers: { Accept: "application/vnd.github+json" } }));
+    $("update-status").textContent = v ? "" : "no newer version found";
     if (v) {
       const a = $("update-link");
       a.textContent = `New version ${v} available`;
       a.hidden = false;
+      $("tab-info").textContent = "INFO ●";
     }
   }
 }

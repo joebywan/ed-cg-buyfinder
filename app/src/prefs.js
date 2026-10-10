@@ -15,8 +15,9 @@ export const PREF_DEFAULTS = {
   cols_single: DEFAULT_SINGLE, // ALL SOURCES columns, in order
   colw_mixed: {},            // dragged widths in px by column id; absent = default
   colw_single: {},
+  controls_open: false,      // the search controls are unfolded (otherwise one summary line once results show)
   update_check: true,        // desktop only: say so in the header when a newer release exists
-  alert_sound: true,         // chime when the top 5 or your copied target changes
+  alert_sound: true,         // chime when your copied target moves or drops, or EDSM stalls
   surface_penalty: 0,        // minutes added to a planetary station's round trip before cr/min
   calAfter: 0,               // epoch secs, set by RESET TIMINGS
 };
@@ -33,6 +34,7 @@ export function loadPrefs(saved) {
   }
   p.verify_edsm = p.verify_edsm !== false;
   p.notifications = p.notifications === true;
+  p.controls_open = p.controls_open === true;
   p.alert_sound = p.alert_sound !== false;
   p.update_check = p.update_check !== false;
   for (const v of ["mixed", "single"]) {

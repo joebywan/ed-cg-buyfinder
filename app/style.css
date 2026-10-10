@@ -61,10 +61,11 @@ header {
   border-bottom: 1px solid var(--line);
 }
 h1 { margin: 0; color: var(--or); font-size: 18px; letter-spacing: .12em; text-transform: uppercase; }
-.dest-line { flex: 1 1 320px; min-width: 0; color: var(--or); cursor: default; }
-.dest-line .sub { color: var(--dim); }
-.dest-line .standing { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.journal { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px; }
+.dest-line { flex: 1 1 36em; min-width: 0; color: var(--or); cursor: default; }
+.sub { color: var(--dim); font-weight: normal; }
+.standing { flex: 1 0 100%; min-height: 1.4em; color: var(--dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.standing:empty { display: none; }
+.journal { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; margin-left: auto; max-width: 100%; }
 
 .notice {
   display: flex;
@@ -110,6 +111,8 @@ tr.moved td:first-child { box-shadow: inset 4px 0 var(--warn); }
   letter-spacing: .04em;
 }
 .controls input { width: 7.5em; }
+.controls.collapsed > label { display: none; }
+.ctl-summary { flex: 1 1 0; min-width: 0; padding-bottom: 6px; color: var(--txt); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .controls label.locked::after { content: "* from journal"; font-size: 10px; color: var(--or-dim); }
 .controls label.check { flex-direction: row; align-items: center; gap: 6px; padding-bottom: 6px; }
 .controls label.check input { width: auto; margin: 0; }
@@ -190,6 +193,7 @@ tr.top td:first-child { box-shadow: inset 3px 0 var(--or); }
 tr.child td { color: var(--dim); }
 tr.child td.station { padding-left: 34px; color: var(--txt); }
 td.short { color: var(--warn); }
+span.toggle { display: inline-block; }
 .toggle { border: 0; background: none; padding: 0 6px 0 0; color: var(--or); width: 1.6em; text-align: left; }
 .surface { color: var(--dim); font-size: 11px; }
 .fc { color: var(--dim); font-size: 11px; }
@@ -219,4 +223,5 @@ td.src { width: 3em; text-align: center; color: var(--dim); }
 .settings p { margin: 4px 0; }
 .settings input[type="number"] { width: 6em; }
 .bad { color: var(--bad); }
-main[data-view="settings"] #empty, main[data-view="settings"] #age-line { display: none !important; }
+main[data-view="settings"] #empty, main[data-view="settings"] #age-line,
+main[data-view="info"] #empty, main[data-view="info"] #age-line { display: none !important; }

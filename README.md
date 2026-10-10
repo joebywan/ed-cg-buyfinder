@@ -81,7 +81,9 @@ The **best mixed loads** view groups by station and shows what to buy there.
 A station's most profitable commodity is often capped below your hold, so it
 tops up with that station's next best — no extra travel, more credits.
 
-Expand a row for the per-commodity breakdown. Both views sort on any column
+A station that fills your hold with one commodity is a single line, with that commodity
+next to its name. Only a mixed load (a short hold topped up with more products) has an
+arrow: expand it for the per-commodity breakdown. Both views sort on any column
 header — click once for high-to-low, again to reverse it. Or switch to
 **all sources** for the flat one-row-per-commodity table:
 
@@ -153,26 +155,33 @@ carriers are excluded unless you tick the box.
 
 ## The two views
 
-**BEST MIXED LOADS** — one expandable row per station, ranked by cr/min until
+**BEST MIXED LOADS** — one row per station (expandable when the load mixes commodities), ranked by cr/min until
 you click another header. The columns read where it is, then what it pays, then
 what makes up the load: `SYSTEM`, `LY`, `STATION`, `LS`, `AGE`, then `CR/MIN`
 (the plan's value over the trip estimate) and `VALUE` (tonnes × profit/t,
 summed), then `TONNES`, `BUY` and `PROFIT/T`.
 
 `TONNES` is what the station can actually fill, so a figure below your hold is a
-station that cannot fill it. Expanding a row puts each commodity in the mix in
+station that cannot fill it. Expanding a mixed row puts each commodity in the mix in
 the `STATION` column, with its own `TONNES`, `BUY`, `PROFIT/T` and `VALUE`.
 `BUY` and `PROFIT/T` belong to those commodities rather than to the station, so
 those two headers do not sort; every other one does. Whatever the order, the
 best cr/min plan keeps its highlight, so re-sorting never loses it. Top 40
-stations, first five expanded.
+stations, none expanded until you open them.
 
 *Reading the table.* An orange bar on a row's left edge marks the best cr/min
-station. An amber bar with an underline marks a station that moved in the
-top-5 or target alert, until you press GOT IT. `◂ copied` tags the station you
+station. An amber bar with an underline marks your copied station when the
+target alert says it moved, until you press GOT IT. `◂ copied` tags the station you
 last copied. On `AGE`, a green ✓ means EDSM confirmed the reading and a dim ?
 means Spansh data still waiting for its EDSM check. Hover a row for the same
-explanation; the footer legend lists whichever markers are on screen.
+explanation; the footer legend lists whichever markers are on screen, and the
+**INFO** tab explains all of them, with the credits, the version and the update status.
+
+Once results are up, the search controls and DESTINATION fold into one summary line
+(with SEARCH still on it); ✎ EDIT unfolds them until the next search. Alerts: a banner
+appears only when the station you copied moves, drops out or is hidden by a filter, when
+your reward tier changes, or when EDSM has been rate-limiting for 5+ minutes with stations
+still unconfirmed. Nothing else raises one.
 
 **ALL SOURCES** — one row per commodity-at-station, click any header to sort.
 
