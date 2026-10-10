@@ -7,6 +7,7 @@
 // Error with a numeric `.status` on HTTP failure (defaultFetchJson does).
 import { MAX_AGE_DEFAULT, tripMinutes } from "./model.js";
 import { ageFilter } from "./ardent.js";
+import { log, loggedFetch } from "./log.js";
 
 export const SPANSH_SEARCH = "https://spansh.co.uk/api/stations/search";
 export const EDSM_STATIONS = "https://www.edsm.net/api-system-v1/stations?systemName=";
@@ -20,6 +21,7 @@ const EDSM_BUDGET = 40;          // requests per search, so one cannot exhaust t
 // made the market look like it did not exist.
 const EDSM_INTERVAL = 800;
 const EDSM_RETRIES = 3;
+const PAGES_GUESS = 2;           // pages per commodity assumed before it finishes
 
 // Spansh sheds load rather than queueing: six concurrent searches against it
 // will draw 502s from its proxy on a busy evening. The same call a moment
@@ -60,6 +62,9 @@ export function worthRetrying(err) {
  * Spansh caps results per request, so page through until we run past the
  * radius. A single fixed page silently drops most candidates.
  *
+ * `onPage(page, got, retryInMs)` reports each request: got is null while it
+ * is out or backing off (retryInMs set), else the number of results.
+ *
  * `onFail(commodity, page, error)` is called when a page is given up on.
  * Page 0 failing means this commodity contributed nothing at all, which the
  * caller must not discover by finding no rows - an empty answer and an
@@ -68,7 +73,7 @@ export function worthRetrying(err) {
  */
 export async function fetchSources(commodity, maxLy, minSupply, referenceSystem,
     { fetchJson = defaultFetchJson, pageSize = 500, maxPages = 10, onFail = null,
-      attempts = RETRY_ATTEMPTS, pause = RETRY_PAUSE, sleep = sleepMs } = {}) {
+      onPage = null, attempts = RETRY_ATTEMPTS, pause = RETRY_PAUSE, sleep = sleepMs } = {}) {
   const out = [];
   for (let page = 0; page < maxPages; page++) {
     const body = JSON.stringify({
@@ -81,6 +86,7 @@ export async function fetchSources(commodity, maxLy, minSupply, referenceSystem,
     });
     let res = null;
     let err = null;
+    onPage?.(page, null);
     for (let attempt = 0; attempt < Math.max(1, attempts); attempt++) {
       try {
         res = (await fetchJson(SPANSH_SEARCH, { method: "POST", body,
@@ -88,13 +94,16 @@ export async function fetchSources(commodity, maxLy, minSupply, referenceSystem,
         break;
       } catch (e) {
         err = e;
-        if (attempt + 1 < attempts && worthRetrying(e)) await sleep(pause * 2 ** attempt);
-        else break;
+        if (attempt + 1 < attempts && worthRetrying(e)) {
+          onPage?.(page, null, pause * 2 ** attempt);
+          await sleep(pause * 2 ** attempt);
+        } else break;
       }
     }
     // A dropped connection must not abort every other commodity.
     if (res === null) { onFail?.(commodity, page, err); break; }
     out.push(...res);
+    onPage?.(page, res.length);
     if (res.length < pageSize || (res.at(-1).distance ?? 0) > maxLy) break;
   }
   return out;
@@ -110,7 +119,7 @@ export function stationFits(st, pad) {
 }
 
 /** EDSM client: throttled, retried on 429, cached for the life of one search. */
-function edsmClient(fetchJson, sleep) {
+function edsmClient(fetchJson, sleep, onWait = null) {
   let last = 0;
   const cache = new Map();
   const get = async (url) => {
@@ -124,6 +133,7 @@ function edsmClient(fetchJson, sleep) {
       } catch (e) {
         if (e.status !== 429) throw e;
         if (attempt === EDSM_RETRIES - 1) break;
+        onWait?.(backoff);
         await sleep(backoff);
         backoff *= 2;
       }
@@ -160,7 +170,7 @@ function rescore(r, hold, cgLs, p, cal) {
  * might fly to are re-checked, capped by `budget` requests. Rows EDSM
  * confirmed get edsm=true. Returns { checked, corrected, limited }.
  */
-export async function refresh(rows, edsm, { top = VERIFY_TOP_DEFAULT, budget = EDSM_BUDGET } = {}) {
+export async function refresh(rows, edsm, { top = VERIFY_TOP_DEFAULT, budget = EDSM_BUDGET, onStation = null } = {}) {
   const ranked = [...rows].sort((a, b) => b.cr_per_min - a.cr_per_min);
   const stations = [];
   const seen = new Set();
@@ -180,7 +190,9 @@ export async function refresh(rows, edsm, { top = VERIFY_TOP_DEFAULT, budget = E
   const markets = new Map();
   let spent = 0;
   let limited = false;
+  let k = 0;
   for (const [sys, stn] of stations) {
+    onStation?.(k++, stations.length, stn);
     if (spent >= budget) break;
     try {
       if (!times[sys]) {
@@ -211,6 +223,7 @@ export async function refresh(rows, edsm, { top = VERIFY_TOP_DEFAULT, budget = E
     }
   }
 
+  onStation?.(stations.length, stations.length);
   let corrected = 0;
   for (const r of rows) {
     r.edsm = false;
@@ -238,10 +251,35 @@ export async function buildRows(p, { fetchJson = defaultFetchJson, cal = null, n
   const empty = { rows: [], cg: {}, cgLs: 0, hiddenStale: 0, allStale: false, errors: [] };
   if (!dest?.system || !dest?.station || !dest?.commodities?.length) return empty;
 
-  const edsm = edsmClient(fetchJson, sleep);
+  fetchJson = loggedFetch(fetchJson);
+  const verify = p.verify_edsm !== false;
+  const top = p.verify_top ?? VERIFY_TOP_DEFAULT;
+  const ncom = dest.commodities.length;
+  // Spansh steps are pages: assume PAGES_GUESS per commodity until a commodity
+  // finishes and its real count replaces the guess. EDSM steps: the two
+  // destination lookups, then one per verified station.
+  const pages = Object.fromEntries(dest.commodities.map((c) => [c, { n: 0, fin: false }]));
+  let comDone = 0;
+  let edsmDone = 0;
+  let edsmTotal = verify ? 2 + top : 2;
+  const emitS = (stage, detail) => {
+    const v = Object.values(pages);
+    onProgress?.({ provider: "spansh", stage, detail,
+      done: v.reduce((a, x) => a + x.n, 0),
+      total: v.reduce((a, x) => a + (x.fin ? x.n : Math.max(PAGES_GUESS, x.n + 1)), 0) });
+  };
+  const emitE = (stage, detail) => onProgress?.({ provider: "edsm", stage, detail,
+    done: edsmDone, total: edsmTotal });
+  emitS("discovery", "starting");
+  emitE("destination", `reading ${dest.station} prices`);
+  const edsm = edsmClient(fetchJson, sleep, (ms) => {
+    log("edsm", `rate limited, waiting ${ms / 1000}s`);
+    emitE("ratelimit", `rate limited, waiting ${ms / 1000}s`);
+  });
   // Any community-goal multiplier is already baked into what the station
   // reports, so it is never applied here.
   const mkt = await edsm.market(dest.system, dest.station);
+  edsmDone++;
   const cg = {};
   for (const c of mkt?.commodities ?? []) {
     if (dest.commodities.includes(c.name)) cg[c.name] = { sell: c.sellPrice, demand: c.demand };
@@ -254,17 +292,23 @@ export async function buildRows(p, { fetchJson = defaultFetchJson, cal = null, n
     cgLs = ((await edsm.system(dest.system)).stations ?? [])
       .find((s) => s.name === dest.station)?.distanceToArrival || 0;
   } catch { /* arrival distance is only a trip-time input */ }
+  edsmDone++;
+  emitE(verify ? "waiting" : "done", verify ? "waiting for Spansh candidates" : "");
 
   const errors = [];
   let rows = [];
-  let done = 0;
-  const total = dest.commodities.length;
   await mapLimit(dest.commodities, PARALLEL, async (name) => {
     const sell = cg[name]?.sell;
     if (sell > 0) {
       const lost = [];
       const found = await fetchSources(name, p.range, p.min_supply, dest.system,
-        { fetchJson, sleep, onFail: (c, page, err) => lost.push([page, err]) });
+        { fetchJson, sleep, onFail: (c, page, err) => lost.push([page, err]),
+          onPage: (page, got, retry) => {
+            if (got !== null) pages[name].n = page + 1;
+            emitS("discovery", got !== null ? `${name}, page ${page + 1} done (${comDone}/${ncom} commodities)`
+              : retry ? `${name}, page ${page + 1} failed, retrying in ${retry / 1000}s`
+              : `${name}, page ${page + 1} (${comDone}/${ncom} commodities)`);
+          } });
       for (const [page, err] of lost) {
         errors.push(`${name}: Spansh failed${page ? ` on page ${page}` : ""}: ${err.message}`);
       }
@@ -296,13 +340,22 @@ export async function buildRows(p, { fetchJson = defaultFetchJson, cal = null, n
         });
       }
     }
-    onProgress?.(++done, total, name);
+    pages[name].fin = true;
+    comDone++;
+    emitS("discovery", `${name} finished (${comDone}/${ncom} commodities)`);
   });
+  emitS("done", `${rows.length} candidate stations`);
+  log("spansh", `discovery finished: ${rows.length} candidate rows`);
 
-  if (p.verify_edsm !== false) {
-    onProgress?.(total, total, "verifying vs EDSM");
+  if (verify) {
     try {
-      const v = await refresh(rows, edsm, { top: p.verify_top ?? VERIFY_TOP_DEFAULT });
+      const v = await refresh(rows, edsm, { top, onStation: (k, n, stn) => {
+        edsmDone = 2 + k;
+        edsmTotal = 2 + n;
+        emitE("verify", stn ? `confirming ${k + 1}/${n} stations (${stn}) against fresher data`
+          : `confirmed ${n} stations`);
+      } });
+      log("edsm", `verified ${v.checked} stations, corrected ${v.corrected}${v.limited ? ", rate limited" : ""}`);
       for (const r of rows) if (r.edsm) rescore(r, p.hold, cgLs, p, cal);
       // A station EDSM says is empty must drop out, not sit at the top on a
       // supply figure that no longer exists.
@@ -310,7 +363,9 @@ export async function buildRows(p, { fetchJson = defaultFetchJson, cal = null, n
       if (v.limited) errors.push("EDSM rate limited - rest left as Spansh data");
     } catch (err) {
       errors.push(`EDSM verify failed: ${err.message}`);
+      emitE("failed", err.message);
     }
+    emitE("done", "");
   }
 
   rows.sort((a, b) => b.cr_per_min - a.cr_per_min);

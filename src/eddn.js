@@ -16,6 +16,8 @@
 // files are already in the folder we can see. The commander name is the
 // uploader ID, as EDMC and every other uploader does it.
 
+import { log } from "./log.js";
+
 export const EDDN_URL = "https://eddn.edcd.io:4430/upload/";
 export const SCHEMA = "https://eddn.edcd.io/schemas/commodity/3";
 export const OUTFITTING_SCHEMA = "https://eddn.edcd.io/schemas/outfitting/2";
@@ -264,8 +266,10 @@ export async function upload(envelope, { fetchImpl = fetch } = {}) {
       body: JSON.stringify(envelope),
     });
     const detail = (await res.text().catch(() => "")).slice(0, 200).trim();
+    log("eddn", `upload ${envelope?.$schemaRef?.split("/").at(-2) ?? ""} -> ${res.status} ${detail}`.trim());
     return { ok: res.ok, detail: `${res.status} ${detail}`.trim() };
   } catch (err) {
+    log("eddn", `upload failed: ${err?.message ?? err}`);
     return { ok: false, detail: String(err?.message ?? err) };
   }
 }

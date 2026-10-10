@@ -5,9 +5,12 @@ import { BodyLookup } from "./src/bodies.js";
 import { folderTooltip } from "./src/browser.js";
 import { FRONTIER_URL, historyFromLines, parseLive, suggestDestination } from "./src/cg.js";
 import { DESKTOP, DesktopDir, desktopStore, journalDir, tauriFetchJson } from "./src/desktop.js";
+import { initSettings } from "./src/settings.js";
 import { Sender } from "./src/eddn.js";
 import { JournalState } from "./src/journal.js";
+import { clearLog, formatLog, getLog, formatLine, log, onLog } from "./src/log.js";
 import { SOURCES, searchSources } from "./src/merge.js";
+import { Progress } from "./src/progress.js";
 import { buildRows as spanshRows } from "./src/spansh.js";
 import { JournalTail, readJournalFiles, readStationFile } from "./src/tail.js";
 import { VERSION } from "./src/version.js";
@@ -22,7 +25,7 @@ const DEFAULTS = { hold: 64, range: 30, jump_empty: 20, jump_laden: 15, min_supp
                    max_age_days: MAX_AGE_DEFAULT, source: "both" };
 const FIELDS = Object.keys(DEFAULTS);
 const SHIP_FIELDS = ["hold", "jump_empty", "jump_laden", "pad"];
-const CACHE_FRESH_MINUTES = 10;
+let ui;                           // the SETTINGS tab: ui.prefs, ui.notify
 const TOP_STATIONS = 40;
 const EXPANDED_BY_DEFAULT = 5;
 const POLL_MS = 2000;
@@ -121,7 +124,7 @@ function shipFigures() {
 }
 
 function params() {
-  const p = { ...S.settings, dest: S.dest };
+  const p = { ...S.settings, dest: S.dest, verify_edsm: ui.prefs.verify_edsm, verify_top: ui.prefs.verify_top };
   const f = shipFigures();
   if (f) for (const k of SHIP_FIELDS) if (f[k] != null) p[k] = f[k];
   return p;
@@ -172,7 +175,14 @@ function resolveDest() {
   const next = S.manualDest ? { ...S.manualDest, source: "set by hand" } : auto;
   const changed = JSON.stringify(next) !== JSON.stringify(S.dest);
   S.dest = next;
-  if (changed) S.noticeDismissed = false;
+  if (changed) {
+    S.noticeDismissed = false;
+    if (next?.source === "live CG (not joined)") {
+      ui.notify("Trading community goal found",
+        `Register at ${next.station} in ${next.system} before hauling - deliveries made before you sign up don't count.`);
+    }
+    if (next) log("journal", `destination: ${next.station}, ${next.system} (${next.source})`);
+  }
   renderDest();
   return changed;
 }
@@ -202,6 +212,18 @@ function renderDest() {
   $("d-station").placeholder = d?.station || "Metz Enterprise";
 }
 
+/** Tell the user when the top target changes: the window usually sits behind the game. */
+function checkBest() {
+  const top = buildMixed(S.result.rows, S.result.p.hold)[0];
+  const key = top && `${top.station}\0${top.system}`;
+  const was = S.lastBest;
+  if (key) S.lastBest = key;
+  if (!was || !key || key === was) return;       // first search of the session stays quiet
+  const mix = top.mix.slice(0, 3).map((m) => `${m.tonnes}t ${m.commodity}`).join(" + ");
+  ui.notify(`New best: ${top.station}`,
+    `${top.system}  -  ${top.ly} ly, ${fmt(top.ls)} Ls\n${mix}\n${fmt(top.total)} cr per ~${Math.round(top.trip_minutes)} min`);
+}
+
 const sameDest = (a, b) => !!a && !!b && a.system === b.system && a.station === b.station
   && JSON.stringify(a.commodities) === JSON.stringify(b.commodities);
 
@@ -222,9 +244,12 @@ async function search() {
   }
   S.searching = true;
   $("search").disabled = true;
-  $("progress").hidden = false;
-  $("progress-bar").style.width = "0";
+  const prog = new Progress();
+  const t0 = Date.now();
+  $("prog-panel").hidden = false;
+  renderProgress(prog);
   setStatus(`Searching ${p.dest.commodities.length} commodities around ${p.dest.system}…`);
+  log("search", `start: ${p.dest.commodities.length} commodities around ${p.dest.system}, ${p.range} ly, source ${p.source}`);
   try {
     const source = DESKTOP && p.source in SOURCES ? p.source : "ardent";
     const res = await searchSources(source, p, {
@@ -232,9 +257,9 @@ async function search() {
       spansh: (q, o) => spanshRows(q, { ...o, fetchJson: tauriFetchJson }),
     }, {
       cal: S.journal?.cal ?? null,
-      onProgress: (done, total, name) => {
-        $("progress-bar").style.width = `${(100 * done) / total}%`;
-        setStatus(`Searching… ${done}/${total} ${name}`);
+      onProgress: (ev) => {
+        prog.update(ev);
+        renderProgress(prog);
       },
       onPartial: (r, waiting) => {
         S.result = { ...r, p, at: Date.now() };
@@ -247,15 +272,51 @@ async function search() {
     renderCredit();
     S.expanded = null;
     store.set("cgbuy.result", S.result);
+    checkBest();
     render();
+    log("search", `finished in ${((Date.now() - t0) / 1000).toFixed(1)}s: ${res.rows.length} sources`
+      + `${res.errors.length ? `, ${res.errors.length} errors` : ""}`);
   } catch (err) {
     setStatus(`Search failed: ${err.message}`, true);
+    log("search", `failed: ${err.message}`);
   } finally {
     S.searching = false;
     $("search").disabled = false;
-    $("progress").hidden = true;
+    $("prog-panel").hidden = true;
     if (S.rerun) search();
   }
+}
+
+/** One labelled bar per provider that has reported, plus the overall bar. */
+const WHY = {
+  ardent: "Ardent",
+  spansh: "Spansh: large pages, typically ~10s each",
+  edsm: "EDSM: days fresher than Spansh, one request per station",
+};
+function renderProgress(prog) {
+  $("progress-bar").style.width = `${100 * prog.overall()}%`;
+  $("prog-rows").replaceChildren(...Object.entries(prog.p).map(([k, s]) => {
+    const label = { ardent: "Ardent", spansh: "Spansh", edsm: "EDSM" }[k];
+    const what = s.state === "done" ? `done in ${(s.ms / 1000).toFixed(1)}s`
+      : s.state === "failed" ? `failed: ${s.detail}`
+      : s.state === "skipped" ? "skipped" : `${s.detail}  (${s.done}/${s.total})`;
+    return h("div", { class: `prog-row ${s.state}`, title: WHY[k] },
+      h("span", { class: "name" }, label),
+      h("div", { class: "progress" }, h("div", { style: `width:${s.total ? 100 * Math.min(1, s.done / s.total) : 0}%` })),
+      h("span", { class: "what" }, what,
+        s.state === "run" && k !== "ardent" ? h("span", { class: "why" }, ` - ${WHY[k].split(": ")[1]}`) : null));
+  }));
+}
+
+// -- logs -----------------------------------------------------------------------
+
+function renderLog() {
+  const wrap = $("wrap-log");
+  if (wrap.hidden) return;
+  const main = document.querySelector("main");
+  const atBottom = main.scrollHeight - main.scrollTop - main.clientHeight < 8;
+  $("log-view").textContent = getLog().map(formatLine).join("\n");
+  if (atBottom) main.scrollTop = main.scrollHeight;
 }
 
 // -- tables ---------------------------------------------------------------------
@@ -403,8 +464,15 @@ function renderSingle(r) {
 function render() {
   $("wrap-mixed").hidden = S.view !== "mixed";
   $("wrap-single").hidden = S.view !== "single";
+  $("wrap-log").hidden = S.view !== "log";
+  document.querySelector("main").dataset.view = S.view;
+  $("tab-log").setAttribute("aria-selected", String(S.view === "log"));
+  renderLog();
   $("tab-mixed").setAttribute("aria-selected", String(S.view === "mixed"));
   $("tab-single").setAttribute("aria-selected", String(S.view === "single"));
+  $("wrap-settings").hidden = S.view !== "settings";
+  $("tab-settings").setAttribute("aria-selected", String(S.view === "settings"));
+  if (S.view === "settings") ui.refresh();
   renderDest();
   renderCalibration();
   const r = S.result;
@@ -508,6 +576,7 @@ async function shareStation(kind, marketId = null) {
   } else {
     await S.sender.maybeSendStation(kind, data, { ...common, marketId });
   }
+  log("eddn", `${kind}: ${S.sender.last}`);
   store.set("cgbuy.eddnSeen", S.sender.toList());
   renderEddn();
 }
@@ -540,6 +609,7 @@ function renderEddn() {
 /** A fresh journal reader: the state, the goal lines it saw, and its sink. */
 function newJournal() {
   const state = new JournalState();
+  state.calAfter = ui.prefs.calAfter;
   const lines = [];
   const sink = (line, live) => {
     state.handle(line, live);
@@ -566,9 +636,15 @@ function adoptJournal({ state, lines }) {
   S.cgLines = lines;
   S.shipKey = shipKey();
   adoptOdyssey(state);
+  log("journal", `loaded: commander ${state.commander || "?"}, ${lines.length} lines`);
   state.onDocked = (station, system) => {
+    log("journal", `docked at ${station}, ${system}`);
     if (S.dest && station === S.dest.station && system === S.dest.system) {
       S.noticeDismissed = false;       // docking unregistered is when the reminder matters
+      if (S.dest.source === "live CG (not joined)") {
+        ui.notify(`You're at ${station} - register for the CG`,
+          "The goal board is here. Sign up now so your deliveries count.");
+      }
       search();
     }
   };
@@ -693,7 +769,7 @@ function setupJournalButton() {
 
 async function restoreJournal() {
   if (DESKTOP) {
-    if (journalDir) await connectJournal(new DesktopDir());
+    if (journalDir) { log("journal", `folder found: ${journalDir}`); await connectJournal(new DesktopDir()); }
     else $("journal-status").textContent = "Couldn't find the Elite Dangerous journal folder: enter your ship's figures by hand.";
     return;
   }
@@ -732,6 +808,12 @@ function bind() {
   };
   $("tab-mixed").onclick = () => { S.view = "mixed"; render(); };
   $("tab-single").onclick = () => { S.view = "single"; render(); };
+  $("tab-settings").onclick = () => { S.view = "settings"; render(); };
+  $("tab-log").onclick = () => { S.view = "log"; render(); };
+  $("log-clear").onclick = clearLog;
+  $("log-copy").onclick = (ev) => navigator.clipboard.writeText(formatLog()).then(
+    () => toast("Copied log", ev), () => toast("Clipboard blocked", ev));
+  onLog(renderLog);
   $("notice-close").onclick = () => { S.noticeDismissed = true; renderDest(); };
   $("d-live").onchange = () => {
     const g = S.live.filter((x) => x.is_trade)[Number($("d-live").value)];
@@ -769,6 +851,11 @@ function bind() {
 }
 
 async function main() {
+  ui = initSettings({
+    store,
+    journal: () => S.journal,
+    reconnectJournal: () => connectJournal(new DesktopDir()),
+  });
   bind();
   setupJournalButton();
   $("source-label").hidden = !DESKTOP;
@@ -784,7 +871,7 @@ async function main() {
     $("journal-status").textContent = `Couldn't reopen the journal folder (${err.name}). Connect it again.`;
   }
   const r = S.result;
-  const fresh = r && sameDest(r.p.dest, S.dest) && (Date.now() - r.at) / 60000 < CACHE_FRESH_MINUTES;
+  const fresh = r && sameDest(r.p.dest, S.dest) && (Date.now() - r.at) / 60000 < ui.prefs.cache_fresh_minutes;
   if (S.dest && !fresh && !S.searching) search();
 }
 

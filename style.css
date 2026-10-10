@@ -19,6 +19,11 @@
 
 body {
   margin: 0;
+  height: 100vh;
+  height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
   padding-inline: 16px;
   background: var(--bg);
   color: var(--txt);
@@ -103,8 +108,24 @@ h1 { margin: 0; color: var(--or); font-size: 18px; letter-spacing: .12em; text-t
 .tabs { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; border-bottom: 1px solid var(--or-dim); }
 .tabs button { border: 0; border-bottom: 2px solid transparent; background: none; color: var(--dim); padding: 6px 10px; }
 .tabs button[aria-selected="true"] { color: var(--or); border-bottom-color: var(--or); }
-.progress { flex: 1 1 120px; height: 3px; background: var(--line); margin-left: 12px; }
+body > header, body > .notice, body > .controls, body > .dest-panel, body > .tabs, body > footer { flex: none; }
+body > main { flex: 1 1 0; min-height: 0; overflow: auto; }
+body > .dest-panel { max-height: 40vh; overflow: auto; }
+
+.progress { height: 3px; background: var(--line); }
 .progress div { height: 100%; width: 0; background: var(--or); transition: width .2s; }
+.prog-panel { display: grid; gap: 4px; padding-bottom: 6px; }
+.prog-row { display: grid; grid-template-columns: 6em minmax(60px, 160px) 1fr; gap: 4px 10px; align-items: center; }
+.prog-row .progress { height: 6px; }
+.prog-row .name { color: var(--or); }
+.prog-row.failed .name, .prog-row.failed .what { color: var(--bad); }
+.prog-row.done .progress div { background: var(--good); }
+.prog-row .why { color: var(--dim); }
+@media (max-width: 640px) { .prog-row { grid-template-columns: 5em 1fr; } .prog-row .what { grid-column: 1 / -1; } }
+
+.log-bar { padding: 6px 0; display: flex; gap: 8px; }
+.log-view { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; }
+main[data-view="log"] #empty, main[data-view="log"] #age-line { display: none; }
 
 .table-wrap { overflow-x: auto; }
 table { width: 100%; border-collapse: collapse; white-space: nowrap; }
@@ -142,7 +163,7 @@ td.short { color: var(--warn); }
 .empty { padding: 24px 0; color: var(--dim); }
 .age-line { margin: 8px 0 0; }
 
-footer { padding-block: 10px 24px; border-top: 1px solid var(--line); margin-top: 10px; display: grid; gap: 4px; }
+footer { padding-block: 8px 10px; border-top: 1px solid var(--or-dim); background: var(--bg); display: grid; gap: 4px; }
 .status.bad { color: var(--bad); }
 
 .toast {
@@ -155,3 +176,10 @@ footer { padding-block: 10px 24px; border-top: 1px solid var(--line); margin-top
   font-size: 12px;
 }
 td.src { width: 3em; text-align: center; color: var(--dim); }
+
+.settings h2 { margin: 16px 0 4px; color: var(--or); font-size: 13px; letter-spacing: .08em; font-weight: normal; }
+.settings .row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 4px 0; }
+.settings p { margin: 4px 0; }
+.settings input[type="number"] { width: 6em; }
+.bad { color: var(--bad); }
+main[data-view="settings"] #empty, main[data-view="settings"] #age-line { display: none !important; }

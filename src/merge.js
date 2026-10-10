@@ -2,6 +2,7 @@
 // reading of each market.
 import { MAX_AGE_DEFAULT } from "./model.js";
 import { ageFilter } from "./ardent.js";
+import { log } from "./log.js";
 
 export const SOURCES = { ardent: "Ardent", spansh: "Spansh", both: "Ardent + Spansh" };
 
@@ -46,6 +47,14 @@ export async function searchSources(source, p, builders, opts) {
   const names = source === "both" ? ["ardent", "spansh"] : [source];
   const tagged = names.length > 1;
   const runs = names.map((n) => builders[n](p, opts));
+  // A builder that throws never reports its own end; say so, and take its
+  // EDSM leg down with it.
+  runs.forEach((run, i) => run.catch((e) => {
+    log(names[i], `failed: ${e.message}`);
+    for (const provider of names[i] === "spansh" ? ["spansh", "edsm"] : [names[i]]) {
+      opts?.onProgress?.({ provider, stage: "failed", detail: e.message });
+    }
+  }));
   // Spansh can take a minute or more; whichever source lands first is shown
   // on its own while the other is still out, then replaced by the merge.
   if (tagged && opts?.onPartial) {

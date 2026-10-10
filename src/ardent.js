@@ -2,6 +2,7 @@
 // unlike Spansh, lets a web page read its answers.
 import { MAX_AGE_DEFAULT, daysOld, isPlanetary, padFits, tripMinutes } from "./model.js";
 import { symbolFor } from "./commodities.js";
+import { log, loggedFetch } from "./log.js";
 
 export const ARDENT = "https://api.ardent-insight.com/v2";
 const MIN_DAYS_QUERIED = 30;   // fetch past the age cutoff so the filter can stand down
@@ -81,10 +82,14 @@ export async function defaultFetchJson(url) {
  */
 export async function buildRows(p, { fetchJson = defaultFetchJson, cal = null,
                                       now = new Date(), onProgress = null } = {}) {
+  fetchJson = loggedFetch(fetchJson);
   const dest = p.dest;
   const empty = { rows: [], cg: {}, cgLs: 0, hiddenStale: 0, allStale: false, errors: [] };
   if (!dest?.system || !dest?.station || !dest?.commodities?.length) return empty;
 
+  const total = dest.commodities.length + 1;     // the station lookup, then each commodity
+  const emit = (stage, done, detail) => onProgress?.({ provider: "ardent", stage, done, total, detail });
+  emit("destination", 0, `finding ${dest.station}`);
   const sys = encodeURIComponent(dest.system);
   const stations = await fetchJson(`${ARDENT}/system/name/${sys}/stations`);
   const st = (Array.isArray(stations) ? stations : []).find((s) => s.stationName === dest.station);
@@ -92,6 +97,7 @@ export async function buildRows(p, { fetchJson = defaultFetchJson, cal = null,
   const cgLs = st.distanceToArrival || 0;
   const origin = [st.systemX, st.systemY, st.systemZ];
 
+  emit("commodities", 1, "looking up markets");
   const maxAge = p.max_age_days ?? MAX_AGE_DEFAULT;
   const days = Math.max(MIN_DAYS_QUERIED, maxAge);
   const cg = {};
@@ -118,10 +124,12 @@ export async function buildRows(p, { fetchJson = defaultFetchJson, cal = null,
     } catch (err) {
       errors.push(`${name}: ${err.message}`);
     } finally {
-      onProgress?.(++done, dest.commodities.length, name);
+      emit("commodities", ++done + 1,
+        `${name} (${done}/${dest.commodities.length} commodities)`);
     }
   });
 
+  for (const e of errors) log("ardent", e);
   if (!Object.keys(cg).length) {
     throw new Error(errors.length ? errors.join("; ")
       : `Ardent has no prices at ${dest.station} for ${dest.commodities.join(", ")}`);
@@ -129,5 +137,6 @@ export async function buildRows(p, { fetchJson = defaultFetchJson, cal = null,
   rows.sort((a, b) => b.cr_per_min - a.cr_per_min);
   const aged = ageFilter(rows, maxAge, now);
   rows = aged.rows;
+  emit("done", total, `${rows.length} sources`);
   return { rows, cg, cgLs, hiddenStale: aged.hidden, allStale: aged.allStale, errors };
 }

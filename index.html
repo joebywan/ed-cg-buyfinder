@@ -59,17 +59,52 @@
 <nav class="tabs" role="tablist">
   <button id="tab-mixed" type="button" role="tab" aria-selected="true">BEST MIXED LOADS</button>
   <button id="tab-single" type="button" role="tab" aria-selected="false">ALL SOURCES</button>
-  <div id="progress" class="progress" hidden><div id="progress-bar"></div></div>
+  <button id="tab-settings" type="button" role="tab" aria-selected="false">SETTINGS</button>
+  <button id="tab-log" type="button" role="tab" aria-selected="false">LOGS</button>
 </nav>
 
 <main>
   <div id="wrap-mixed" class="table-wrap"><table id="t-mixed"></table></div>
   <div id="wrap-single" class="table-wrap" hidden><table id="t-single"></table></div>
+  <div id="wrap-log" class="log-wrap" hidden>
+    <div class="log-bar"><button id="log-copy" type="button">COPY</button> <button id="log-clear" type="button">CLEAR</button></div>
+    <pre id="log-view" class="log-view"></pre>
+  </div>
+  <section id="wrap-settings" class="settings" hidden>
+    <h2>DISPLAY</h2>
+    <div class="row">Font size <button id="s-font-minus" type="button" aria-label="Smaller">-</button> <b id="s-font"></b> <button id="s-font-plus" type="button" aria-label="Larger">+</button>
+      <span class="dim small">Scales the whole window. Ctrl+plus, Ctrl+minus and Ctrl+0 do the same.</span></div>
+    <h2>DATA ACCURACY</h2>
+    <label class="row" title="A CG drains supply fast, so a week-old report of 40,000t may be a wasted trip. Raising this shows the older rows rather than hiding them; the AGE column is coloured so you can judge each one. Changing it re-runs the search.">Hide sources older than (days) <input id="s-max_age" type="number" min="0" step="1"></label>
+    <label class="row" title="On startup, a cached result newer than this is shown as-is; anything older starts a fresh search straight away, with the old numbers on screen while it runs.">Auto-refresh after (min) <input id="s-fresh" type="number" min="0" step="1"></label>
+    <div class="desktop-only">
+      <label class="row check"><input id="s-verify" type="checkbox"> Re-check top results against EDSM</label>
+      <label class="row">Stations to check <input id="s-vtop" type="number" min="0" step="1"></label>
+      <p class="dim small">Spansh finds candidates but lags days; EDSM follows EDDN live. EDSM rate-limits, so only the best few are re-checked. Applies to Spansh results.</p>
+    </div>
+    <div class="desktop-only">
+      <h2>ELITE DANGEROUS</h2>
+      <div class="row">Journal folder <input id="s-dir" size="50" placeholder="auto-detect" autocomplete="off">
+        <button id="s-dir-browse" type="button">BROWSE</button> <button id="s-dir-set" type="button">USE</button> <button id="s-dir-auto" type="button">AUTO-DETECT</button></div>
+      <p class="dim small"><span id="s-dir-now"></span> <span id="s-dir-msg" class="bad"></span><br>Auto-detected - change only if you have several installs.</p>
+    </div>
+    <h2>INTEGRATIONS</h2>
+    <div class="desktop-only"><label class="row check" title="Tells you when the best target changes, or when you dock at the goal station without having registered - the window usually sits behind the game."><input id="s-notify" type="checkbox"> Desktop notifications</label></div>
+    <label class="row check"><input id="s-eddn" type="checkbox"> Share market data to EDDN</label>
+    <p id="s-eddn-note" class="dim small"></p>
+    <h2>TRIP TIMINGS</h2>
+    <p id="s-cal" class="dim"></p>
+    <button id="s-reset" type="button">RESET TIMINGS</button>
+  </section>
   <p id="empty" class="empty" hidden></p>
   <p id="age-line" class="age-line dim"></p>
 </main>
 
 <footer>
+  <div id="prog-panel" class="prog-panel" hidden>
+    <div id="progress" class="progress"><div id="progress-bar"></div></div>
+    <div id="prog-rows"></div>
+  </div>
   <div id="status" class="status"></div>
   <div id="calibration" class="dim small"></div>
   <div class="dim small">Market data from <span id="credit-src"><a href="https://ardent-insight.com" target="_blank" rel="noopener">Ardent Insight</a></span>, goals from Frontier. Click a row to copy its system.</div>
