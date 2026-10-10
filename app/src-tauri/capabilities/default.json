@@ -1,0 +1,21 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "windows": ["main"],
+  "permissions": [
+    "core:default",
+    "dialog:allow-open",
+    "notification:default",
+    {
+      "identifier": "http:default",
+      "allow": [
+        { "url": "https://spansh.co.uk/*" },
+        { "url": "https://www.edsm.net/*" },
+        { "url": "https://api.ardent-insight.com/*" },
+        { "url": "https://ardent-insight.com/*" },
+        { "url": "https://api.orerve.net/*" },
+        { "url": "https://eddn.edcd.io/*" }
+      ]
+    }
+  ]
+}
