@@ -124,7 +124,7 @@ export function buildMixed(rows, hold) {
       const take = Math.min(it.supply, remaining);
       if (take <= 0) continue;
       mix.push({ commodity: it.commodity, tonnes: take, profit_per_t: it.profit_per_t,
-                 buy: it.buy, value: take * it.profit_per_t });
+                 buy: it.buy, supply: it.supply, value: take * it.profit_per_t });
       total += take * it.profit_per_t;
       remaining -= take;
     }
@@ -135,6 +135,7 @@ export function buildMixed(rows, hold) {
       // Properties of the station, so any of its rows can supply them.
       planetary: top.planetary, stype: top.stype, body: top.body,
       updated: top.updated, tonnes: hold - remaining, short: remaining,
+      supply: mix.reduce((n, m) => n + m.supply, 0),   // stock of the commodities in the load, summed
       trip_minutes: top.trip_minutes, total, cr_per_min: Math.round(total / top.trip_minutes), mix,
     });
   }
@@ -145,7 +146,7 @@ export function buildMixed(rows, hold) {
 /** Sort key for a plan or row column: names ignore case, gaps sort last. */
 export function mixedSortValue(item, key) {
   const v = item?.[key];
-  if (key === "station" || key === "system" || key === "commodity") return (v || "").toLowerCase();
+  if (key === "station" || key === "system" || key === "commodity" || key === "body") return (v || "").toLowerCase();
   if (key === "updated") return v || "";
   return v || 0;
 }

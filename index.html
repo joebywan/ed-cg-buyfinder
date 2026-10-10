@@ -22,6 +22,12 @@
   </div>
 </header>
 
+<div id="alert" class="alert" role="alert" hidden>
+  <span id="alert-text"></span>
+  <button id="alert-copy" type="button"></button>
+  <button id="alert-ack" type="button"></button>
+</div>
+
 <div id="notice" class="notice" hidden>
   <span id="notice-text"></span>
   <button id="notice-close" type="button" aria-label="Dismiss">×</button>
@@ -61,9 +67,11 @@
   <button id="tab-single" type="button" role="tab" aria-selected="false">ALL SOURCES</button>
   <button id="tab-log" type="button" role="tab" aria-selected="false">LOGS</button>
   <button id="tab-settings" type="button" role="tab" aria-selected="false">SETTINGS</button>
+  <button id="cols-btn" type="button" class="cols-btn" aria-expanded="false" title="Choose and reorder the columns of BEST MIXED LOADS">COLUMNS</button>
 </nav>
 
 <main>
+  <div id="cols-panel" class="cols-panel" hidden></div>
   <div id="wrap-mixed" class="table-wrap"><table id="t-mixed"></table></div>
   <div id="wrap-single" class="table-wrap" hidden><table id="t-single"></table></div>
   <div id="wrap-log" class="log-wrap" hidden>
@@ -79,6 +87,7 @@
     <label class="row" title="On startup, a cached result newer than this is shown as-is; anything older starts a fresh search straight away, with the old numbers on screen while it runs.">Auto-refresh after (min) <input id="s-fresh" type="number" min="0" step="1"></label>
     <div class="desktop-only">
       <label class="row check"><input id="s-verify" type="checkbox"> Re-check top results against EDSM</label>
+      <label class="row check" title="A chime when the top 5, or the station you last copied, changes after the results are up."><input id="s-sound" type="checkbox"> Sound on changes</label>
       <label class="row">Stations to check <input id="s-vtop" type="number" min="0" step="1"></label>
       <p class="dim small">Spansh finds candidates but lags days; EDSM follows EDDN live. EDSM rate-limits, so only the best few are re-checked. Applies to Spansh results.</p>
     </div>
@@ -92,6 +101,8 @@
     <div class="desktop-only"><label class="row check" title="Tells you when the best target changes, or when you dock at the goal station without having registered - the window usually sits behind the game."><input id="s-notify" type="checkbox"> Desktop notifications</label></div>
     <label class="row check"><input id="s-eddn" type="checkbox"> Share market data to EDDN</label>
     <p id="s-eddn-note" class="dim small"></p>
+    <h2>BEST MIXED LOADS</h2>
+    <div class="row">Columns are chosen with the COLUMNS button on that tab. <button id="s-cols-reset" type="button">RESET COLUMNS</button></div>
     <h2>TRIP TIMINGS</h2>
     <p id="s-cal" class="dim"></p>
     <button id="s-reset" type="button">RESET TIMINGS</button>

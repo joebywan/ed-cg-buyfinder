@@ -78,6 +78,19 @@ h1 { margin: 0; color: var(--or); font-size: 18px; letter-spacing: .12em; text-t
 .notice span { flex: 1; }
 .notice button { border: 0; background: none; color: var(--warn); font-size: 16px; padding: 0 4px; }
 
+.alert {
+  display: flex; gap: 10px; align-items: center; flex-wrap: wrap;
+  margin-top: 8px; padding: 10px 12px;
+  background: var(--warn); color: #1a1100; font-weight: bold;
+  border: 2px solid var(--or);
+}
+.alert span { flex: 1 1 320px; }
+.alert button { background: #1a1100; color: var(--warn); border: 1px solid #1a1100; padding: 4px 10px; font-weight: bold; }
+tr.moved td { animation: moved 1.2s ease-out 2; box-shadow: inset 0 -1px var(--warn); }
+tr.moved td:first-child { box-shadow: inset 4px 0 var(--warn); }
+@keyframes moved { 0%, 100% { background: transparent; } 40% { background: #5a3d0a; } }
+.copied-tag { color: var(--warn); font-size: 0.85em; }
+
 .controls {
   display: flex;
   flex-wrap: wrap;
@@ -109,7 +122,7 @@ h1 { margin: 0; color: var(--or); font-size: 18px; letter-spacing: .12em; text-t
 .tabs { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; border-bottom: 1px solid var(--or-dim); }
 .tabs button { border: 0; border-bottom: 2px solid transparent; background: none; color: var(--dim); padding: 6px 10px; }
 .tabs button[aria-selected="true"] { color: var(--or); border-bottom-color: var(--or); }
-body > header, body > .notice, body > .controls, body > .dest-panel, body > .tabs, body > footer { flex: none; }
+body > header, body > .alert, body > .notice, body > .controls, body > .dest-panel, body > .tabs, body > footer { flex: none; }
 body > main { flex: 1 1 0; min-height: 0; overflow: auto; }
 body > .dest-panel { max-height: 40vh; overflow: auto; }
 
@@ -142,6 +155,12 @@ th {
   border-bottom: 1px solid var(--line);
   user-select: none;
 }
+th { vertical-align: bottom; line-height: 1.15; }
+.tabs .cols-btn { margin-left: auto; color: var(--or); }
+.cols-panel { border: 1px solid var(--or-dim); padding: 6px 10px; margin: 6px 0; max-width: 28em; }
+.cols-panel .row { display: flex; align-items: center; gap: 6px; padding: 1px 0; }
+.cols-panel .row label { flex: 1; }
+.cols-panel .row.off { color: var(--dim); }
 th.sortable { cursor: pointer; }
 th.sortable:hover { color: #ff9a4a; }
 th.num, td.num { text-align: right; }

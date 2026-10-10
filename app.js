@@ -6,6 +6,7 @@ import { folderTooltip } from "./src/browser.js";
 import { FRONTIER_URL, historyFromLines, parseLive, suggestDestination } from "./src/cg.js";
 import { DESKTOP, DesktopDir, desktopStore, journalDir, tauriFetchJson } from "./src/desktop.js";
 import { initSettings } from "./src/settings.js";
+import { MIXED_COLS, DEFAULT_MIXED, moveCol, toggleCol } from "./src/columns.js";
 import { Sender } from "./src/eddn.js";
 import { JournalState } from "./src/journal.js";
 import { clearLog, formatLog, getLog, formatLine, log, onLog } from "./src/log.js";
@@ -13,6 +14,7 @@ import { SOURCES, searchSources } from "./src/merge.js";
 import { Progress } from "./src/progress.js";
 import { buildRows as spanshRows } from "./src/spansh.js";
 import { JournalTail, readJournalFiles, readStationFile } from "./src/tail.js";
+import { Watcher, keyOf } from "./src/watch.js";
 import { VERSION } from "./src/version.js";
 import { MAX_AGE_DEFAULT, ageTag, ageText, buildMixed, compareValues, mixedSortValue, padForShip,
   whereItIs } from "./src/model.js";
@@ -57,6 +59,9 @@ const S = {
   view: "mixed",
   sort: { mixed: null, single: { key: "cr_per_min", desc: true } },
   expanded: null,
+  watch: new Watcher(),
+  watchGen: 0,      // the search whose first results are the baseline
+  alert: null,
   gen: 0,           // bumped per search; older ones' background EDSM work goes quiet
   searching: false,
   noticeDismissed: false,
@@ -103,8 +108,8 @@ function ageShort(ms) {
 function toast(text, ev) {
   const t = $("toast");
   t.textContent = text;
-  t.style.left = `${Math.min(ev.clientX + 12, window.innerWidth - 200)}px`;
-  t.style.top = `${ev.clientY + 12}px`;
+  t.style.left = `${Math.min((ev?.clientX ?? window.innerWidth / 2) + 12, window.innerWidth - 200)}px`;
+  t.style.top = `${(ev?.clientY ?? 80) + 12}px`;
   t.hidden = false;
   clearTimeout(toast.timer);
   toast.timer = setTimeout(() => { t.hidden = true; }, 1500);
@@ -175,6 +180,7 @@ function resolveDest() {
   const [auto] = suggestDestination(historyFromLines(S.cgLines), S.live);
   const next = S.manualDest ? { ...S.manualDest, source: "set by hand" } : auto;
   const changed = JSON.stringify(next) !== JSON.stringify(S.dest);
+  if (changed && !sameDest(next, S.dest)) { S.watch.clearTarget(); showAlert(null); }
   S.dest = next;
   if (changed) {
     S.noticeDismissed = false;
@@ -224,6 +230,67 @@ function checkBest() {
   ui.notify(`New best: ${top.station}`,
     `${top.system}  -  ${top.ly} ly, ${fmt(top.ls)} Ls\n${mix}\n${fmt(top.total)} cr per ~${Math.round(top.trip_minutes)} min`);
 }
+
+// -- changes after the results are up ---------------------------------------------
+
+let audio;
+/** Browsers only let sound start after a click; make the context on the first one. */
+const wake = () => { try { audio ??= new AudioContext(); audio.resume(); } catch { /* no sound */ } };
+document.addEventListener("click", wake, true);
+function chime() {
+  if (!audio || audio.state !== "running" || ui?.prefs.alert_sound === false) return;
+  [[880, 0], [1175, 0.18]].forEach(([hz, at]) => {
+    const o = audio.createOscillator(), g = audio.createGain(), t = audio.currentTime + at;
+    o.frequency.value = hz;
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(0.25, t + 0.02);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + 0.35);
+    o.connect(g).connect(audio.destination);
+    o.start(t);
+    o.stop(t + 0.4);
+  });
+}
+
+const plansNow = () => (S.result ? buildMixed(S.result.rows, S.result.p.hold) : []);
+
+/** Show (or clear) the one banner; sound and notify only when the watcher says so. */
+function showAlert(a) {
+  S.alert = a;
+  $("alert").hidden = !a;
+  if (!a) return;
+  $("alert-text").textContent = a.text;
+  $("alert-copy").hidden = !a.copy;
+  $("alert-copy").textContent = a.copy?.label ?? "";
+  $("alert-ack").textContent = a.ok;
+  if (a.beep) {
+    log("alert", a.text);
+    chime();
+    if (!document.hasFocus()) ui.notify(a.kind === "target" ? "Your target moved" : "Top 5 changed", a.text);
+  }
+}
+
+/** Results for search `gen` just changed: baseline if it is the first, else compare. */
+function watchResult(gen) {
+  const plans = plansNow();
+  if (S.watchGen !== gen) { S.watchGen = gen; showAlert(S.watch.begin(plans)); }
+  else showAlert(S.watch.check(plans));
+}
+
+/** The user copied this station: remember it, and where it ranked. */
+function setTarget(station, system) {
+  const plan = plansNow().find((x) => x.station === station && x.system === system);
+  if (!plan) return;
+  S.watch.setTarget(plan, plansNow());
+  render();
+}
+
+// Copying by hand counts too: a selection that is a station or system in the results.
+document.addEventListener("copy", () => {
+  const text = String(getSelection()).trim();
+  const plans = plansNow();
+  const hit = text && (plans.find((x) => x.station === text) ?? plans.find((x) => x.system === text));
+  if (hit) setTarget(hit.station, hit.system);
+});
 
 const sameDest = (a, b) => !!a && !!b && a.system === b.system && a.station === b.station
   && JSON.stringify(a.commodities) === JSON.stringify(b.commodities);
@@ -276,11 +343,13 @@ async function search() {
         S.result = { ...r, p, at: S.result?.at ?? Date.now() };
         render();
         main.scrollTop = top;
+        watchResult(gen);
       },
       onPartial: (r, waiting) => {
         S.result = { ...r, p, at: Date.now() };
         renderCredit();
         render();
+        watchResult(gen);
         setStatus(`Showing ${SOURCES[r.sources[0]]} - still waiting on ${waiting}…`);
       },
     });
@@ -290,6 +359,7 @@ async function search() {
     store.set("cgbuy.result", S.result);
     checkBest();
     render();
+    watchResult(gen);
     if (res.verifying) {
       keepPanel = true;
       res.verifying.then(() => {
@@ -345,17 +415,19 @@ function renderLog() {
 
 // -- tables ---------------------------------------------------------------------
 
-const MIXED_COLS = [
-  ["system", "SYSTEM"], ["ly", "LY", true], ["station", "STATION"], ["ls", "LS", true],
-  ["updated", "AGE", true], ["cr_per_min", "CR/MIN", true], ["total", "VALUE", true],
-  ["tonnes", "TONNES", true], ["buy", "BUY", true, false], ["profit_per_t", "PROFIT/T", true, false],
-];
 const SINGLE_COLS = [
-  ["commodity", "COMMODITY"], ["system", "SYSTEM"], ["station", "STATION"], ["ly", "LY", true],
-  ["ls", "LS", true], ["supply", "SUPPLY", true], ["loads_available", "LOADS", true],
-  ["buy", "BUY", true], ["profit_per_t", "PROFIT/T", true], ["trip_minutes", "TRIP", true],
-  ["cr_per_min", "CR/MIN", true], ["t_per_min", "T/MIN", true], ["updated", "AGE", true],
-  ...(DESKTOP ? [["src", "SRC"]] : []),
+  ["commodity", "COMMODITY", false, true, "What to buy."], ["system", "SYSTEM", false, true, "Star system the station is in."],
+  ["station", "STATION", false, true, "Station name."], ["ly", "DIST\n(LY)", true, true, "Distance in light years from the goal system."],
+  ["ls", "ARRIVAL\n(LS)", true, true, "Supercruise distance from the arrival star to the station, in light seconds."],
+  ["supply", "SUPPLY\n(t)", true, true, "Stock for sale, in tonnes."],
+  ["loads_available", "LOADS", true, true, "How many full holds the stock would fill."],
+  ["buy", "BUY\nPRICE", true, true, "Price per tonne you pay at this station."],
+  ["profit_per_t", "PROFIT\nPER t", true, true, "Profit per tonne at the goal."],
+  ["trip_minutes", "TRIP\n(MIN)", true, true, "Estimated round-trip minutes, goal to station and back."],
+  ["cr_per_min", "CR/MIN", true, true, "Profit per minute of round trip for one full hold."],
+  ["t_per_min", "T/MIN", true, true, "Tonnes moved per minute of round trip."],
+  ["updated", "DATA\nAGE", true, true, "How old the market report is; green is fresh, red is stale."],
+  ...(DESKTOP ? [["src", "SRC", false, true, "Which service the row came from: Ardent or Spansh."]] : []),
 ];
 
 function sorted(items, sort) {
@@ -367,21 +439,24 @@ function sorted(items, sort) {
 
 function headRow(view, cols) {
   const cur = S.sort[view];
-  return h("thead", {}, h("tr", {}, cols.map(([key, label, num, sortable = true]) =>
+  return h("thead", {}, h("tr", {}, cols.map(([key, label, num, sortable = true, title]) =>
     h("th", {
+      title,
       class: [num && "num", sortable && "sortable"].filter(Boolean).join(" "),
       onclick: sortable ? () => {
         S.sort[view] = cur?.key === key ? { key, desc: !cur.desc } : { key, desc: true };
         render();
       } : null,
-    }, label, cur?.key === key ? (cur.desc ? " ▼" : " ▲") : ""))));
+    }, ...label.split("\n").flatMap((t, i) => i ? [h("br"), t] : [t]),
+    cur?.key === key ? (cur.desc ? " ▼" : " ▲") : ""))));
 }
 
 function copySystem(ev) {
   const tr = ev.target.closest("tr[data-system]");
   if (!tr || ev.target.closest("button")) return;
+  const station = tr.querySelector("td.station[data-station]")?.dataset.station;
   navigator.clipboard?.writeText(tr.dataset.system).then(
-    () => toast(`Copied ${tr.dataset.system}`, ev),
+    () => { toast(`Copied ${tr.dataset.system}`, ev); if (station) setTarget(station, tr.dataset.system); },
     () => toast("Clipboard blocked", ev));
 }
 
@@ -406,7 +481,8 @@ const stationCell = (x, ...extra) =>
             // A carrier orbits nothing, so there is nothing to look up and
             // nothing to rewrite.
             "data-carrier": x.carrier || null },
-    ...extra, x.station, x.carrier ? h("span", { class: "fc" }, " FC") : null);
+    ...extra, x.station, x.carrier ? h("span", { class: "fc" }, " FC") : null,
+    keyOf(x) === S.watch.target?.key ? h("span", { class: "copied-tag", title: "the station you last copied" }, " ◂ copied") : null);
 
 /** Rewrite the titles for one system in place, without a re-render.
 
@@ -439,6 +515,20 @@ const ageCell = (x) => h("td", { class: `num ${ageTag(x.updated)}`,
     : x.pending ? "unconfirmed - Spansh data, EDSM check pending" : null },
   ageText(x.updated), x.edsm ? h("span", { class: "ok" }, " ✓") : x.pending ? h("span", { class: "dim" }, " ?") : null);
 
+/** One cell of a mixed-loads row: station row when `m` is null, else the commodity sub-row. */
+function mixedCell(c, plan, m, open, k) {
+  if (c.id === "station" && !m) return stationCell(plan,
+    h("button", { class: "toggle", type: "button", "aria-expanded": String(open),
+      onclick: () => { open ? S.expanded.delete(k) : S.expanded.add(k); render(); } }, open ? "▾" : "▸"));
+  if (c.id === "station") return h("td", { class: "station", title: whereItIs(plan) }, m.commodity);
+  if (c.id === "updated" && !m) return ageCell(plan);
+  const v = m ? c.ch?.(m, plan) : c.st?.(plan);
+  const text = typeof v === "number" && c.id !== "ly" && c.id !== "trip_minutes" ? fmt(v) : v;
+  const short = c.id === "tonnes" && !m && plan.short > 0;
+  return h("td", { class: c.num ? `num${short ? " short" : ""}` : null,
+    title: short ? `${fmt(plan.short)} t short of your hold` : null }, text ?? "");
+}
+
 function renderMixed(r) {
   const hold = r.p.hold;
   const plans = buildMixed(r.rows, hold).slice(0, TOP_STATIONS);
@@ -446,32 +536,20 @@ function renderMixed(r) {
   const best = plans[0] && key(plans[0]);
   if (!S.expanded) S.expanded = new Set(plans.slice(0, EXPANDED_BY_DEFAULT).map(key));
   const body = h("tbody", { onclick: copySystem, onmouseover: wantBody });
+  const cols = ui.prefs.cols_mixed.map((id) => MIXED_COLS.find((c) => c.id === id));
   for (const plan of sorted(plans, S.sort.mixed)) {
     const k = key(plan);
     const open = S.expanded.has(k);
-    body.append(h("tr", { class: `row head${k === best ? " top" : ""}`, "data-system": plan.system },
-      h("td", {}, plan.system),
-      h("td", { class: "num" }, plan.ly),
-      stationCell(plan,
-        h("button", { class: "toggle", type: "button", "aria-expanded": String(open),
-          onclick: () => { open ? S.expanded.delete(k) : S.expanded.add(k); render(); } }, open ? "▾" : "▸")),
-      h("td", { class: "num" }, fmt(plan.ls)),
-      ageCell(plan),
-      h("td", { class: "num" }, fmt(plan.cr_per_min)),
-      h("td", { class: "num" }, fmt(plan.total)),
-      h("td", { class: `num${plan.short > 0 ? " short" : ""}`, title: plan.short > 0 ? `${fmt(plan.short)} t short of your hold` : null }, fmt(plan.tonnes)),
-      h("td"), h("td")));
+    body.append(h("tr", { class: `row head${k === best ? " top" : ""}${S.alert?.keys.has(k) ? " moved" : ""}`, "data-system": plan.system },
+      ...cols.map((c) => mixedCell(c, plan, null, open, k))));
     if (!open) continue;
     for (const m of plan.mix) {
       body.append(h("tr", { class: "child", "data-system": plan.system },
-        h("td"), h("td"),
-        h("td", { class: "station", title: whereItIs(plan) }, m.commodity),
-        h("td"), h("td"), h("td"),
-        h("td", { class: "num" }, fmt(m.value)), h("td", { class: "num" }, fmt(m.tonnes)),
-        h("td", { class: "num" }, fmt(m.buy)), h("td", { class: "num" }, fmt(m.profit_per_t))));
+        ...cols.map((c) => mixedCell(c, plan, m))));
     }
   }
-  $("t-mixed").replaceChildren(headRow("mixed", MIXED_COLS), body);
+  $("t-mixed").replaceChildren(headRow("mixed", cols.map((c) =>
+    [c.key ?? c.id, c.label, c.num, c.sortable !== false, c.title])), body);
   return plans.length;
 }
 
@@ -489,6 +567,36 @@ function renderSingle(r) {
   $("t-single").replaceChildren(headRow("single", SINGLE_COLS), body);
 }
 
+// -- BEST MIXED LOADS column chooser -----------------------------------------------
+
+function setCols(list) {
+  ui.prefs.cols_mixed = list;
+  ui.save();
+  render();
+}
+
+function renderCols() {
+  const mixed = S.view === "mixed";
+  $("cols-btn").hidden = !mixed;
+  const panel = $("cols-panel");
+  panel.hidden = !mixed || $("cols-btn").getAttribute("aria-expanded") !== "true";
+  if (panel.hidden) return;
+  const on = ui.prefs.cols_mixed;
+  const ids = [...on, ...MIXED_COLS.map((c) => c.id).filter((id) => !on.includes(id))];
+  const btn = (txt, label, d, id) => h("button", { type: "button", "aria-label": label,
+    disabled: d ? on.indexOf(id) < 0 || on.indexOf(id) + d < 0 || on.indexOf(id) + d >= on.length : null,
+    onclick: () => setCols(moveCol(on, id, d)) }, txt);
+  panel.replaceChildren(
+    ...ids.map((id) => {
+      const c = MIXED_COLS.find((x) => x.id === id);
+      return h("div", { class: `row${on.includes(id) ? "" : " off"}`, title: c.title },
+        h("label", {}, h("input", { type: "checkbox", checked: on.includes(id), disabled: id === "station" ? true : null,
+          onchange: () => setCols(toggleCol(on, id)) }), " ", c.label.replace("\n", " ")),
+        btn("▲", `Move ${id} up`, -1, id), btn("▼", `Move ${id} down`, 1, id));
+    }),
+    h("button", { type: "button", onclick: () => setCols([...DEFAULT_MIXED]) }, "RESET TO DEFAULT"));
+}
+
 function render() {
   $("wrap-mixed").hidden = S.view !== "mixed";
   $("wrap-single").hidden = S.view !== "single";
@@ -500,6 +608,7 @@ function render() {
   $("tab-single").setAttribute("aria-selected", String(S.view === "single"));
   $("wrap-settings").hidden = S.view !== "settings";
   $("tab-settings").setAttribute("aria-selected", String(S.view === "settings"));
+  renderCols();
   if (S.view === "settings") ui.refresh();
   renderDest();
   renderCalibration();
@@ -835,6 +944,12 @@ function bind() {
     if (S.eddn) for (const k of EDDN_KINDS) shareStation(k);
   };
   $("tab-mixed").onclick = () => { S.view = "mixed"; render(); };
+  $("cols-btn").onclick = () => {
+    const b = $("cols-btn");
+    b.setAttribute("aria-expanded", String(b.getAttribute("aria-expanded") !== "true"));
+    render();
+  };
+  $("s-cols-reset").onclick = () => setCols([...DEFAULT_MIXED]);
   $("tab-single").onclick = () => { S.view = "single"; render(); };
   $("tab-settings").onclick = () => { S.view = "settings"; render(); };
   $("tab-log").onclick = () => { S.view = "log"; render(); };
@@ -842,6 +957,16 @@ function bind() {
   $("log-copy").onclick = (ev) => navigator.clipboard.writeText(formatLog()).then(
     () => toast("Copied log", ev), () => toast("Clipboard blocked", ev));
   onLog(renderLog);
+  $("alert-ack").onclick = () => { S.watch.acknowledge(plansNow()); showAlert(null); render(); };
+  $("alert-copy").onclick = () => {
+    const plan = S.alert?.copy?.plan;
+    if (!plan) return;
+    navigator.clipboard?.writeText(plan.system).then(() => toast(`Copied ${plan.system}`), () => toast("Clipboard blocked"));
+    S.watch.setTarget(plan, plansNow());
+    S.watch.acknowledge(plansNow());
+    showAlert(null);
+    render();
+  };
   $("notice-close").onclick = () => { S.noticeDismissed = true; renderDest(); };
   $("d-live").onchange = () => {
     const g = S.live.filter((x) => x.is_trade)[Number($("d-live").value)];
