@@ -167,6 +167,13 @@ those two headers do not sort; every other one does. Whatever the order, the
 best cr/min plan keeps its highlight, so re-sorting never loses it. Top 40
 stations, first five expanded.
 
+*Reading the table.* An orange bar on a row's left edge marks the best cr/min
+station. An amber bar with an underline marks a station that moved in the
+top-5 or target alert, until you press GOT IT. `◂ copied` tags the station you
+last copied. On `AGE`, a green ✓ means EDSM confirmed the reading and a dim ?
+means Spansh data still waiting for its EDSM check. Hover a row for the same
+explanation; the footer legend lists whichever markers are on screen.
+
 **ALL SOURCES** — one row per commodity-at-station, click any header to sort.
 
 | Column | Meaning |

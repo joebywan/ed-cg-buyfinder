@@ -569,6 +569,20 @@ function mixedCell(c, plan, m, open, k) {
     title: short ? `${fmt(plan.short)} t short of your hold` : null }, text ?? "");
 }
 
+/** One footer line explaining the row markers, only the ones on screen. */
+function renderLegend(plans, key) {
+  const mark = (cls, t) => h("span", { class: cls }, t);
+  const items = [
+    plans.length && [mark("lg-top", "▌"), "best cr/min"],
+    plans.some((x) => S.alert?.keys.has(key(x))) && [mark("lg-moved", "▌"), "moved (see alert)"],
+    plans.some((x) => key(x) === S.watch.target?.key) && [mark("copied-tag", "◂"), "copied"],
+    plans.some((x) => x.confirmed) && [mark("ok", "✓"), "EDSM-confirmed"],
+    plans.some((x) => x.pending) && [mark("dim", "?"), "awaiting EDSM"],
+  ].filter(Boolean);
+  $("legend").replaceChildren(...items.flatMap(([m, t], i) => [i ? "   " : "", m, ` ${t}`]));
+  $("legend").hidden = !items.length;
+}
+
 function renderMixed(r) {
   const hold = r.p.hold;
   const plans = buildMixed(r.rows, hold).slice(0, TOP_STATIONS);
@@ -580,7 +594,9 @@ function renderMixed(r) {
   for (const plan of sorted(plans, S.sort.mixed)) {
     const k = key(plan);
     const open = S.expanded.has(k);
-    body.append(h("tr", { class: `row head${k === best ? " top" : ""}${S.alert?.keys.has(k) ? " moved" : ""}`, "data-system": plan.system },
+    const moved = S.alert?.keys.has(k);
+    body.append(h("tr", { class: `row head${k === best ? " top" : ""}${moved ? " moved" : ""}`, "data-system": plan.system,
+      title: [k === best && "Best credits per minute", moved && "Moved since you last pressed GOT IT - see the banner above"].filter(Boolean).join(". ") || null },
       ...cols.map((c) => mixedCell(c, plan, null, open, k))));
     if (!open) continue;
     for (const m of plan.mix) {
@@ -589,6 +605,7 @@ function renderMixed(r) {
     }
   }
   putTable("mixed", cols, headRow("mixed", cols), body);
+  renderLegend(plans, key);
   return plans.length;
 }
 
@@ -659,6 +676,7 @@ function render() {
   $("wrap-settings").hidden = S.view !== "settings";
   $("tab-settings").setAttribute("aria-selected", String(S.view === "settings"));
   renderCols();
+  $("legend").hidden = true;                 // renderMixed brings it back
   if (S.view === "settings") ui.refresh();
   renderDest();
   renderCalibration();

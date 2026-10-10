@@ -89,6 +89,8 @@ h1 { margin: 0; color: var(--or); font-size: 18px; letter-spacing: .12em; text-t
 tr.moved td { animation: moved 1.2s ease-out 2; box-shadow: inset 0 -1px var(--warn); }
 tr.moved td:first-child { box-shadow: inset 4px 0 var(--warn); }
 @keyframes moved { 0%, 100% { background: transparent; } 40% { background: #5a3d0a; } }
+.lg-top { color: var(--or); }
+.lg-moved { color: var(--warn); }
 .copied-tag { color: var(--warn); font-size: 0.85em; }
 
 .controls {
