@@ -10,11 +10,14 @@
 // request answers a whole system, so the first hover pays for every other row
 // in the same place.
 
+import { edsmGate } from "./edsm.js";
+
 export const EDSM_STATIONS = "https://www.edsm.net/api-system-v1/stations";
 
 async function defaultFetchJson(url) {
   const res = await fetch(url);
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  if (!res.ok) throw Object.assign(new Error(`HTTP ${res.status}`),
+    { status: res.status, retryAfter: res.headers.get("retry-after") });
   return res.json();
 }
 
@@ -26,7 +29,8 @@ async function defaultFetchJson(url) {
  * pointer run down forty rows must not become forty requests.
  */
 export class BodyLookup {
-  constructor({ fetchJson = defaultFetchJson, onResolved = null } = {}) {
+  constructor({ fetchJson = defaultFetchJson, onResolved = null, gate = edsmGate } = {}) {
+    this.gate = gate;
     this.fetchJson = fetchJson;
     this.onResolved = onResolved;
     this.cache = new Map();      // system -> Map(station -> body)
@@ -63,8 +67,9 @@ export class BodyLookup {
         const system = this.queue.shift();
         let found = new Map();
         try {
-          const d = await this.fetchJson(
-            `${EDSM_STATIONS}?systemName=${encodeURIComponent(system)}`);
+          // Shares EDSM's pacing and pauses with searches, behind their requests.
+          const d = await this.gate.request(this.fetchJson,
+            `${EDSM_STATIONS}?systemName=${encodeURIComponent(system)}`, { low: true });
           for (const st of d?.stations ?? []) {
             const body = st?.body?.name;
             if (body) found.set(st.name, body);

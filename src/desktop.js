@@ -10,7 +10,7 @@ const tauriInvoke = (name, args) => window.__TAURI__.core.invoke(name, args);
 export async function tauriFetchJson(url, init) {
   const res = await window.__TAURI__.http.fetch(url, init);
   if (!res.ok) throw Object.assign(new Error(`HTTP ${res.status} from ${new URL(url).host}`),
-    { status: res.status });
+    { status: res.status, retryAfter: res.headers?.get?.("retry-after") });
   return res.json();
 }
 

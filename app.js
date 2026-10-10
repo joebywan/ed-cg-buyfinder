@@ -57,6 +57,7 @@ const S = {
   view: "mixed",
   sort: { mixed: null, single: { key: "cr_per_min", desc: true } },
   expanded: null,
+  gen: 0,           // bumped per search; older ones' background EDSM work goes quiet
   searching: false,
   noticeDismissed: false,
   // Off until asked for. Everything this page shows is built from market
@@ -244,12 +245,15 @@ async function search() {
   }
   S.searching = true;
   $("search").disabled = true;
+  const gen = ++S.gen;
+  const stale = () => gen !== S.gen;
   const prog = new Progress();
   const t0 = Date.now();
   $("prog-panel").hidden = false;
   renderProgress(prog);
   setStatus(`Searching ${p.dest.commodities.length} commodities around ${p.dest.system}…`);
   log("search", `start: ${p.dest.commodities.length} commodities around ${p.dest.system}, ${p.range} ly, source ${p.source}`);
+  let keepPanel = false;
   try {
     const source = DESKTOP && p.source in SOURCES ? p.source : "ardent";
     const res = await searchSources(source, p, {
@@ -257,9 +261,21 @@ async function search() {
       spansh: (q, o) => spanshRows(q, { ...o, fetchJson: tauriFetchJson }),
     }, {
       cal: S.journal?.cal ?? null,
+      cancelled: stale,
       onProgress: (ev) => {
+        if (stale()) return;
         prog.update(ev);
         renderProgress(prog);
+      },
+      // EDSM confirmations land after the results are up: swap them in without
+      // moving the scroll position (open rows are keyed by station, so they stay).
+      onUpdate: (r) => {
+        if (stale()) return;
+        const main = document.querySelector("main");
+        const top = main.scrollTop;
+        S.result = { ...r, p, at: S.result?.at ?? Date.now() };
+        render();
+        main.scrollTop = top;
       },
       onPartial: (r, waiting) => {
         S.result = { ...r, p, at: Date.now() };
@@ -274,6 +290,14 @@ async function search() {
     store.set("cgbuy.result", S.result);
     checkBest();
     render();
+    if (res.verifying) {
+      keepPanel = true;
+      res.verifying.then(() => {
+        if (stale()) return;
+        $("prog-panel").hidden = true;
+        store.set("cgbuy.result", S.result);
+      });
+    }
     log("search", `finished in ${((Date.now() - t0) / 1000).toFixed(1)}s: ${res.rows.length} sources`
       + `${res.errors.length ? `, ${res.errors.length} errors` : ""}`);
   } catch (err) {
@@ -282,7 +306,7 @@ async function search() {
   } finally {
     S.searching = false;
     $("search").disabled = false;
-    $("prog-panel").hidden = true;
+    if (!keepPanel) $("prog-panel").hidden = true;
     if (S.rerun) search();
   }
 }
@@ -300,7 +324,7 @@ function renderProgress(prog) {
     const what = s.state === "done" ? `done in ${(s.ms / 1000).toFixed(1)}s`
       : s.state === "failed" ? `failed: ${s.detail}`
       : s.state === "skipped" ? "skipped" : `${s.detail}  (${s.done}/${s.total})`;
-    return h("div", { class: `prog-row ${s.state}`, title: WHY[k] },
+    return h("div", { class: `prog-row ${s.state} ${s.stage}`, title: WHY[k] },
       h("span", { class: "name" }, label),
       h("div", { class: "progress" }, h("div", { style: `width:${s.total ? 100 * Math.min(1, s.done / s.total) : 0}%` })),
       h("span", { class: "what" }, what,
@@ -409,7 +433,11 @@ function wantBody(ev) {
 const SRC_NAME = { A: "Ardent", S: "Spansh" };
 const srcCell = (x) => h("td", { class: "src", title: x.other
   ? `${SRC_NAME[x.other.src === "A" ? "S" : "A"]} read ${ageText(x.updated)}; ${SRC_NAME[x.other.src]} read ${ageText(x.other.updated)}` : null }, x.src || "");
-const ageCell = (x) => h("td", { class: `num ${ageTag(x.updated)}` }, ageText(x.updated));
+// A small mark after the age: confirmed by EDSM, or Spansh data still waiting for its check.
+const ageCell = (x) => h("td", { class: `num ${ageTag(x.updated)}`,
+  title: x.edsm ? `confirmed by EDSM, market read ${ageText(x.updated)}`
+    : x.pending ? "unconfirmed - Spansh data, EDSM check pending" : null },
+  ageText(x.updated), x.edsm ? h("span", { class: "ok" }, " ✓") : x.pending ? h("span", { class: "dim" }, " ?") : null);
 
 function renderMixed(r) {
   const hold = r.p.hold;

@@ -2,6 +2,7 @@
 // TestFetchSources*, TestStationFits, TestBuildRows and TestVerifyRefresh.
 import test from "node:test";
 import assert from "node:assert/strict";
+import { EdsmGate } from "../src/edsm.js";
 import { buildRows, fetchSources, refresh, stationFits, worthRetrying } from "../src/spansh.js";
 
 const NOW = new Date("2026-09-15T10:00:00Z");
@@ -121,7 +122,15 @@ const P = (over = {}) => ({
   dest: { system: "Ega", station: "Metz Enterprise", commodities: ["Palladium"] },
   range: 30, min_supply: 200, hold: 720, pad: "L", carriers: false,
   jump_empty: 25, jump_laden: 18, max_age_days: 7, verify_edsm: false, ...over });
-const run = (w, p = P()) => buildRows(p, { fetchJson: w.fetchJson, sleep: nap, now: NOW });
+const fakeGate = () => { let t = 1e6; return new EdsmGate({ now: () => t, sleep: async (ms) => { t += ms; } }); };
+// The final result, after background EDSM verification has finished.
+const run = async (w, p = P(), extra = {}) => {
+  let last;
+  const first = await buildRows(p, { fetchJson: w.fetchJson, sleep: nap, now: NOW, gate: fakeGate(),
+    onUpdate: (r) => { last = r; }, ...extra });
+  await first.verifying;
+  return last ?? first;
+};
 
 test("rows have the ardent shape; destination price and arrival come from EDSM", async () => {
   const { rows, cg, cgLs, errors } = await run(fake({ edsm: DEST }));
@@ -191,7 +200,7 @@ test("refresh checks only the top stations, ranked by cr/min", async () => {
   const w = fake({ edsm: { A: { S0: gold(), S1: gold(), S2: gold() } } });
   const rows = [10, 90, 50].map((c, i) => vrow({ station: `S${i}`, cr_per_min: c }));
   const res = await refresh(rows, client(w), { top: 2 });
-  assert.deepEqual([res.checked, res.corrected, res.limited], [2, 2, false]);
+  assert.deepEqual([res.checked, res.corrected], [2, 2]);
   assert.deepEqual(rows.map((r) => r.edsm), [false, true, true]);
 });
 
@@ -204,9 +213,48 @@ test("refresh leaves unknown stations and stale EDSM data alone", async () => {
   assert.equal(rows[0].supply, 530);
 });
 
-test("refresh reports rate limiting and the request budget caps it", async () => {
+test("refresh honours the request budget and applies each station as it lands", async () => {
   const w = fake({ edsm: { A: { Alpha: gold() } } });
-  const limited = { ...client(w), system: async () => { throw Object.assign(new Error("x"), { rateLimited: true }); } };
-  assert.equal((await refresh([vrow()], limited)).limited, true);
   assert.equal((await refresh([vrow()], client(w), { budget: 0 })).checked, 0);
+  const seen = [];
+  const rows = [vrow()];
+  await refresh(rows, client(w), { onApply: () => seen.push([rows[0].edsm, rows[0].pending]) });
+  assert.deepEqual(seen, [[true, false]]);
+});
+
+test("Spansh rows come back unconfirmed, then EDSM confirms them in the background", async () => {
+  const edsm = { ...DEST, Src: { Near: { time: "2026-09-15 02:00:00", goods: { Palladium: [1100, 18] } } } };
+  const updates = [];
+  const first = await buildRows(P({ verify_edsm: true }), { fetchJson: fake({ spansh: [src("Near")], edsm }).fetchJson,
+    sleep: nap, now: NOW, gate: fakeGate(), onUpdate: (r) => updates.push(r) });
+  assert.deepEqual([first.rows[0].edsm, first.rows[0].pending, first.rows[0].supply], [false, true, 1000]);
+  await first.verifying;
+  assert.equal(updates.at(-1).rows[0].edsm, true);
+  assert.equal(updates.at(-1).rows[0].supply, 18);
+});
+
+test("a 429 pauses the queue and verification resumes with nothing skipped", async () => {
+  const edsm = { ...DEST, Src: { Near: { time: "2026-09-15 02:00:00", goods: { Palladium: [1100, 18] } } } };
+  const w = fake({ spansh: [src("Near")], edsm });
+  let refused = false;
+  const fetchJson = async (url, init) => {
+    if (url.includes("/stations/market") && url.includes("Src") && !refused) { refused = true; throw httpErr(429); }
+    return w.fetchJson(url, init);
+  };
+  const res = await run({ fetchJson }, P({ verify_edsm: true }));
+  assert.equal(refused, true);
+  assert.equal(res.rows[0].edsm, true);
+  assert.deepEqual(res.errors, []);
+});
+
+test("a superseded search stops verifying and says nothing", async () => {
+  const edsm = { ...DEST, Src: { Near: { time: "2026-09-15 02:00:00", goods: { Palladium: [1100, 18] } } } };
+  const w = fake({ spansh: [src("Near")], edsm });
+  let dead = false, n = 0;
+  const first = await buildRows(P({ verify_edsm: true }), { fetchJson: w.fetchJson, sleep: nap, now: NOW,
+    gate: fakeGate(), cancelled: () => dead, onUpdate: () => n++,
+    onProgress: (ev) => { if (ev.provider === "spansh" && ev.stage === "done") dead = true; } });
+  await first.verifying;
+  assert.equal(n, 0);
+  assert.equal(w.urls.filter((u) => u.includes("Src")).length, 0);
 });

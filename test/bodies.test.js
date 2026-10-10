@@ -2,6 +2,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { BodyLookup } from "../src/bodies.js";
+import { EdsmGate } from "../src/edsm.js";
+
+const fast = () => { let t = 0; return new EdsmGate({ now: () => t, sleep: async (ms) => { t += ms; } }); };
 
 const doc = (...pairs) => ({
   stations: pairs.map(([name, body, type]) =>
@@ -24,7 +27,7 @@ const settle = () => new Promise((r) => setTimeout(r, 0));
 
 test("nothing is known until somebody asks", () => {
   const { fetchJson, asked } = fake({});
-  const b = new BodyLookup({ fetchJson });
+  const b = new BodyLookup({ gate: fast(), fetchJson });
   assert.equal(b.known("Ega", "Metz Enterprise"), undefined);
   assert.deepEqual(asked, []);
 });
@@ -33,7 +36,7 @@ test("one request answers every station in the system", async () => {
   const { fetchJson, asked } = fake({
     Ega: doc(["Metz Enterprise", "Ega 4"], ["Fast Point", "Ega 2 a"]),
   });
-  const b = new BodyLookup({ fetchJson });
+  const b = new BodyLookup({ gate: fast(), fetchJson });
   b.want("Ega");
   await settle();
   assert.equal(b.known("Ega", "Metz Enterprise"), "Ega 4");
@@ -44,7 +47,7 @@ test("one request answers every station in the system", async () => {
 test("a station EDSM cannot place reads as empty, not unknown", async () => {
   // The difference matters: unknown means ask, empty means stop asking.
   const { fetchJson } = fake({ Ega: doc(["Metz Enterprise", null]) });
-  const b = new BodyLookup({ fetchJson });
+  const b = new BodyLookup({ gate: fast(), fetchJson });
   b.want("Ega");
   await settle();
   assert.equal(b.known("Ega", "Metz Enterprise"), "");
@@ -53,7 +56,7 @@ test("a station EDSM cannot place reads as empty, not unknown", async () => {
 
 test("a system is only ever asked for once", async () => {
   const { fetchJson, asked } = fake({ Ega: doc(["Metz Enterprise", "Ega 4"]) });
-  const b = new BodyLookup({ fetchJson });
+  const b = new BodyLookup({ gate: fast(), fetchJson });
   b.want("Ega"); b.want("Ega");
   await settle();
   b.want("Ega");
@@ -64,7 +67,7 @@ test("a system is only ever asked for once", async () => {
 test("a pointer run down forty rows is not forty requests", async () => {
   // Hovering queues by system, and the queue is drained one at a time.
   const { fetchJson, asked } = fake({});
-  const b = new BodyLookup({ fetchJson });
+  const b = new BodyLookup({ gate: fast(), fetchJson });
   for (let i = 0; i < 40; i++) b.want(`Sys ${i % 4}`);
   await settle();
   assert.deepEqual(asked.sort(), ["Sys 0", "Sys 1", "Sys 2", "Sys 3"]);
@@ -72,7 +75,7 @@ test("a pointer run down forty rows is not forty requests", async () => {
 
 test("waiting says an answer is on its way", async () => {
   const { fetchJson } = fake({ Ega: doc(["Metz Enterprise", "Ega 4"]) });
-  const b = new BodyLookup({ fetchJson });
+  const b = new BodyLookup({ gate: fast(), fetchJson });
   b.want("Ega");
   assert.equal(b.waiting("Ega"), true);
   await settle();
@@ -81,7 +84,7 @@ test("waiting says an answer is on its way", async () => {
 
 test("a failed lookup is not retried", async () => {
   const { fetchJson, asked } = fake({ Ega: new Error("EDSM is down") });
-  const b = new BodyLookup({ fetchJson });
+  const b = new BodyLookup({ gate: fast(), fetchJson });
   b.want("Ega");
   await settle();
   assert.equal(b.known("Ega", "Metz Enterprise"), "");
@@ -93,7 +96,7 @@ test("a failed lookup is not retried", async () => {
 test("whatever is on screen is told when an answer lands", async () => {
   const told = [];
   const { fetchJson } = fake({ Ega: doc(["Metz Enterprise", "Ega 4"]) });
-  const b = new BodyLookup({ fetchJson, onResolved: (s) => told.push(s) });
+  const b = new BodyLookup({ gate: fast(), fetchJson, onResolved: (s) => told.push(s) });
   b.want("Ega");
   await settle();
   assert.deepEqual(told, ["Ega"]);
@@ -101,7 +104,7 @@ test("whatever is on screen is told when an answer lands", async () => {
 
 test("an empty system name is not a request", () => {
   const { fetchJson, asked } = fake({});
-  const b = new BodyLookup({ fetchJson });
+  const b = new BodyLookup({ gate: fast(), fetchJson });
   b.want("");
   b.want(null);
   assert.deepEqual(asked, []);

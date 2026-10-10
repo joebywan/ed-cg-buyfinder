@@ -40,13 +40,33 @@ export function mergeResults(ardent, spansh, p, now = new Date()) {
   };
 }
 
+/** The result for whatever sources have answered so far. */
+function assemble(res, names, p, fails) {
+  const used = names.filter((n) => res[n]);
+  if (names.length < 2) {
+    const r = res[names[0]];
+    r.rows.forEach((x) => { x.src = names[0] === "ardent" ? "A" : "S"; });
+    return { ...r, sources: used };
+  }
+  const tag = (n) => res[n] && { ...res[n], errors: res[n].errors.map((e) => `${SOURCES[n]}: ${e}`) };
+  const m = mergeResults(tag("ardent"), tag("spansh"), p);
+  m.errors.push(...fails);
+  return { ...m, sources: used };
+}
+
 /** Run the chosen source(s). `builders` is {ardent, spansh}: buildRows
  *  functions already bound to their fetchJson. One source throwing becomes an
- *  error line, not a failed search, unless nothing else answered. */
+ *  error line, not a failed search, unless nothing else answered. Spansh
+ *  keeps confirming against EDSM after it returns: each step reaches
+ *  `opts.onUpdate(result)` as a full, re-merged result, and the returned
+ *  result's `verifying` promise ends when that is over. */
 export async function searchSources(source, p, builders, opts) {
   const names = source === "both" ? ["ardent", "spansh"] : [source];
   const tagged = names.length > 1;
-  const runs = names.map((n) => builders[n](p, opts));
+  const res = {}, fails = [];
+  const runs = names.map((n) => builders[n](p, n === "spansh" && opts?.onUpdate
+    ? { ...opts, onUpdate: (r) => { res.spansh = r; opts.onUpdate(assemble(res, names, p, fails)); } }
+    : opts));
   // A builder that throws never reports its own end; say so, and take its
   // EDSM leg down with it.
   runs.forEach((run, i) => run.catch((e) => {
@@ -68,22 +88,13 @@ export async function searchSources(source, p, builders, opts) {
     }, () => {}));
   }
   const out = await Promise.allSettled(runs);
-  const res = {}, fails = [];
+  let verifying;
   out.forEach((o, i) => {
-    const label = SOURCES[names[i]];
     if (o.status === "fulfilled") {
-      res[names[i]] = o.value;
-      if (tagged) o.value.errors = o.value.errors.map((e) => `${label}: ${e}`);
-    } else fails.push(`${label}: ${o.reason.message}`);
+      verifying = o.value.verifying ?? verifying;
+      res[names[i]] ??= o.value;      // a newer update may already be in
+    } else fails.push(`${SOURCES[names[i]]}: ${o.reason.message}`);
   });
   if (!Object.keys(res).length) throw new Error(fails.join("; "));
-  const used = names.filter((n) => res[n]);
-  if (!tagged) {
-    const r = res[names[0]];
-    r.rows.forEach((x) => { x.src = names[0] === "ardent" ? "A" : "S"; });
-    return { ...r, sources: used };
-  }
-  const m = mergeResults(res.ardent, res.spansh, p);
-  m.errors.push(...fails);
-  return { ...m, sources: used };
+  return { ...assemble(res, names, p, fails), verifying };
 }

@@ -8,6 +8,7 @@
 import { MAX_AGE_DEFAULT, tripMinutes } from "./model.js";
 import { ageFilter } from "./ardent.js";
 import { log, loggedFetch } from "./log.js";
+import { edsmGate } from "./edsm.js";
 
 export const SPANSH_SEARCH = "https://spansh.co.uk/api/stations/search";
 export const EDSM_STATIONS = "https://www.edsm.net/api-system-v1/stations?systemName=";
@@ -16,11 +17,6 @@ export const EDSM_MARKET = "https://www.edsm.net/api-system-v1/stations/market";
 const PARALLEL = 6;
 const VERIFY_TOP_DEFAULT = 18;   // stations re-checked against EDSM per search
 const EDSM_BUDGET = 40;          // requests per search, so one cannot exhaust the limit
-// EDSM starts returning 429 after roughly ten rapid requests, so calls are
-// serial, spaced out, and retried. Swallowing the error as "no data" once
-// made the market look like it did not exist.
-const EDSM_INTERVAL = 800;
-const EDSM_RETRIES = 3;
 const PAGES_GUESS = 2;           // pages per commodity assumed before it finishes
 
 // Spansh sheds load rather than queueing: six concurrent searches against it
@@ -45,7 +41,7 @@ async function mapLimit(items, limit, fn) {
 export async function defaultFetchJson(url, init) {
   const res = await fetch(url, init);
   if (!res.ok) throw Object.assign(new Error(`HTTP ${res.status} from ${new URL(url).host}`),
-    { status: res.status });
+    { status: res.status, retryAfter: res.headers?.get?.("retry-after") });
   return res.json();
 }
 
@@ -118,28 +114,11 @@ export function stationFits(st, pad) {
   return !!(large || st.medium_pads || st.small_pads);
 }
 
-/** EDSM client: throttled, retried on 429, cached for the life of one search. */
-function edsmClient(fetchJson, sleep, onWait = null) {
-  let last = 0;
+/** EDSM client: paced and paused by the shared gate, cached for the life of
+ one search. `opts` ({onWait, cancelled}) is read at call time. */
+function edsmClient(fetchJson, gate, opts) {
   const cache = new Map();
-  const get = async (url) => {
-    let backoff = 1000;
-    for (let attempt = 0; attempt < EDSM_RETRIES; attempt++) {
-      const wait = EDSM_INTERVAL - (Date.now() - last);
-      if (wait > 0) await sleep(wait);
-      last = Date.now();
-      try {
-        return await fetchJson(url);
-      } catch (e) {
-        if (e.status !== 429) throw e;
-        if (attempt === EDSM_RETRIES - 1) break;
-        onWait?.(backoff);
-        await sleep(backoff);
-        backoff *= 2;
-      }
-    }
-    throw Object.assign(new Error("EDSM rate limit"), { rateLimited: true });
-  };
+  const get = (url) => gate.request(fetchJson, url, opts);
   const cached = async (key, url) => {
     if (!cache.has(key)) cache.set(key, await get(url));
     return cache.get(key);
@@ -168,9 +147,13 @@ function rescore(r, hold, cgLs, p, cal) {
  * while Spansh's station index lags by days (it once reported 530t of Gold
  * where the real figure was 18t). Deliberately narrow: only the stations you
  * might fly to are re-checked, capped by `budget` requests. Rows EDSM
- * confirmed get edsm=true. Returns { checked, corrected, limited }.
+ * confirmed get edsm=true; rows still waiting their turn have pending=true.
+ * Each station is applied as soon as it is answered, then `onApply()` runs, so
+ * a caller can show progress. `cancelled()` stops the loop. Returns
+ * { checked, corrected }.
  */
-export async function refresh(rows, edsm, { top = VERIFY_TOP_DEFAULT, budget = EDSM_BUDGET, onStation = null } = {}) {
+export async function refresh(rows, edsm, { top = VERIFY_TOP_DEFAULT, budget = EDSM_BUDGET,
+    onStation = null, onApply = null, cancelled = null } = {}) {
   const ranked = [...rows].sort((a, b) => b.cr_per_min - a.cr_per_min);
   const stations = [];
   const seen = new Set();
@@ -182,18 +165,20 @@ export async function refresh(rows, edsm, { top = VERIFY_TOP_DEFAULT, budget = E
   const spanshDates = new Map();
   for (const r of rows) {
     const k = `${r.system}\n${r.station}`;
+    r.edsm = false;
+    r.pending = seen.has(k);
     if (!spanshDates.has(k)) spanshDates.set(k, r.updated || "");
   }
 
   const times = {};     // system -> {station: market timestamp}
   const bodies = {};    // system -> {station: body name}
-  const markets = new Map();
+  let checked = 0;
+  let corrected = 0;
   let spent = 0;
-  let limited = false;
   let k = 0;
   for (const [sys, stn] of stations) {
+    if (cancelled?.() || spent >= budget) break;
     onStation?.(k++, stations.length, stn);
-    if (spent >= budget) break;
     try {
       if (!times[sys]) {
         const d = await edsm.system(sys);
@@ -215,28 +200,30 @@ export async function refresh(rows, edsm, { top = VERIFY_TOP_DEFAULT, budget = E
       if (spanshTime && edsmTime.slice(0, 10) < spanshTime.slice(0, 10)) continue;
       const d = await edsm.market(sys, stn);
       spent++;
-      markets.set(`${sys}\n${stn}`, Object.fromEntries((d?.commodities ?? []).map((c) =>
-        [c.name, { buy: c.buyPrice ?? 0, supply: c.stock ?? 0 }])));
+      checked++;
+      const goods = Object.fromEntries((d?.commodities ?? []).map((c) =>
+        [c.name, { buy: c.buyPrice ?? 0, supply: c.stock ?? 0 }]));
+      for (const r of rows) {
+        const m = r.system === sys && r.station === stn && goods[r.commodity];
+        if (!m) continue;
+        r.edsm = true;
+        r.updated = edsmTime.slice(0, 10);
+        if (!r.body && bodies[sys]?.[stn]) r.body = bodies[sys][stn];
+        if (m.supply !== r.supply || m.buy !== r.buy) corrected++;
+        r.supply = m.supply;
+        r.buy = m.buy;
+      }
     } catch (e) {
-      if (e.rateLimited) { limited = true; break; }
-      continue;                           // one bad station must not stop the rest
+      if (e.cancelled) break;
+      // one bad station must not stop the rest
+    } finally {
+      for (const r of rows) if (r.system === sys && r.station === stn) r.pending = false;
+      onApply?.();
     }
   }
-
+  for (const r of rows) r.pending = false;
   onStation?.(stations.length, stations.length);
-  let corrected = 0;
-  for (const r of rows) {
-    r.edsm = false;
-    const m = markets.get(`${r.system}\n${r.station}`)?.[r.commodity];
-    if (!m) continue;
-    r.edsm = true;
-    r.updated = times[r.system][r.station].slice(0, 10);
-    if (!r.body && bodies[r.system]?.[r.station]) r.body = bodies[r.system][r.station];
-    if (m.supply !== r.supply || m.buy !== r.buy) corrected++;
-    r.supply = m.supply;
-    r.buy = m.buy;
-  }
-  return { checked: markets.size, corrected, limited };
+  return { checked, corrected };
 }
 
 /**
@@ -244,9 +231,15 @@ export async function refresh(rows, edsm, { top = VERIFY_TOP_DEFAULT, budget = E
  * verify_edsm (default true) and verify_top (default 18). Destination prices
  * and arrival distance come from EDSM, as in cgbuy; `errors` also carries
  * commodities Spansh could not answer for, and EDSM trouble.
+ *
+ * Returns as soon as Spansh discovery is done, rows unconfirmed. Verification
+ * carries on in the background (result.verifying resolves when it ends),
+ * handing a fresh result to `onUpdate` after each station. `cancelled()` true
+ * means a newer search took over: verification stops and stays silent.
  */
 export async function buildRows(p, { fetchJson = defaultFetchJson, cal = null, now = new Date(),
-                                      onProgress = null, sleep = sleepMs } = {}) {
+                                      onProgress = null, sleep = sleepMs, gate = edsmGate,
+                                      onUpdate = null, cancelled = null } = {}) {
   const dest = p.dest;
   const empty = { rows: [], cg: {}, cgLs: 0, hiddenStale: 0, allStale: false, errors: [] };
   if (!dest?.system || !dest?.station || !dest?.commodities?.length) return empty;
@@ -272,10 +265,12 @@ export async function buildRows(p, { fetchJson = defaultFetchJson, cal = null, n
     done: edsmDone, total: edsmTotal });
   emitS("discovery", "starting");
   emitE("destination", `reading ${dest.station} prices`);
-  const edsm = edsmClient(fetchJson, sleep, (ms) => {
-    log("edsm", `rate limited, waiting ${ms / 1000}s`);
-    emitE("ratelimit", `rate limited, waiting ${ms / 1000}s`);
-  });
+  let discovering = true;
+  const edsm = edsmClient(fetchJson, gate, { cancelled, onWait: (ms) => {
+    const t = `rate limited - resuming in ${Math.ceil(ms / 1000)}s`;
+    emitE("ratelimit", t);
+    if (discovering) emitS("discovery", `waiting on EDSM (${t})`);
+  } });
   // Any community-goal multiplier is already baked into what the station
   // reports, so it is never applied here.
   const mkt = await edsm.market(dest.system, dest.station);
@@ -293,6 +288,7 @@ export async function buildRows(p, { fetchJson = defaultFetchJson, cal = null, n
       .find((s) => s.name === dest.station)?.distanceToArrival || 0;
   } catch { /* arrival distance is only a trip-time input */ }
   edsmDone++;
+  discovering = false;
   emitE(verify ? "waiting" : "done", verify ? "waiting for Spansh candidates" : "");
 
   const errors = [];
@@ -347,28 +343,35 @@ export async function buildRows(p, { fetchJson = defaultFetchJson, cal = null, n
   emitS("done", `${rows.length} candidate stations`);
   log("spansh", `discovery finished: ${rows.length} candidate rows`);
 
-  if (verify) {
+  const snapshot = () => {
+    // A station EDSM says is empty must drop out, not sit at the top on a
+    // supply figure that no longer exists.
+    const live = rows.filter((r) => r.profit_per_t > 0 && r.supply > 0)
+      .sort((a, b) => b.cr_per_min - a.cr_per_min);
+    const aged = ageFilter(live, p.max_age_days ?? MAX_AGE_DEFAULT, now);
+    return { rows: aged.rows, cg, cgLs, hiddenStale: aged.hidden, allStale: aged.allStale, errors };
+  };
+  const first = snapshot();
+  if (!verify) return first;
+  first.verifying = (async () => {
+    const apply = () => {
+      for (const r of rows) if (r.edsm) rescore(r, p.hold, cgLs, p, cal);
+      if (!cancelled?.()) onUpdate?.(snapshot());
+    };
     try {
-      const v = await refresh(rows, edsm, { top, onStation: (k, n, stn) => {
+      const v = await refresh(rows, edsm, { top, cancelled, onApply: apply, onStation: (k, n, stn) => {
         edsmDone = 2 + k;
         edsmTotal = 2 + n;
         emitE("verify", stn ? `confirming ${k + 1}/${n} stations (${stn}) against fresher data`
           : `confirmed ${n} stations`);
       } });
-      log("edsm", `verified ${v.checked} stations, corrected ${v.corrected}${v.limited ? ", rate limited" : ""}`);
-      for (const r of rows) if (r.edsm) rescore(r, p.hold, cgLs, p, cal);
-      // A station EDSM says is empty must drop out, not sit at the top on a
-      // supply figure that no longer exists.
-      rows = rows.filter((r) => r.profit_per_t > 0 && r.supply > 0);
-      if (v.limited) errors.push("EDSM rate limited - rest left as Spansh data");
+      log("edsm", `verified ${v.checked} stations, corrected ${v.corrected}`);
     } catch (err) {
       errors.push(`EDSM verify failed: ${err.message}`);
       emitE("failed", err.message);
     }
     emitE("done", "");
-  }
-
-  rows.sort((a, b) => b.cr_per_min - a.cr_per_min);
-  const aged = ageFilter(rows, p.max_age_days ?? MAX_AGE_DEFAULT, now);
-  return { rows: aged.rows, cg, cgLs, hiddenStale: aged.hidden, allStale: aged.allStale, errors };
+    apply();
+  })();
+  return first;
 }

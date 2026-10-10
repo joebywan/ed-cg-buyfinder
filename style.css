@@ -32,6 +32,7 @@ body {
 
 a { color: var(--or); }
 .dim { color: var(--dim); }
+.ok { color: var(--good); }
 .small { font-size: 12px; }
 [hidden] { display: none !important; }
 
@@ -119,6 +120,7 @@ body > .dest-panel { max-height: 40vh; overflow: auto; }
 .prog-row .progress { height: 6px; }
 .prog-row .name { color: var(--or); }
 .prog-row.failed .name, .prog-row.failed .what { color: var(--bad); }
+.prog-row.ratelimit .what { color: var(--warn); }
 .prog-row.done .progress div { background: var(--good); }
 .prog-row .why { color: var(--dim); }
 @media (max-width: 640px) { .prog-row { grid-template-columns: 5em 1fr; } .prog-row .what { grid-column: 1 / -1; } }
