@@ -8,7 +8,6 @@ by credits per minute of round trip — not by profit per tonne, because a rich
 station 40 minutes away loses to a decent one 15 minutes away.
 
 ![Best mixed loads](screenshots/01-best-mixed-loads.png)
-<!-- TODO(owner): the three screenshots/ images show the retired tkinter UI; replace them with shots of the new app (same file names keep this page working). -->
 
 It reads your journal to know which goal you joined, what ship you are flying
 and how long your jumps actually take, then discovers candidate markets through
