@@ -4,9 +4,11 @@ import { buildRows, defaultFetchJson } from "./src/ardent.js";
 import { BodyLookup } from "./src/bodies.js";
 import { folderTooltip } from "./src/browser.js";
 import { FRONTIER_URL, historyFromLines, parseLive, suggestDestination } from "./src/cg.js";
-import { DESKTOP, DesktopDir, desktopStore, journalDir } from "./src/desktop.js";
+import { DESKTOP, DesktopDir, desktopStore, journalDir, tauriFetchJson } from "./src/desktop.js";
 import { Sender } from "./src/eddn.js";
 import { JournalState } from "./src/journal.js";
+import { SOURCES, searchSources } from "./src/merge.js";
+import { buildRows as spanshRows } from "./src/spansh.js";
 import { JournalTail, readJournalFiles, readStationFile } from "./src/tail.js";
 import { VERSION } from "./src/version.js";
 import { MAX_AGE_DEFAULT, ageTag, ageText, buildMixed, compareValues, mixedSortValue, padForShip,
@@ -17,7 +19,7 @@ const fmt = (n) => (n == null || n === "" ? "" : Number(n).toLocaleString("en-US
 
 const DEFAULTS = { hold: 64, range: 30, jump_empty: 20, jump_laden: 15, min_supply: 200,
                    pad: "L", carriers: false, odyssey: false,
-                   max_age_days: MAX_AGE_DEFAULT };
+                   max_age_days: MAX_AGE_DEFAULT, source: "both" };
 const FIELDS = Object.keys(DEFAULTS);
 const SHIP_FIELDS = ["hold", "jump_empty", "jump_laden", "pad"];
 const CACHE_FRESH_MINUTES = 10;
@@ -224,7 +226,11 @@ async function search() {
   $("progress-bar").style.width = "0";
   setStatus(`Searching ${p.dest.commodities.length} commodities around ${p.dest.system}…`);
   try {
-    const res = await buildRows(p, {
+    const source = DESKTOP && p.source in SOURCES ? p.source : "ardent";
+    const res = await searchSources(source, p, {
+      ardent: buildRows,
+      spansh: (q, o) => spanshRows(q, { ...o, fetchJson: tauriFetchJson }),
+    }, {
       cal: S.journal?.cal ?? null,
       onProgress: (done, total, name) => {
         $("progress-bar").style.width = `${(100 * done) / total}%`;
@@ -232,6 +238,7 @@ async function search() {
       },
     });
     S.result = { ...res, p, at: Date.now() };
+    renderCredit();
     S.expanded = null;
     store.set("cgbuy.result", S.result);
     render();
@@ -257,6 +264,7 @@ const SINGLE_COLS = [
   ["ls", "LS", true], ["supply", "SUPPLY", true], ["loads_available", "LOADS", true],
   ["buy", "BUY", true], ["profit_per_t", "PROFIT/T", true], ["trip_minutes", "TRIP", true],
   ["cr_per_min", "CR/MIN", true], ["t_per_min", "T/MIN", true], ["updated", "AGE", true],
+  ...(DESKTOP ? [["src", "SRC"]] : []),
 ];
 
 function sorted(items, sort) {
@@ -331,6 +339,9 @@ function wantBody(ev) {
   const row = td.closest("tr[data-system]");
   if (row) bodies.want(row.dataset.system);
 }
+const SRC_NAME = { A: "Ardent", S: "Spansh" };
+const srcCell = (x) => h("td", { class: "src", title: x.other
+  ? `${SRC_NAME[x.other.src === "A" ? "S" : "A"]} read ${ageText(x.updated)}; ${SRC_NAME[x.other.src]} read ${ageText(x.other.updated)}` : null }, x.src || "");
 const ageCell = (x) => h("td", { class: `num ${ageTag(x.updated)}` }, ageText(x.updated));
 
 function renderMixed(r) {
@@ -378,7 +389,7 @@ function renderSingle(r) {
       h("td", { class: "num" }, fmt(x.supply)), h("td", { class: "num" }, x.loads_available),
       h("td", { class: "num" }, fmt(x.buy)), h("td", { class: "num" }, fmt(x.profit_per_t)),
       h("td", { class: "num" }, x.trip_minutes), h("td", { class: "num" }, fmt(x.cr_per_min)),
-      h("td", { class: "num" }, x.t_per_min), ageCell(x)));
+      h("td", { class: "num" }, x.t_per_min), ageCell(x), DESKTOP ? srcCell(x) : null));
   }
   $("t-single").replaceChildren(headRow("single", SINGLE_COLS), body);
 }
@@ -411,6 +422,16 @@ function render() {
     : `Nothing hidden: every source is within ${maxAge} days.`;
   const errs = r.errors?.length ? `  ·  failed: ${r.errors.join("; ")}` : "";
   setStatus(`${stations} stations, ${fmt(r.rows.length)} sources for ${r.p.dest.station}${stale ? " (for a previous destination — search again)" : ""}${errs}`, !!errs);
+}
+
+/** "Markets come from" names the source(s) the last search actually used. */
+function renderCredit() {
+  const used = DESKTOP ? S.result?.sources ?? (S.settings.source === "both" ? ["ardent", "spansh"] : [S.settings.source]) : ["ardent"];
+  const link = { ardent: ["https://ardent-insight.com", "Ardent Insight"],
+                 spansh: ["https://spansh.co.uk", "Spansh"] };
+  const parts = used.filter((u) => link[u]).map((u) => h("a", { href: link[u][0], target: "_blank", rel: "noopener" }, link[u][1]));
+  if (used.includes("spansh")) parts.push(h("a", { href: "https://www.edsm.net", target: "_blank", rel: "noopener" }, "EDSM"));
+  $("credit-src").replaceChildren(...parts.flatMap((a, i) => (i ? [", ", a] : [a])));
 }
 
 function renderCalibration() {
@@ -743,7 +764,9 @@ function bind() {
 async function main() {
   bind();
   setupJournalButton();
+  $("source-label").hidden = !DESKTOP;
   renderControls();
+  renderCredit();
   render();
   await loadLive();
   resolveDest();

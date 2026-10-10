@@ -36,6 +36,7 @@
   <label>PAD <select id="f-pad"><option>L</option><option>M</option><option>S</option></select></label>
   <label>MAX AGE D <input id="f-max_age_days" type="number" min="0" step="1"></label>
   <label class="check"><input id="f-carriers" type="checkbox"> CARRIERS</label>
+  <label id="source-label" hidden>SOURCE <select id="f-source"><option value="ardent">Ardent</option><option value="spansh">Spansh</option><option value="both">Both</option></select></label>
   <label class="check" title="Include stations on a planet surface - settlements, planetary outposts and ports.&#10;&#10;Off, only orbital stations and carriers are ranked. A surface market is a different trip: a glide down, a pad on a rock, and a client that owns the expansion.&#10;&#10;Set from your journal the first time it sees a game, then it is yours. Hover a station to see which body it is on."><input id="f-odyssey" type="checkbox"> ODYSSEY</label>
   <button id="search" type="submit" class="primary">SEARCH</button>
 </form>
@@ -71,7 +72,7 @@
 <footer>
   <div id="status" class="status"></div>
   <div id="calibration" class="dim small"></div>
-  <div class="dim small">Market data from <a href="https://ardent-insight.com" target="_blank" rel="noopener">Ardent Insight</a>, goals from Frontier. Click a row to copy its system.</div>
+  <div class="dim small">Market data from <span id="credit-src"><a href="https://ardent-insight.com" target="_blank" rel="noopener">Ardent Insight</a></span>, goals from Frontier. Click a row to copy its system.</div>
 </footer>
 
 <div id="toast" class="toast" hidden></div>

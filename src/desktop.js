@@ -5,6 +5,15 @@ export const DESKTOP = typeof window !== "undefined" && !!window.__TAURI__;
 
 const tauriInvoke = (name, args) => window.__TAURI__.core.invoke(name, args);
 
+/** fetch through the Tauri http plugin (no CORS), parsed, with the same
+ *  `.status` on failure that Spansh's retry logic looks for. */
+export async function tauriFetchJson(url, init) {
+  const res = await window.__TAURI__.http.fetch(url, init);
+  if (!res.ok) throw Object.assign(new Error(`HTTP ${res.status} from ${new URL(url).host}`),
+    { status: res.status });
+  return res.json();
+}
+
 /** The old Python app's cgbuy.json as this page's store keys. Only what maps
  *  cleanly: search boxes, odyssey, the hand-set destination, EDDN on/off. */
 export function mapLegacy(legacy) {

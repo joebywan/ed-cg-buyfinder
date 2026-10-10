@@ -154,3 +154,4 @@ footer { padding-block: 10px 24px; border-top: 1px solid var(--line); margin-top
   pointer-events: none;
   font-size: 12px;
 }
+td.src { width: 3em; text-align: center; color: var(--dim); }
