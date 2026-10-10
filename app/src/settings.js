@@ -48,6 +48,8 @@ export function initSettings(ctx) {
   num("s-fresh", "cache_fresh_minutes");
   num("s-vtop", "verify_top");
   num("s-surface", "surface_penalty");
+  num("s-widen-max", "widen_max");
+  $("s-widen").onchange = () => { prefs.widen = $("s-widen").checked; save(); ctx.onPenalty(); };
   $("s-surface").addEventListener("change", ctx.onPenalty);
   $("s-verify").onchange = () => { prefs.verify_edsm = $("s-verify").checked; save(); };
   $("s-update").onchange = () => { prefs.update_check = $("s-update").checked; save(); };
@@ -103,6 +105,8 @@ export function initSettings(ctx) {
     $("s-fresh").value = prefs.cache_fresh_minutes;
     $("s-vtop").value = prefs.verify_top;
     $("s-surface").value = prefs.surface_penalty;
+    $("s-widen").checked = prefs.widen;
+    $("s-widen-max").value = prefs.widen_max;
     $("s-verify").checked = prefs.verify_edsm;
     $("s-sound").checked = prefs.alert_sound;
     $("s-update").checked = prefs.update_check;

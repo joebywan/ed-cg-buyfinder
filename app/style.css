@@ -225,3 +225,4 @@ td.src { width: 3em; text-align: center; color: var(--dim); }
 .bad { color: var(--bad); }
 main[data-view="settings"] #empty, main[data-view="settings"] #age-line,
 main[data-view="info"] #empty, main[data-view="info"] #age-line { display: none !important; }
+.beyond { color: var(--dim, #888); font-size: 0.85em; opacity: 0.8; }

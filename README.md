@@ -240,6 +240,12 @@ Inputs across the top: hold size, radius (120 ly), jump range empty and laden,
 minimum supply (200), landing pad, how old a source may be, the SOURCE, and
 toggles for fleet carriers and Odyssey. Enter or SEARCH runs it.
 
+If fewer than 5 stations are in range, the app keeps going: it searches again
+1.5x further out (180, 270, ... up to 500 ly) until the top 5 fill, telling you
+each step. Your radius setting is unchanged; stations beyond it carry a dim ⤢.
+Filter changes that leave fewer than 5 widen too. Switch it off, or change the
+max, in SETTINGS. Each step re-queries the bigger radius and replaces the rows.
+
 **ODYSSEY** decides whether stations on a planet surface are candidates at all
 — settlements, planetary outposts and ports. It is off by default because a
 surface market is a different trip from a starport: a glide down, a pad on a

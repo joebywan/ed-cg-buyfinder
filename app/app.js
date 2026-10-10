@@ -17,6 +17,7 @@ import { buildRows as spanshRows } from "./src/spansh.js";
 import { JournalTail, readJournalFiles, readStationFile } from "./src/tail.js";
 import { Watcher, keyOf, stallAlert } from "./src/watch.js";
 import { edsmGate } from "./src/edsm.js";
+import { WANT, widen } from "./src/widen.js";
 import { VERSION } from "./src/version.js";
 import { checkForUpdate } from "./src/update.js";
 import { MAX_AGE_DEFAULT, ageTag, ageText, buildMixed, compareValues, hiddenBy, mixedSortValue, padForShip,
@@ -386,8 +387,9 @@ function viewChanged() {
   const a = S.watch.rebase(plansNow(), why && (FILTER_NAME[why] ?? `PAD filter (largest pad is ${raw.pad || "unknown"})`), S.result.dropped);
   if (a || !["standing", "edsm"].includes(S.alert?.kind)) showAlert(a);
   render();
+  maybeWiden();
   const more = S.verifyMore;
-  if (!more) return;
+  if (!more || S.searching) return;
   const gen = S.gen, prog = new Progress();
   more(rankRow, (ev) => {
     if (gen !== S.gen) return;
@@ -401,10 +403,22 @@ function viewChanged() {
   });
 }
 
+/** Stations in the BEST MIXED LOADS list that pass the view filters. */
+const stationsIn = (rows, hold) => buildMixed(viewRows(rows, viewOpts()), hold).length;
+
+/** A filter change left fewer than 5 stations: widen from where the last search stopped. */
+function maybeWiden() {
+  const r = S.result;
+  if (!r || S.searching || !ui.prefs.widen || !sameDest(r.p.dest, S.dest)) return;
+  if ((r.eff ?? r.p.range) >= Math.max(ui.prefs.widen_max, r.p.range) || plansNow().length >= WANT) return;
+  search({ more: true });
+}
+
 // -- search ---------------------------------------------------------------------
 
-async function search() {
+async function search({ more = false } = {}) {
   if (S.searching) {
+    if (more) return;
     // A dock or a ship swap mid-search must not be lost: run again after.
     S.rerun = true;
     return;
@@ -422,7 +436,12 @@ async function search() {
   $("search").disabled = true;
   const gen = ++S.gen;
   const stale = () => gen !== S.gen;
-  const prog = new Progress();
+  let prog = new Progress();
+  let radiusEv = null, step = 0;
+  const user = p.range;
+  const cap = ui.prefs.widen ? Math.max(ui.prefs.widen_max, user) : user;
+  const cont = more && S.result ? { range: S.result.eff ?? S.result.p.range, n: plansNow().length, baseRows: S.result.rows.length } : null;
+  S.widening = !!cont;
   const t0 = Date.now();
   $("prog-panel").hidden = false;
   renderProgress(prog);
@@ -431,37 +450,60 @@ async function search() {
   let keepPanel = false;
   try {
     const source = DESKTOP && p.source in SOURCES ? p.source : "ardent";
-    const res = await searchSources(source, p, {
-      ardent: buildRows,
-      spansh: (q, o) => spanshRows(q, { ...o, fetchJson: tauriFetchJson }),
-    }, {
-      cal: S.journal?.cal ?? null,
+    const run = (range) => {
+      const my = ++step, q = { ...p, range };
+      const mine = () => !stale() && my === step;
+      const widened = range > user;
+      return searchSources(source, q, {
+        ardent: buildRows,
+        spansh: (qq, o) => spanshRows(qq, { ...o, fetchJson: tauriFetchJson }),
+      }, {
+        cal: S.journal?.cal ?? null,
+        cancelled: () => !mine(),
+        onProgress: (ev) => {
+          if (!mine()) return;
+          prog.update(widened && ev.detail ? { ...ev, detail: `widening to ${range} ly: ${ev.detail}` } : ev);
+          renderProgress(prog);
+        },
+        // EDSM confirmations land after the results are up: swap them in without
+        // moving the scroll position (open rows are keyed by station, so they stay).
+        onUpdate: (r) => {
+          if (!mine() || S.widening) return;
+          const main = document.querySelector("main");
+          const top = main.scrollTop;
+          S.result = { ...r, p, eff: range, note: S.result?.note, at: S.result?.at ?? Date.now() };
+          render();
+          main.scrollTop = top;
+          watchResult(gen);
+        },
+        onPartial: widened || cont ? undefined : (r, waiting) => {
+          S.result = { ...r, p, eff: range, at: Date.now() };
+          renderCredit();
+          render();
+          watchResult(gen);
+          setStatus(`Showing ${SOURCES[r.sources[0]]} - still waiting on ${waiting}…`);
+        },
+      });
+    };
+    const out = await widen({
+      user, cap, run, ...cont,
+      count: (r) => stationsIn(r.rows, p.hold),
+      rows: (r) => r.rows.length,
+      say: (t) => setStatus(t),
       cancelled: stale,
-      onProgress: (ev) => {
-        if (stale()) return;
-        prog.update(ev);
+      onStep: (ev) => {
+        S.widening = !ev.end;
+        if (!ev.end) prog = new Progress();
+        radiusEv = { provider: "radius", stage: ev.end ? "done" : "widen", done: ev.done, total: ev.total,
+                     detail: ev.end ? "" : `widening to ${ev.range} ly` };
+        prog.update(radiusEv);
         renderProgress(prog);
       },
-      // EDSM confirmations land after the results are up: swap them in without
-      // moving the scroll position (open rows are keyed by station, so they stay).
-      onUpdate: (r) => {
-        if (stale()) return;
-        const main = document.querySelector("main");
-        const top = main.scrollTop;
-        S.result = { ...r, p, at: S.result?.at ?? Date.now() };
-        render();
-        main.scrollTop = top;
-        watchResult(gen);
-      },
-      onPartial: (r, waiting) => {
-        S.result = { ...r, p, at: Date.now() };
-        renderCredit();
-        render();
-        watchResult(gen);
-        setStatus(`Showing ${SOURCES[r.sources[0]]} - still waiting on ${waiting}…`);
-      },
     });
-    S.result = { ...res, p, at: Date.now() };
+    S.widening = false;
+    const res = out.res;
+    if (!res || stale()) return;
+    S.result = { ...res, p, at: Date.now(), eff: out.range, note: ui.prefs.widen ? out.note : "" };
     S.verifyMore = res.verifyMore;
     renderCredit();
     S.expanded = null;
@@ -480,6 +522,7 @@ async function search() {
     log("search", `finished in ${((Date.now() - t0) / 1000).toFixed(1)}s: ${res.rows.length} sources`
       + `${res.errors.length ? `, ${res.errors.length} errors` : ""}`);
   } catch (err) {
+    S.widening = false;
     setStatus(`Search failed: ${err.message}`, true);
     log("search", `failed: ${err.message}`);
   } finally {
@@ -495,11 +538,12 @@ const WHY = {
   ardent: "Ardent",
   spansh: "Spansh: large pages, typically ~10s each",
   edsm: "EDSM: days fresher than Spansh, one request per station",
+  radius: "Radius: each step searches 1.5x further out, up to your max radius",
 };
 function renderProgress(prog) {
   $("progress-bar").style.width = `${100 * prog.overall()}%`;
   $("prog-rows").replaceChildren(...Object.entries(prog.p).map(([k, s]) => {
-    const label = { ardent: "Ardent", spansh: "Spansh", edsm: "EDSM" }[k];
+    const label = { ardent: "Ardent", spansh: "Spansh", edsm: "EDSM", radius: "Radius" }[k];
     const what = s.state === "done" ? `done in ${(s.ms / 1000).toFixed(1)}s`
       : s.state === "failed" ? `failed: ${s.detail}`
       : s.state === "skipped" ? "skipped" : `${s.detail}  (${s.done}/${s.total})`;
@@ -588,6 +632,9 @@ function stationTitle(x) {
                                          waiting: bodies.waiting(x.system) })}`;
 }
 
+const beyond = (x) => S.result && x.ly > S.result.p.range;
+const beyondTip = () => `beyond your ${S.result.p.range} ly radius - added because fewer than ${WANT} stations were in range`;
+
 const stationCell = (x, extra = [], commodity = null) =>
   h("td", { class: "station", title: stationTitle(x),
             "data-station": x.station, "data-stype": x.stype || "",
@@ -597,6 +644,7 @@ const stationCell = (x, extra = [], commodity = null) =>
             "data-carrier": x.carrier || null },
     ...extra, x.station, commodity ? h("span", { class: "sub" }, ` · ${commodity}`) : null, x.planetary ? h("span", { class: "surface", title: `Surface station${x.body ? ` on ${x.body}` : ""}` }, " ⏚") : null,
     x.carrier ? h("span", { class: "fc" }, " FC") : null,
+    beyond(x) ? h("span", { class: "beyond", title: beyondTip() }, " ⤢") : null,
     keyOf(x) === S.watch.target?.key ? h("span", { class: "copied-tag", title: "the station you last copied" }, " ◂ copied") : null);
 
 /** Rewrite the titles for one system in place, without a re-render.
@@ -664,6 +712,7 @@ function renderLegend(plans, key) {
     plans.some((x) => x.confirmed) && [mark("ok", "✓"), "EDSM-confirmed"],
     plans.some((x) => x.pending) && [mark("dim", "?"), "awaiting EDSM"],
     plans.some((x) => x.planetary) && [mark("surface", "⏚"), "surface station"],
+    plans.some(beyond) && [mark("beyond", "⤢"), "beyond your radius (added to find 5 stations)"],
   ].filter(Boolean);
   $("legend").replaceChildren(...items.flatMap(([m, t], i) => [i ? "   " : "", m, ` ${t}`]));
   $("legend").hidden = !items.length;
@@ -790,7 +839,7 @@ function render() {
     : r.hiddenStale ? `Hid ${fmt(r.hiddenStale)} of ${fmt(r.hiddenStale + shown)} sources older than ${maxAge} days.`
     : `Nothing hidden: every source is within ${maxAge} days.`;
   const errs = r.errors?.length ? `  ·  failed: ${r.errors.join("; ")}` : "";
-  setStatus(`${stations} stations, ${fmt(shown)} sources for ${r.p.dest.station}${stale ? " (for a previous destination — search again)" : ""}${errs}`, !!errs);
+  setStatus(`${r.note ? `${r.note}  ·  ` : ""}${stations} stations, ${fmt(shown)} sources for ${r.p.dest.station}${stale ? " (for a previous destination — search again)" : ""}${errs}`, !!errs);
 }
 
 /** "Markets come from" names the source(s) the last search actually used. */

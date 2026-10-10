@@ -19,6 +19,8 @@ export const PREF_DEFAULTS = {
   update_check: true,        // desktop only: say so in the header when a newer release exists
   alert_sound: true,         // chime when your copied target moves or drops, or EDSM stalls
   surface_penalty: 0,        // minutes added to a planetary station's round trip before cr/min
+  widen: true,               // search further out until 5 stations are in range
+  widen_max: 500,            // ly: the furthest widening goes
   calAfter: 0,               // epoch secs, set by RESET TIMINGS
 };
 
@@ -28,13 +30,15 @@ export const clampFont = (n) => Math.min(FONT_MAX, Math.max(FONT_MIN, Math.round
 export function loadPrefs(saved) {
   const p = { ...PREF_DEFAULTS, ...(saved && typeof saved === "object" ? saved : {}) };
   p.font_size = clampFont(Number(p.font_size) || FONT_DEFAULT);
-  for (const k of ["cache_fresh_minutes", "verify_top", "surface_penalty", "calAfter"]) {
+  for (const k of ["cache_fresh_minutes", "verify_top", "surface_penalty", "calAfter", "widen_max"]) {
     const n = Math.round(Number(p[k]));
     p[k] = Number.isFinite(n) && n >= 0 ? n : PREF_DEFAULTS[k];
   }
   p.verify_edsm = p.verify_edsm !== false;
   p.notifications = p.notifications === true;
   p.controls_open = p.controls_open === true;
+  p.widen = p.widen !== false;
+  if (p.widen_max < 10) p.widen_max = PREF_DEFAULTS.widen_max;
   p.alert_sound = p.alert_sound !== false;
   p.update_check = p.update_check !== false;
   for (const v of ["mixed", "single"]) {

@@ -94,6 +94,10 @@
       <label class="row">Stations to check <input id="s-vtop" type="number" min="0" step="1"></label>
       <p class="dim small">Spansh finds candidates but lags days; EDSM follows EDDN live. EDSM rate-limits, so only the best few are re-checked. Applies to Spansh results.</p>
     </div>
+    <h2>RADIUS</h2>
+    <label class="row check"><input id="s-widen" type="checkbox"> Widen the radius until 5 stations are found</label>
+    <label class="row">Max radius (ly) <input id="s-widen-max" type="number" min="10" step="10"></label>
+    <p class="dim small">If fewer than 5 stations are in range, the search repeats 1.5x further out (up to the max) and says so. Your radius setting is not changed.</p>
     <h2>RANKING</h2>
     <label class="row">Surface penalty (min) <input id="s-surface" type="number" min="0" step="1"></label>
     <p class="dim small">Extra minutes a planetary landing costs you - glide, risk, hassle - so surface markets only rank high when they're clearly worth it. Added to the round trip of surface stations before credits per minute is worked out; 0 treats them like any other. Changes re-rank straight away.</p>
