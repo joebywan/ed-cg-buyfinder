@@ -9,7 +9,7 @@ export const MIXED_COLS = [
   { id: "ly", label: "DIST\n(LY)", num: true, key: "ly", raw: true, title: "Distance in light years from the goal system.",
     st: (p) => p.ly },
   { id: "station", label: "STATION", key: "station", title: "Station name; expand it to see what to buy there.",
-    st: (p) => p.station, ch: (m) => m.commodity, w: 18, max: 30 },
+    st: (p) => p.station, ch: (m) => m.commodity, w: 18, max: 24 },
   { id: "ls", label: "ARRIVAL\n(LS)", num: true, key: "ls", title: "Supercruise distance from the arrival star to the station, in light seconds.",
     st: (p) => p.ls },
   { id: "updated", label: "DATA\nAGE", num: true, key: "updated", title: "How old the market report is; green is fresh, red is stale.",
