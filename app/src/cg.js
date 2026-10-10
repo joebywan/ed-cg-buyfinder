@@ -147,7 +147,7 @@ export function standing(history, live = null, now = Date.now()) {
   }
   const exp = live?.expiry || cur.expiry;
   return {
-    title: cur.title, station: cur.station, system: cur.system, tier: cur.tier, top_tier: cur.top_tier,
+    cgid: cur.cgid, title: cur.title, station: cur.station, system: cur.system, tier: cur.tier, top_tier: cur.top_tier,
     contribution: cur.contribution, band, next_band: next, contributors: cur.contributors,
     total: live?.qty || cur.total, target: live?.target_qty || null,
     brackets: br, rate_per_hour: ratePerHour(history), hold_margin, to_next, next_known, est_next,
@@ -161,8 +161,47 @@ export function standing(history, live = null, now = Date.now()) {
 const n0 = (n) => Math.round(n).toLocaleString("en-US");
 const tierNo = (t) => String(t ?? "").replace(/\D+/g, "");
 
-/** [one line, tooltip] in plain words. */
-export function standingText(st) {
+/** "N runs, ~X min" to move `tonnes`, from the hold and minutes per run (null: unknown). */
+export function effort(tonnes, hold, mins) {
+  const runs = tonnes > 0 ? Math.ceil(tonnes / Math.max(1, hold)) : 0;
+  if (!runs) return "you're there";
+  const word = `${runs} run${runs === 1 ? "" : "s"}`;
+  if (!mins) return word;
+  const total = runs * mins;
+  return `${word}, ~${total < 90 ? `${Math.round(total)} min` : `${Math.floor(Math.round(total) / 60)}h ${String(Math.round(total) % 60).padStart(2, "0")}m`}`;
+}
+
+/**
+ * Band moves between the last standing seen ({cgid, band, inTop}) and this one:
+ * {next, notes: [{title, text, up}]}. The first sight of a goal only seeds.
+ */
+export function standingChanges(last, st) {
+  const notes = [];
+  const next = last?.cgid === st.cgid ? { ...last } : { cgid: st.cgid };
+  const c = n0(st.contribution ?? 0);
+  if (st.band != null) {
+    const was = next.band;
+    if (was != null && st.band !== was) {
+      notes.push(st.band < was
+        ? { up: true, title: `Moved up to the top ${st.band}%`, text: `Was top ${was}%. ${c} t delivered.` }
+        : { up: false, title: `Dropped to the top ${st.band}%`, text: `Was top ${was}%. Others have overtaken you - ${c} t delivered so far.` });
+    }
+    next.band = st.band;
+  }
+  const n = st.top_rank_size;
+  if (n && st.in_top_rank != null) {
+    if (next.inTop != null && st.in_top_rank !== next.inTop) {
+      notes.push(st.in_top_rank
+        ? { up: true, title: `Into the top ${n}`, text: `${c} t delivered.` }
+        : { up: false, title: `Out of the top ${n}`, text: `Others have overtaken you - ${c} t delivered so far.` });
+    }
+    next.inTop = st.in_top_rank;
+  }
+  return { next, notes };
+}
+
+/** [one line, tooltip] in plain words. `run` = {hold, mins, basis} turns tonnes into runs and time. */
+export function standingText(st, run = {}) {
   if (!st) return ["", ""];
   const bits = [`Your contribution ${n0(st.contribution ?? 0)} t`];
   const tip = [];
@@ -183,13 +222,25 @@ export function standingText(st) {
     bits.push(st.in_top_rank ? `in the top ${st.top_rank_size}` : `not in the top ${st.top_rank_size}`);
     tip.push(`Top ${st.band}% is the best percentile band; above it the reward goes to the top ${st.top_rank_size} commanders by tonnage. `
       + "The journal says only whether you are in it, never what the cut-off costs.");
-  } else if (st.next_known) {
-    bits.push(`${n0(st.to_next)} t to top ${st.next_band}%`);
-  } else if (st.est_next) {
-    bits.push(`about ${n0(Math.max(0, st.est_next - st.contribution))} t to top ${st.next_band}%`);
-    tip.push("That threshold is extrapolated from the bands you have crossed; real ones drift up as others deliver.");
+  } else if (st.next_known || st.est_next) {
+    const approx = !st.next_known;
+    const target = st.next_known ? st.contribution + st.to_next : st.est_next;
+    const gap = Math.max(0, target - st.contribution);
+    // Percent of the way from where this band started to where the next does.
+    const entered = st.contribution - (st.hold_margin ?? 0);
+    const pct = Math.max(0, Math.min(100, 100 * (st.contribution - entered) / Math.max(1, target - entered)));
+    const eff = effort(gap, run.hold ?? 1, run.mins);
+    bits.push(`${approx ? "about " : ""}${n0(gap)} t to top ${st.next_band}% (${approx ? "~" : ""}${pct.toFixed(0)}% of the way, ${eff})`);
+    tip.push(`${approx ? "About " : ""}${n0(gap)} t still needed to reach top ${st.next_band}%: ${eff}.`
+      + (run.mins ? ` Based on ${Math.round(run.mins)} min a run${run.basis ? `: ${run.basis}` : ""}.` : ""));
+    if (approx) tip.push("That threshold is extrapolated from the bands you have crossed; real ones drift up as others deliver.");
   } else if (st.next_band != null) bits.push(`top ${st.next_band}% threshold not yet seen`);
-  if (st.hold_margin != null) tip.push(`You are ${n0(st.hold_margin)} t clear of where you entered top ${st.band}%.`);
+  if (st.hold_margin != null) {
+    // A cushion in runs: a bad day of others delivering can erase it.
+    const runs = Math.floor(st.hold_margin / Math.max(1, run.hold ?? 1));
+    bits.push(`${n0(st.hold_margin)} t clear${runs ? ` (${runs} run${runs === 1 ? "" : "s"})` : ""}`);
+    tip.push(`You are ${n0(st.hold_margin)} t clear of where you entered top ${st.band}%.`);
+  }
   if (st.rate_per_hour && (st.to_next || st.est_next)) {
     const gap = st.to_next ?? Math.max(0, st.est_next - st.contribution);
     tip.push(`About ${(gap / st.rate_per_hour).toFixed(1)} h of flying at your recent ${n0(st.rate_per_hour)} t/h.`);

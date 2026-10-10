@@ -3,13 +3,13 @@
 import { buildRows, defaultFetchJson } from "./src/ardent.js";
 import { BodyLookup } from "./src/bodies.js";
 import { folderTooltip } from "./src/browser.js";
-import { FRONTIER_URL, historyFromLines, parseLive, standing, standingText, suggestDestination } from "./src/cg.js";
+import { FRONTIER_URL, historyFromLines, parseLive, standing, standingChanges, standingText, suggestDestination } from "./src/cg.js";
 import { DESKTOP, DesktopDir, desktopStore, journalDir, tauriFetchJson } from "./src/desktop.js";
 import { initSettings } from "./src/settings.js";
 import { VIEWS, colWidths, moveCol, placeCol, toggleCol } from "./src/columns.js";
 import { wireHeaders } from "./src/headers.js";
 import { Sender } from "./src/eddn.js";
-import { JournalState } from "./src/journal.js";
+import { JournalState, runMinutes } from "./src/journal.js";
 import { clearLog, formatLog, getLog, formatLine, log, onLog } from "./src/log.js";
 import { SOURCES, searchSources } from "./src/merge.js";
 import { Progress } from "./src/progress.js";
@@ -170,11 +170,12 @@ function readControls() {
 // -- destination --------------------------------------------------------------
 
 async function loadLive() {
-  try { S.live = parseLive(await defaultFetchJson(FRONTIER_URL)); } catch { S.live = []; }
-  const sel = $("d-live");
+  try { S.live = parseLive(await defaultFetchJson(FRONTIER_URL)); } catch { /* keep the last feed */ }
+  const sel = $("d-live"), keep = sel.value;
   sel.replaceChildren(h("option", { value: "" }, S.live.some((g) => g.is_trade) ? "— pick one —" : "none running"));
   S.live.filter((g) => g.is_trade).forEach((g, i) =>
     sel.append(h("option", { value: String(i) }, `${g.title} — ${g.station}, ${g.system}`)));
+  sel.value = keep;
 }
 
 /** Work out where we're selling. Returns true when it changed. */
@@ -196,6 +197,32 @@ function resolveDest() {
   return changed;
 }
 
+/** Minutes per run and where that came from: what you have flown beats the route model. */
+function runFigures() {
+  const hold = S.result?.p.hold ?? S.journal?.cargoCapacity ?? 1;
+  const [real, n] = S.journal && S.dest ? runMinutes(S.journal.dockLog, S.dest.station) : [null, 0];
+  if (real) return { hold, mins: real, basis: `the median of your last ${n}, flying time plus a two-minute turnaround at each end` };
+  const top = S.result && buildMixed(S.result.rows, S.result.p.hold)[0];
+  return { hold, mins: top?.trip_minutes ?? null, basis: "the route plus a two-minute turnaround at each end" };
+}
+
+/** Where you stand in the goal you joined; updates on journal events and Frontier feed refreshes. */
+function renderStanding() {
+  const line = $("dest-line");
+  line.querySelector(".standing")?.remove();
+  const hist = historyFromLines(S.cgLines);
+  const cur = hist.at(-1);
+  const st = standing(hist, S.live.find((g) => cur && String(g.id) === String(cur.cgid)));
+  const [text, tip] = standingText(st, runFigures());
+  if (text) line.append(h("div", { class: "sub standing", title: tip }, text));
+  if (!st) return;
+  const { next, notes } = standingChanges(S.lastStanding, st);
+  S.lastStanding = next;
+  if (!notes.length) return;
+  const text2 = notes.map((n) => `${n.title}. ${n.text}`).join(" ");
+  showAlert({ kind: "standing", title: notes[0].title, text: text2, keys: new Set(), copy: null, ok: "OK", beep: true });
+}
+
 function renderDest() {
   const d = S.dest;
   const line = $("dest-line");
@@ -212,11 +239,7 @@ function renderDest() {
     line.title = prices ? `What the destination pays:\n${prices}` : "";
     document.title = `cgbuy — ${d.station}`;
   }
-  // Where you stand in the goal you joined, whenever a journal has been read.
-  const hist = historyFromLines(S.cgLines);
-  const cur = hist.at(-1);
-  const [text, tip] = standingText(standing(hist, S.live.find((g) => cur && String(g.id) === String(cur.cgid))));
-  if (text) line.append(h("div", { class: "sub", title: tip }, text));
+  renderStanding();
   const notJoined = d?.source === "live CG (not joined)";
   $("notice").hidden = !notJoined || S.noticeDismissed;
   if (notJoined) {
@@ -273,15 +296,18 @@ function showAlert(a) {
   if (a.beep) {
     log("alert", a.detail ?? a.text);
     chime();
-    if (!document.hasFocus()) ui.notify(a.kind === "target" ? "Your target moved" : "Top 5 changed", a.text);
+    if (!document.hasFocus()) ui.notify(a.title ?? (a.kind === "target" ? "Your target moved" : "Top 5 changed"), a.text);
   }
 }
 
 /** Results for search `gen` just changed: baseline if it is the first, else compare. */
 function watchResult(gen) {
   const plans = plansNow();
-  if (S.watchGen !== gen) { S.watchGen = gen; showAlert(S.watch.begin(plans, S.result?.dropped)); }
-  else showAlert(S.watch.check(plans, S.result?.dropped));
+  const keep = S.alert?.kind === "standing";       // a band change stays until acknowledged
+  let a;
+  if (S.watchGen !== gen) { S.watchGen = gen; a = S.watch.begin(plans, S.result?.dropped); }
+  else a = S.watch.check(plans, S.result?.dropped);
+  if (a || !keep) showAlert(a);
 }
 
 /** The user copied this station: remember it, and where it ranked. */
@@ -1042,6 +1068,7 @@ async function main() {
   await loadLive();
   resolveDest();
   render();
+  setInterval(async () => { await loadLive(); resolveDest(); }, 5 * 60_000);   // keeps the standing line current
   try {
     await restoreJournal();
   } catch (err) {

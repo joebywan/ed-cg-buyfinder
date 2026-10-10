@@ -2,7 +2,7 @@
 // TestShipIdentity, TestLadenJumpRange.
 import test from "node:test";
 import assert from "node:assert/strict";
-import { Calibration, JournalState, estScMinutes, ladenJumpRange, parseTs }
+import { Calibration, JournalState, estScMinutes, ladenJumpRange, parseTs, runMinutes }
   from "../src/journal.js";
 
 const near = (a, b, eps = 1e-9) =>
@@ -253,4 +253,17 @@ test("laden jump range scales by mass ratio and is floored by what was flown", (
   near(ladenJumpRange(...P, 21.555), ladenJumpRange(...P));
   assert.equal(ladenJumpRange(null, null, null, 832, 21.5), 21.5);
   assert.equal(ladenJumpRange(null, null, null, null), null);
+});
+
+test("runMinutes: median flying time per round trip plus turnaround, repairs and stale logs ignored", () => {
+  const run = (t0, out) => [["undock", "Home", t0], ["dock", "Far", t0 + out * 30], ["undock", "Far", t0 + out * 30 + 100],
+    ["dock", "Home", t0 + out * 60 + 100]];
+  const log = (...outs) => outs.flatMap((o, i) => [["dock", "Home", i * 1e5], ...run(i * 1e5 + 1, o)]).concat([["dock", "Home", 1e6]]);
+  assert.deepEqual(runMinutes(log(10, 12), "Home"), [null, 0]);          // too few runs
+  const [m, n] = runMinutes(log(10, 12, 14), "Home");
+  assert.equal(n, 3);
+  near(m, 12 + 4);
+  // undock/dock at the same pad is a repair, not a run
+  const rep = [["dock", "Home", 0], ["undock", "Home", 10], ["dock", "Home", 700], ["undock", "Home", 710], ["dock", "Home", 900]];
+  assert.deepEqual(runMinutes(rep, "Home", 1), [null, 0]);
 });

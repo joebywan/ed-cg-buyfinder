@@ -2,7 +2,7 @@
 // suggest_destination.
 import test from "node:test";
 import assert from "node:assert/strict";
-import { bandBrackets, hoursLeft, historyFromLines, joinedGoal, parseLive, ratePerHour, standing, standingText,
+import { bandBrackets, effort, standingChanges, hoursLeft, historyFromLines, joinedGoal, parseLive, ratePerHour, standing, standingText,
   suggestDestination, timesAverage } from "../src/cg.js";
 
 const FEED = {
@@ -156,4 +156,34 @@ test("the plain-words line", () => {
   const [top] = standingText(standing([smp(100, 25)]));
   assert.match(top, /not in the top 10/);
   assert.deepEqual(standingText(null), ["", ""]);
+});
+
+test("effort: runs from the hold, time from minutes per run", () => {
+  assert.equal(effort(0, 100, 15), "you're there");
+  assert.equal(effort(250, 100, null), "3 runs");
+  assert.equal(effort(100, 100, 14), "1 run, ~14 min");
+  assert.equal(effort(1000, 100, 15), "10 runs, ~150 min".replace("150 min", "2h 30m"));
+});
+
+test("the line carries effort, percent to the next band and the cushion in runs", () => {
+  const st = standing(hist([100, 100], [500, 75], [9800, 75], [10000, 50], [12480, 50]));
+  const [text, tip] = standingText(st, { hold: 500, mins: 20, basis: "the route" });
+  assert.match(text, /about [\d,]+ t to top 25% \(~\d+% of the way, 629 runs, ~209h 40m\)/);
+  assert.match(text, /2,480 t clear \(4 runs\)/);
+  assert.match(tip, /Based on 20 min a run: the route/);
+});
+
+test("band changes notify both ways, the first sight only seeds", () => {
+  const st = (band, extra = {}) => ({ cgid: "1", band, contribution: 5000, ...extra });
+  let r = standingChanges(undefined, st(75));
+  assert.deepEqual(r.notes, []);
+  r = standingChanges(r.next, st(50));
+  assert.equal(r.notes[0].title, "Moved up to the top 50%");
+  r = standingChanges(r.next, st(75));
+  assert.match(r.notes[0].title, /Dropped to the top 75%/);
+  assert.equal(r.notes[0].up, false);
+  assert.deepEqual(standingChanges(r.next, st(75)).notes, []);
+  assert.deepEqual(standingChanges(r.next, { ...st(25), cgid: "2" }).notes, []);   // a different goal
+  const t = standingChanges({ cgid: "1", band: 25, inTop: true }, st(25, { top_rank_size: 10, in_top_rank: false }));
+  assert.equal(t.notes[0].title, "Out of the top 10");
 });

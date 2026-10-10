@@ -168,6 +168,7 @@ export class JournalState {
     this.arrivedAt = null;
     this.undockedAt = null;
     this.dockAt = null;
+    this.dockLog = [];            // ["dock"|"undock", station, epoch secs], newest last
     this.onEvent = null;
     this.onDocked = null;
     this.onCalibration = null;
@@ -192,6 +193,11 @@ export class JournalState {
     if (shipId != null) this.shipId = shipId;
     if (localised) this.shipName = localised;
     return changed;
+  }
+
+  #logDock(kind, station, t) {
+    this.dockLog.push([kind, station, t]);
+    if (this.dockLog.length > 200) this.dockLog.shift();
   }
 
   /** Handle one journal line. Returns true when a timing sample was learned. */
@@ -234,12 +240,14 @@ export class JournalState {
         if (dt >= 20 && dt <= 3600) { cal.add(cal.approach_samples, [e.DistFromStarLS, dt]); learned = true; }
       }
       this.arrivedAt = null;
+      if (t) this.#logDock("dock", this.station, t);
       if (live && this.onDocked) this.onDocked(this.station, this.system);
     } else if (ev === "Undocked") {
       if (this.dockAt && t && t > this.dockAt) {
         const dt = t - this.dockAt;
         if (dt >= 20 && dt <= 1800) { cal.add(cal.dock_secs, dt); learned = true; }
       }
+      if (t) this.#logDock("undock", this.station, t);
       this.dockAt = null;
       this.docked = false;
       this.undockedAt = t;
@@ -272,4 +280,30 @@ export class JournalState {
     if (learned && this.onCalibration) this.onCalibration(cal);
     return learned;
   }
+}
+
+/**
+ * Median run as flown: pad to pad at `station`, counting only time spent
+ * flying plus `turnaround` min at each end (parked time is not piloting).
+ * A run needs a stop elsewhere; over 4 h of flight is a session break.
+ * Returns [minutes, runs counted] or [null, 0].
+ */
+export function runMinutes(log, station, minSamples = 3, window = 6, turnaround = 2) {
+  const marks = log.flatMap(([k, s], i) => (k === "dock" && s === station ? [i] : []));
+  const runs = [];
+  for (let m = 1; m < marks.length; m++) {
+    let leg = null, out = 0, elsewhere = false;
+    for (const [kind, stn, t] of log.slice(marks[m - 1], marks[m] + 1)) {
+      if (kind === "undock") leg = t;
+      else if (kind === "dock") {
+        if (stn !== station) elsewhere = true;
+        if (leg !== null && t > leg) out += (t - leg) / 60;
+        leg = null;
+      }
+    }
+    if (elsewhere && out > 0 && out <= 240) runs.push(out + 2 * turnaround);
+  }
+  if (runs.length < minSamples) return [null, 0];
+  const recent = runs.slice(-window);
+  return [median(recent), recent.length];
 }
