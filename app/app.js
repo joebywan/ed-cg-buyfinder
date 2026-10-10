@@ -280,8 +280,8 @@ function showAlert(a) {
 /** Results for search `gen` just changed: baseline if it is the first, else compare. */
 function watchResult(gen) {
   const plans = plansNow();
-  if (S.watchGen !== gen) { S.watchGen = gen; showAlert(S.watch.begin(plans)); }
-  else showAlert(S.watch.check(plans));
+  if (S.watchGen !== gen) { S.watchGen = gen; showAlert(S.watch.begin(plans, S.result?.dropped)); }
+  else showAlert(S.watch.check(plans, S.result?.dropped));
 }
 
 /** The user copied this station: remember it, and where it ranked. */
@@ -515,6 +515,11 @@ function wantBody(ev) {
   const row = td.closest("tr[data-system]");
   if (row) bodies.want(row.dataset.system);
 }
+/** The pointer left a row: a lookup that has not gone out yet is not wanted. */
+function dropBody(ev) {
+  const row = ev.target.closest?.("tr[data-system]");
+  if (row && !row.contains(ev.relatedTarget)) bodies.unwant(row.dataset.system);
+}
 const SRC_NAME = { A: "Ardent", S: "Spansh" };
 const srcCell = (x) => h("td", { class: "src", title: x.other
   ? `${SRC_NAME[x.other.src === "A" ? "S" : "A"]} read ${ageText(x.updated)}; ${SRC_NAME[x.other.src]} read ${ageText(x.other.updated)}` : null }, x.src || "");
@@ -544,7 +549,7 @@ function renderMixed(r) {
   const key = (x) => `${x.station}\0${x.system}`;
   const best = plans[0] && key(plans[0]);
   if (!S.expanded) S.expanded = new Set(plans.slice(0, EXPANDED_BY_DEFAULT).map(key));
-  const body = h("tbody", { onclick: copySystem, onmouseover: wantBody });
+  const body = h("tbody", { onclick: copySystem, onmouseover: wantBody, onmouseout: dropBody });
   const cols = colsFor("mixed");
   for (const plan of sorted(plans, S.sort.mixed)) {
     const k = key(plan);
@@ -570,7 +575,7 @@ function singleCell(c, x) {
 }
 
 function renderSingle(r) {
-  const body = h("tbody", { onclick: copySystem, onmouseover: wantBody });
+  const body = h("tbody", { onclick: copySystem, onmouseover: wantBody, onmouseout: dropBody });
   const cols = colsFor("single");
   for (const x of sorted(r.rows, S.sort.single)) {
     body.append(h("tr", { class: "row", "data-system": x.system }, ...cols.map((c) => singleCell(c, x))));

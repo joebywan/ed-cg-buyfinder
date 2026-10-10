@@ -71,6 +71,16 @@ test("a dropped target says so; a new search compares it too; clearing silences 
   assert.equal(w.begin(list("C", "A", "B")), null);
 });
 
+test("EDSM drop reasons reach the alert text", () => {
+  const { w } = rig();
+  const before = list("A", "B", "C");
+  w.begin(before);
+  const key = (n) => `${n}\0${n}-sys`;
+  assert.match(w.check(list("A", "C"), { [key("B")]: "sold out" }).text, /B #2 dropped off the list \(EDSM: sold out\)/);
+  w.setTarget(plan("A"), before);
+  assert.match(w.check(list("C", "B"), { [key("A")]: "no longer profitable" }).text, /gone from the results \(EDSM: no longer profitable\)/);
+});
+
 test("a station pushed past the rows on screen reads as off the list, and newcomers are named", () => {
   const w = new Watcher({ now: () => 0, shown: 6 });
   w.begin(list("A", "B", "C", "D", "E", "F", "G"));

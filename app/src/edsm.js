@@ -36,15 +36,16 @@ export class EdsmGate {
   coolingUntil() { return this.until > this.now() ? this.until : 0; }
 
   /**
-   * fetchJson(url) through the queue, one at a time, 800ms apart. `low`
-   * requests (hover lookups) go after everything else waiting. While paused
+   * fetchJson(url) through the queue, one at a time, 800ms apart. `hover`
+   * requests (a tooltip someone is waiting on) jump ahead of queued search
+   * requests, never ahead of the one in flight. While paused
    * the request waits, calling onWait(msLeft) about once a second.
    * `cancelled()` true drops it with an error carrying `.cancelled`.
    */
-  request(fetchJson, url, { low = false, onWait = null, cancelled = null } = {}) {
+  request(fetchJson, url, { hover = false, onWait = null, cancelled = null } = {}) {
     return new Promise((resolve, reject) => {
-      const item = { fetchJson, url, low, onWait, cancelled, resolve, reject };
-      const at = low ? this.queue.length : this.queue.findIndex((q) => q.low);
+      const item = { fetchJson, url, hover, onWait, cancelled, resolve, reject };
+      const at = hover ? this.queue.findIndex((q) => !q.hover) : -1;   // after earlier hovers
       this.queue.splice(at < 0 ? this.queue.length : at, 0, item);
       this.#pump();
     });

@@ -243,6 +243,13 @@ test("Spansh rows come back unconfirmed, then EDSM confirms them in the backgrou
   assert.equal(updates.at(-1).rows[0].supply, 18);
 });
 
+test("a station EDSM empties is reported as dropped, with the reason", async () => {
+  const edsm = { ...DEST, Src: { Near: { time: "2026-09-15 02:00:00", goods: { Palladium: [1100, 0] } } } };
+  const res = await run(fake({ spansh: [src("Near")], edsm }), P({ verify_edsm: true }));
+  assert.equal(res.rows.length, 0);
+  assert.deepEqual(Object.values(res.dropped), ["sold out"]);
+});
+
 test("a 429 pauses the queue and verification resumes with nothing skipped", async () => {
   const edsm = { ...DEST, Src: { Near: { time: "2026-09-15 02:00:00", goods: { Palladium: [1100, 18] } } } };
   const w = fake({ spansh: [src("Near")], edsm });

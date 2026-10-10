@@ -80,18 +80,31 @@ test("a cancelled request is dropped, other errors pass through", async () => {
   assert.equal(r.sent.length, 1);
 });
 
-test("hover lookups queue behind search requests and share the pause", async () => {
+test("hover lookups jump queued search requests, not the one in flight", async () => {
   const r = rig();
   const bodies = new BodyLookup({ fetchJson: r.fetchJson, gate: r.gate });
   const order = [];
   const x = r.gate.request(r.fetchJson, "blocker");
-  const a = r.gate.request(r.fetchJson, "hover", { low: true }).then(() => order.push("low"));
-  bodies.want("Ega");
   const b = r.gate.request(r.fetchJson, "search").then(() => order.push("search"));
+  const a = r.gate.request(r.fetchJson, "hover", { hover: true }).then(() => order.push("hover"));
+  bodies.want("Ega");
   await x;
   await Promise.all([a, b]);
-  assert.equal(order[0], "search");               // jumped the low-priority queue
+  assert.deepEqual(order, ["hover", "search"]);
   await new Promise((s) => setTimeout(s, 0));
   assert.ok(r.sent.some(([, u]) => u.includes("systemName=Ega")));
   assert.equal(bodies.known("Ega", "x"), "");
+});
+
+test("a hover lookup dropped before it is sent is skipped and can be asked again", async () => {
+  const r = rig();
+  const bodies = new BodyLookup({ fetchJson: r.fetchJson, gate: r.gate });
+  const x = r.gate.request(r.fetchJson, "blocker");
+  bodies.want("Ega");
+  bodies.unwant("Ega");
+  await x;
+  await new Promise((s) => setTimeout(s, 20));
+  assert.ok(!r.sent.some(([, u]) => u.includes("Ega")));
+  assert.equal(bodies.known("Ega", "x"), undefined);
+  assert.ok(!bodies.waiting("Ega"));
 });

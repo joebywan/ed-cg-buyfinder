@@ -62,10 +62,10 @@ export class Watcher {
 
   /** First render of a search: what is on screen now is the baseline. A
    *  copied target is still compared, since the new results may disagree. */
-  begin(plans) {
+  begin(plans, dropped = {}) {
     this.#see(plans);
     this.sig = "";
-    const a = this.#target(plans);
+    const a = this.#target(plans, dropped);
     return a && this.#beep(a);
   }
 
@@ -86,7 +86,7 @@ export class Watcher {
     this.sig = "";
   }
 
-  #target(plans) {
+  #target(plans, dropped) {
     const t = this.target;
     if (!t) return null;
     const rank = this.#rank(plans, t.key);
@@ -97,12 +97,12 @@ export class Watcher {
     const r = now ? why(this.snap.get(t.key), snapshot(now)) : "";
     const text = rank
       ? `Your target ${t.station} moved ${nth(t.rank)} -> ${nth(rank)}${tag(r)} - ${lead}. New destination?`
-      : `Your target ${t.station} is gone from the results (sold out or no profit) - ${lead}. New destination?`;
+      : `Your target ${t.station} is gone from the results (${dropped[t.key] ? `EDSM: ${dropped[t.key]}` : "sold out or no profit"}) - ${lead}. New destination?`;
     return { kind: "target", text, keys: new Set([t.key, ...(best ? [keyOf(best)] : [])]),
              copy: best ? { label: "COPY NEW #1", plan: best } : null, ok: "KEEP" };
   }
 
-  #top5(plans) {
+  #top5(plans, dropped) {
     const now = plans.slice(0, TOP_N);
     if (now.length === this.ack.length && now.every((x, i) => keyOf(x) === this.ack[i].key)) return null;
     const bits = [];
@@ -110,7 +110,7 @@ export class Watcher {
     this.ack.forEach((a, i) => {
       const r = this.#rank(plans, a.key);
       if (r === i + 1) return;
-      bits.push(r ? `${a.station} ${nth(i + 1)} -> ${nth(r)}${reason(a.key)}` : `${a.station} ${nth(i + 1)} dropped off the list`);
+      bits.push(r ? `${a.station} ${nth(i + 1)} -> ${nth(r)}${reason(a.key)}` : `${a.station} ${nth(i + 1)} dropped off the list${tag(dropped[a.key] && `EDSM: ${dropped[a.key]}`)}`);
     });
     const was = new Set(this.ack.map((a) => a.key));
     now.forEach((x, i) => { if (i && !was.has(keyOf(x))) bits.push(`${x.station} up to ${nth(i + 1)}${reason(keyOf(x))}`); });
@@ -124,8 +124,8 @@ export class Watcher {
 
   /** A later update to the same search. Returns the alert to show, or null.
    *  `beep` is true once per change and at most once per `quiet` ms. */
-  check(plans) {
-    const a = this.#target(plans) ?? this.#top5(plans);
+  check(plans, dropped = {}) {
+    const a = this.#target(plans, dropped) ?? this.#top5(plans, dropped);
     if (!a) { this.sig = ""; return null; }
     return this.#beep(a);
   }

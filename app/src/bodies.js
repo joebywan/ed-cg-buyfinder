@@ -35,6 +35,7 @@ export class BodyLookup {
     this.onResolved = onResolved;
     this.cache = new Map();      // system -> Map(station -> body)
     this.pending = new Set();    // systems asked for and not yet answered
+    this.dropped = new Set();    // pending systems nobody is pointing at any more
     this.queue = [];
     this.running = false;
   }
@@ -53,10 +54,16 @@ export class BodyLookup {
 
   /** Ask for a system, at most once. Safe to call on every pointer move. */
   want(system) {
+    this.dropped.delete(system);
     if (!system || this.cache.has(system) || this.pending.has(system)) return;
     this.pending.add(system);
     this.queue.push(system);
     this.#drain();
+  }
+
+  /** The pointer left that system's row: skip the lookup if it has not gone out yet. */
+  unwant(system) {
+    if (this.pending.has(system)) this.dropped.add(system);
   }
 
   async #drain() {
@@ -67,20 +74,23 @@ export class BodyLookup {
         const system = this.queue.shift();
         let found = new Map();
         try {
-          // Shares EDSM's pacing and pauses with searches, behind their requests.
+          // Shares EDSM's pacing and pauses with searches, ahead of their queue.
           const d = await this.gate.request(this.fetchJson,
-            `${EDSM_STATIONS}?systemName=${encodeURIComponent(system)}`, { low: true });
+            `${EDSM_STATIONS}?systemName=${encodeURIComponent(system)}`,
+            { hover: true, cancelled: () => this.dropped.has(system) });
           for (const st of d?.stations ?? []) {
             const body = st?.body?.name;
             if (body) found.set(st.name, body);
           }
-        } catch {
+        } catch (e) {
+          if (e.cancelled) { this.pending.delete(system); this.dropped.delete(system); continue; }
           // Cached as "asked, nothing there" rather than retried. A tooltip
           // is not worth hammering a throttled API over.
           found = new Map();
         }
         this.cache.set(system, found);
         this.pending.delete(system);
+        this.dropped.delete(system);
         this.onResolved?.(system);
       }
     } finally {

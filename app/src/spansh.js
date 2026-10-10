@@ -354,7 +354,12 @@ export async function buildRows(p, { fetchJson = defaultFetchJson, cal = null, n
     const live = rows.filter((r) => r.profit_per_t > 0 && r.supply > 0)
       .sort((a, b) => b.cr_per_min - a.cr_per_min);
     const aged = ageFilter(live, p.max_age_days ?? MAX_AGE_DEFAULT, now);
-    return { rows: aged.rows, cg, cgLs, hiddenStale: aged.hidden, allStale: aged.allStale, errors };
+    // Why EDSM-checked stations left the list, for the watcher's wording.
+    const dropped = {};
+    for (const r of rows) {
+      if (r.edsm && !(r.profit_per_t > 0 && r.supply > 0)) dropped[`${r.station}\0${r.system}`] = r.supply > 0 ? "no longer profitable" : "sold out";
+    }
+    return { rows: aged.rows, cg, cgLs, hiddenStale: aged.hidden, allStale: aged.allStale, errors, dropped };
   };
   const first = snapshot();
   if (!verify) return first;
