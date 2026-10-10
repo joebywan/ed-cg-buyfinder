@@ -94,14 +94,16 @@ export async function searchSources(source, p, builders, opts) {
     }, () => {}));
   }
   const out = await Promise.allSettled(runs);
-  let verifying, verifyMore;
+  let verifying, verifyMore, startVerify;
   out.forEach((o, i) => {
     if (o.status === "fulfilled") {
       verifying = o.value.verifying ?? verifying;
       verifyMore = o.value.verifyMore ?? verifyMore;
+      startVerify = o.value.startVerify ?? startVerify;
       res[names[i]] ??= o.value;      // a newer update may already be in
     } else fails.push(`${SOURCES[names[i]]}: ${o.reason.message}`);
   });
   if (!Object.keys(res).length) throw new Error(fails.join("; "));
-  return { ...assemble(res, names, p, fails), verifying, verifyMore };
+  // `held` is what the next widening step builds on (Spansh's rows so far).
+  return { ...assemble(res, names, p, fails), verifying, verifyMore, startVerify, held: res.spansh?.held };
 }
