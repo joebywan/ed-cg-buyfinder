@@ -38,7 +38,8 @@ export function historyFromLines(lines) {
         station: g.MarketName ?? null, system: g.SystemName ?? null, expiry: g.Expiry ?? null,
         contribution: g.PlayerContribution ?? null, band: g.PlayerPercentileBand ?? null,
         total: g.CurrentTotal ?? null, contributors: g.NumContributors ?? null,
-        tier: g.TierReached ?? null,
+        tier: g.TierReached ?? null, top_tier: g.TopTier?.Name ?? null, bonus: g.Bonus ?? null,
+        in_top_rank: g.PlayerInTopRank ?? null, top_rank_size: g.TopRankSize ?? null,
       });
     }
   }
@@ -74,4 +75,126 @@ export function suggestDestination(history, live = []) {
               title: g.title, expiry: g.expiry, source: "live CG (not joined)" }, trade.slice(1)];
   }
   return [null, []];
+}
+
+// -- standing -------------------------------------------------------------------
+// Where you are in the goal. Frontier publishes no tonnage thresholds, so band
+// boundaries are BRACKETED from the commander's own crossings (a measured
+// range, not a prediction). Above the best band the reward is a top-N rank:
+// the journal says only whether you are in it, so it is a yes or a no.
+
+// Percentile bands, best first. PlayerPercentileBand tops out at 25; the rung
+// above is the top-N rank in TopRankSize.
+export const BANDS = [25, 50, 75, 100];
+
+/** {band: [last_seen_below, first_seen_at]} from observed crossings; anything never crossed is absent. */
+export function bandBrackets(history) {
+  const samples = (history || []).filter((h) => h.contribution != null && h.band != null)
+    .map((h) => [h.contribution, h.band]).sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+  const out = {};
+  let prev = null;
+  for (const [c, b] of samples) {
+    if (prev && b < prev[1]) out[b] = [prev[0], c];      // smaller band = better
+    prev = [c, b];
+  }
+  return out;
+}
+
+/** Your tonnage over the average contributor's (both exact, from one event), or null. */
+export function timesAverage(contribution, total, contributors) {
+  if (!contribution || !total || !contributors) return null;
+  const mean = total / contributors;
+  return mean > 0 ? contribution / mean : null;
+}
+
+/** Tonnes per hour over the most recent samples. */
+export function ratePerHour(history, window = 6) {
+  const pts = (history || []).filter((h) => h.contribution).slice(-window);
+  if (pts.length < 2) return null;
+  const t0 = Date.parse(pts[0].ts), t1 = Date.parse(pts.at(-1).ts);
+  const c0 = pts[0].contribution, c1 = pts.at(-1).contribution;
+  if (!(t1 > t0) || c1 <= c0) return null;
+  return (c1 - c0) / ((t1 - t0) / 3.6e6);
+}
+
+/** Hours until an expiry stamp (Frontier's is naive UTC), or null. */
+export function hoursLeft(expiry, now = Date.now()) {
+  const m = typeof expiry === "string" && /^(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2}:\d{2})Z?$/.exec(expiry);
+  const t = m && Date.parse(`${m[1]}T${m[2]}Z`);
+  return t ? (t - now) / 3.6e6 : null;
+}
+
+/** Everything the display needs about where you stand, or null with no history. */
+export function standing(history, live = null, now = Date.now()) {
+  const cur = history?.at(-1);
+  if (!cur) return null;
+  const br = bandBrackets(history);
+  const band = cur.band;
+  const next = band ? [...BANDS].reverse().find((b) => b < band) ?? null : null;
+  const hold_margin = band in br ? cur.contribution - br[band][1] : null;
+  const next_known = next != null && next in br;
+  const to_next = next_known ? Math.max(0, br[next][1] - cur.contribution) : null;
+  // Extrapolate an unobserved next threshold from the gaps between crossed ones;
+  // labelled as an estimate, since thresholds also drift up as others deliver.
+  let est_next = null;
+  if (next != null && !next_known) {
+    const known = Object.keys(br).map(Number).sort((a, b) => a - b);
+    if (known.length >= 2) {
+      const mid = (b) => (br[b][0] + br[b][1]) / 2;
+      const ratio = mid(known[0]) / mid(known[1]);
+      if (ratio > 1) est_next = Math.trunc(mid(known[0]) * ratio);
+    }
+  }
+  const exp = live?.expiry || cur.expiry;
+  return {
+    title: cur.title, station: cur.station, system: cur.system, tier: cur.tier, top_tier: cur.top_tier,
+    contribution: cur.contribution, band, next_band: next, contributors: cur.contributors,
+    total: live?.qty || cur.total, target: live?.target_qty || null,
+    brackets: br, rate_per_hour: ratePerHour(history), hold_margin, to_next, next_known, est_next,
+    top_rank_size: cur.top_rank_size, in_top_rank: cur.in_top_rank,
+    mean_contribution: cur.total && cur.contributors ? cur.total / cur.contributors : null,
+    times_average: timesAverage(cur.contribution, cur.total, cur.contributors),
+    hours_left: exp ? hoursLeft(exp, now) : null, as_of: cur.ts,
+  };
+}
+
+const n0 = (n) => Math.round(n).toLocaleString("en-US");
+const tierNo = (t) => String(t ?? "").replace(/\D+/g, "");
+
+/** [one line, tooltip] in plain words. */
+export function standingText(st) {
+  if (!st) return ["", ""];
+  const bits = [`Your contribution ${n0(st.contribution ?? 0)} t`];
+  const tip = [];
+  if (st.band != null) {
+    const entered = st.hold_margin != null ? st.contribution - st.hold_margin : null;
+    bits.push(`top ${st.band}% band${entered != null ? ` (reached when you passed ~${n0(entered)} t)` : ""}`);
+  }
+  if (st.tier != null) {
+    const top = tierNo(st.top_tier);
+    bits.push(`tier ${tierNo(st.tier) || st.tier}${top ? `/${top}` : ""} globally`);
+  }
+  if (st.times_average) {
+    bits.push(`${st.times_average.toFixed(1)}x the average contributor`);
+    tip.push(`The average contributor is on ${n0(st.mean_contribution)} t and you are on ${n0(st.contribution)} t, `
+      + `${st.times_average.toFixed(1)} times that. A ratio, not a placing: the field is lopsided, so the average sits well above the middle.`);
+  }
+  if (st.next_band == null && st.top_rank_size) {
+    bits.push(st.in_top_rank ? `in the top ${st.top_rank_size}` : `not in the top ${st.top_rank_size}`);
+    tip.push(`Top ${st.band}% is the best percentile band; above it the reward goes to the top ${st.top_rank_size} commanders by tonnage. `
+      + "The journal says only whether you are in it, never what the cut-off costs.");
+  } else if (st.next_known) {
+    bits.push(`${n0(st.to_next)} t to top ${st.next_band}%`);
+  } else if (st.est_next) {
+    bits.push(`about ${n0(Math.max(0, st.est_next - st.contribution))} t to top ${st.next_band}%`);
+    tip.push("That threshold is extrapolated from the bands you have crossed; real ones drift up as others deliver.");
+  } else if (st.next_band != null) bits.push(`top ${st.next_band}% threshold not yet seen`);
+  if (st.hold_margin != null) tip.push(`You are ${n0(st.hold_margin)} t clear of where you entered top ${st.band}%.`);
+  if (st.rate_per_hour && (st.to_next || st.est_next)) {
+    const gap = st.to_next ?? Math.max(0, st.est_next - st.contribution);
+    tip.push(`About ${(gap / st.rate_per_hour).toFixed(1)} h of flying at your recent ${n0(st.rate_per_hour)} t/h.`);
+  }
+  if (st.hours_left > 0) bits.push(`${Math.floor(st.hours_left / 24)}d ${Math.floor(st.hours_left % 24)}h left`);
+  tip.push("Frontier publishes no band thresholds: the ones quoted are measured from your own crossings and only ever floors.");
+  return [bits.join(" · "), tip.join("\n\n")];
 }

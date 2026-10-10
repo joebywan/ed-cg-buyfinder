@@ -3,7 +3,7 @@
 import { buildRows, defaultFetchJson } from "./src/ardent.js";
 import { BodyLookup } from "./src/bodies.js";
 import { folderTooltip } from "./src/browser.js";
-import { FRONTIER_URL, historyFromLines, parseLive, suggestDestination } from "./src/cg.js";
+import { FRONTIER_URL, historyFromLines, parseLive, standing, standingText, suggestDestination } from "./src/cg.js";
 import { DESKTOP, DesktopDir, desktopStore, journalDir, tauriFetchJson } from "./src/desktop.js";
 import { initSettings } from "./src/settings.js";
 import { MIXED_COLS, DEFAULT_MIXED, moveCol, toggleCol } from "./src/columns.js";
@@ -210,6 +210,11 @@ function renderDest() {
     line.title = prices ? `What the destination pays:\n${prices}` : "";
     document.title = `cgbuy — ${d.station}`;
   }
+  // Where you stand in the goal you joined, whenever a journal has been read.
+  const hist = historyFromLines(S.cgLines);
+  const cur = hist.at(-1);
+  const [text, tip] = standingText(standing(hist, S.live.find((g) => cur && String(g.id) === String(cur.cgid))));
+  if (text) line.append(h("div", { class: "sub", title: tip }, text));
   const notJoined = d?.source === "live CG (not joined)";
   $("notice").hidden = !notJoined || S.noticeDismissed;
   if (notJoined) {
