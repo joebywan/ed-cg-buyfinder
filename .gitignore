@@ -1,3 +1,6 @@
 .DS_Store
 node_modules/
 _site/
+src-tauri/target/
+src-tauri/dist/
+src-tauri/gen/
