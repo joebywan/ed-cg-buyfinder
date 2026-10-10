@@ -11,7 +11,7 @@
   "app": {
     "withGlobalTauri": true,
     "windows": [
-      { "title": "cgbuy", "width": 1280, "height": 800 }
+      { "title": "cgbuy", "width": 1440, "height": 900 }
     ],
     "security": {
       "csp": "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; connect-src 'self' ipc: http://ipc.localhost https://spansh.co.uk https://www.edsm.net https://api.ardent-insight.com https://ardent-insight.com https://api.orerve.net https://eddn.edcd.io"

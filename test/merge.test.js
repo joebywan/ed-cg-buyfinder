@@ -26,3 +26,18 @@ test("one source failing keeps the other and reports why", async () => {
   assert.deepEqual(r.errors, ["Spansh: bad page", "Ardent: down"]);
   await assert.rejects(searchSources("both", {}, { ...builders, spansh: builders.ardent }, {}), /Ardent: down; Spansh: down/);
 });
+
+test("the first source to land is shown on its own while the other is out", async () => {
+  let release;
+  const slow = new Promise((r) => { release = r; });
+  const partials = [];
+  const run = searchSources("both", { max_age_days: 7 }, {
+    ardent: async () => res([row({ station: "A" })]),
+    spansh: () => slow,
+  }, { onPartial: (r, waiting) => partials.push([r.rows.map((x) => x.src), r.sources, waiting]) });
+  await new Promise((r) => setTimeout(r, 0));
+  assert.deepEqual(partials, [[["A"], ["ardent"], "Spansh"]]);
+  release(res([row({ station: "A" })]));
+  assert.equal((await run).rows[0].src, "AS");
+  assert.equal(partials.length, 1);
+});

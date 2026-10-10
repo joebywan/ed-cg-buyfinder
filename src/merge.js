@@ -45,7 +45,20 @@ export function mergeResults(ardent, spansh, p, now = new Date()) {
 export async function searchSources(source, p, builders, opts) {
   const names = source === "both" ? ["ardent", "spansh"] : [source];
   const tagged = names.length > 1;
-  const out = await Promise.allSettled(names.map((n) => builders[n](p, opts)));
+  const runs = names.map((n) => builders[n](p, opts));
+  // Spansh can take a minute or more; whichever source lands first is shown
+  // on its own while the other is still out, then replaced by the merge.
+  if (tagged && opts?.onPartial) {
+    let first = true;
+    runs.forEach((run, i) => run.then((r) => {
+      if (!first) return;
+      first = false;
+      const src = names[i] === "ardent" ? "A" : "S";
+      opts.onPartial({ ...r, rows: r.rows.map((x) => ({ ...x, src })), sources: [names[i]] },
+                     SOURCES[names[1 - i]]);
+    }, () => {}));
+  }
+  const out = await Promise.allSettled(runs);
   const res = {}, fails = [];
   out.forEach((o, i) => {
     const label = SOURCES[names[i]];

@@ -29,7 +29,7 @@ const POLL_MS = 2000;
 const JOURNAL_FILES = 12;
 // Chrome and Edge can keep a folder open and tail it. Firefox can only be
 // handed a snapshot of one through <input webkitdirectory>.
-const CAN_TAIL = "showDirectoryPicker" in window;
+const CAN_TAIL = DESKTOP || "showDirectoryPicker" in window;   // the app reads the folder live
 const CAN_SNAPSHOT = "webkitdirectory" in document.createElement("input");
 
 const store = desktopStore ?? {
@@ -189,7 +189,7 @@ function renderDest() {
     line.replaceChildren(
       `${d.station}, ${d.system}`,
       h("span", { class: "sub" }, `  ${d.title ? `· ${d.title} ` : ""}· ${d.source}`),
-      S.result ? h("span", { class: "sub" }, `  · data ${ageShort(S.result.at)} old`) : null);
+      S.result ? h("span", { class: "sub" }, `  · data ${ageShort(S.result.at)} old`) : "");
     line.title = prices ? `What the destination pays:\n${prices}` : "";
     document.title = `cgbuy — ${d.station}`;
   }
@@ -235,6 +235,12 @@ async function search() {
       onProgress: (done, total, name) => {
         $("progress-bar").style.width = `${(100 * done) / total}%`;
         setStatus(`Searching… ${done}/${total} ${name}`);
+      },
+      onPartial: (r, waiting) => {
+        S.result = { ...r, p, at: Date.now() };
+        renderCredit();
+        render();
+        setStatus(`Showing ${SOURCES[r.sources[0]]} - still waiting on ${waiting}…`);
       },
     });
     S.result = { ...res, p, at: Date.now() };
@@ -573,6 +579,7 @@ function adoptJournal({ state, lines }) {
   };
   renderControls();
   renderJournal();
+  renderCalibration();
   renderEddn();
   // A snapshot has no live events, so the files it holds get their only
   // chance here. The Sender refuses anything too old to be worth sending,
