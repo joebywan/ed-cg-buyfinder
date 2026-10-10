@@ -259,11 +259,12 @@ function showAlert(a) {
   $("alert").hidden = !a;
   if (!a) return;
   $("alert-text").textContent = a.text;
+  $("alert-text").title = a.detail ?? a.text;
   $("alert-copy").hidden = !a.copy;
   $("alert-copy").textContent = a.copy?.label ?? "";
   $("alert-ack").textContent = a.ok;
   if (a.beep) {
-    log("alert", a.text);
+    log("alert", a.detail ?? a.text);
     chime();
     if (!document.hasFocus()) ui.notify(a.kind === "target" ? "Your target moved" : "Top 5 changed", a.text);
   }

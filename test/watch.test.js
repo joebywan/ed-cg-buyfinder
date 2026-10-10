@@ -78,3 +78,31 @@ test("a station pushed past the rows on screen reads as off the list, and newcom
   assert.match(a.text, /C #3 dropped off the list/);
   assert.match(a.text, /G up to #3/);
 });
+
+const rich = (station, cr, supply, buy, extra = {}) => ({ station, system: `${station}-sys`, cr_per_min: cr, tonnes: 100, updated: "2026-10-01",
+  mix: [{ commodity: "Gold", supply, buy }], ...extra });
+
+test("alerts say why a station moved: supply, price, EDSM, fresher reading", () => {
+  const { w } = rig();
+  const before = [rich("A", 5e6, 64317, 5808), rich("B", 4e6, 9000, 5000), rich("C", 3e6, 9000, 5000),
+                  rich("D", 2e6, 9000, 5000), rich("E", 1e6, 9000, 5000), rich("F", 9e5, 9000, 5000)];
+  w.begin(before);
+  const a = w.check([rich("B", 4e6, 9000, 5000), rich("C", 3e6, 9000, 5000), rich("D", 2e6, 9000, 5000),
+    rich("A", 1.5e6, 2188, 5808, { edsm: true }), rich("E", 1e6, 9000, 5000), rich("F", 9e5, 9000, 5000)]);
+  assert.match(a.text, /A #1 -> #4 \(EDSM: supply 64,317 -> 2,188\)/);
+  const p = w.check([rich("B", 4e6, 9000, 6240), rich("C", 3e6, 9000, 5000), rich("D", 2e6, 9000, 5000),
+    rich("A", 1.5e6, 64317, 5808), rich("E", 1e6, 9000, 5000), rich("F", 9e5, 9000, 5000)]);
+  assert.match(p.text, /B #2 -> #1 \(buy price 5,000 -> 6,240\)/);
+  const n = w.check([rich("A", 5e6, 64317, 5808), rich("B", 4e6, 9000, 5000), rich("C", 3e6, 9000, 5000),
+    rich("D", 2e6, 9000, 5000), rich("F", 9e5, 9000, 5000, { updated: "2026-10-05", src: "S" })]);
+  assert.match(n.text, /F up to #5 \(fresher Spansh reading\)/);
+});
+
+test("a long alert is cut for the banner but kept whole in detail", () => {
+  const { w } = rig();
+  const names = "ABCDEFGH".split("").map((c) => `Station ${c} with a long name`);
+  w.begin(list(...names));
+  const a = w.check(list(...[...names].reverse()));
+  assert.ok(a.text.length <= 170);
+  assert.ok(a.detail.length > a.text.length);
+});

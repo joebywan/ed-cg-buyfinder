@@ -135,6 +135,7 @@ export function buildMixed(rows, hold) {
       // Properties of the station, so any of its rows can supply them.
       planetary: top.planetary, stype: top.stype, body: top.body,
       updated: top.updated, tonnes: hold - remaining, short: remaining,
+      src: top.src, edsm: items.some((i) => i.edsm),   // which reading it is, for the watcher's "why"
       supply: mix.reduce((n, m) => n + m.supply, 0),   // stock of the commodities in the load, summed
       trip_minutes: top.trip_minutes, total, cr_per_min: Math.round(total / top.trip_minutes), mix,
     });
