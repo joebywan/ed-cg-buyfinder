@@ -274,15 +274,14 @@ jobs:
         run: |
           npm test
           node stamp-version.mjs --check
-      # NSIS only: the default "all" would also build an .msi, which needs a
-      # WiX download and is a second installer nobody asked for.
+      # No installer: the NSIS setup.exe drew 3/75 heuristic VirusTotal hits
+      # (APEX, Cylance, DeepInstinct - common for unsigned installers) while
+      # the same exe zipped scored 0/75, so only the portable zip ships.
       - name: Build
         shell: bash
         working-directory: app
-        run: cargo tauri build --bundles nsis
-      # Two downloads from one build. The setup.exe is Tauri's NSIS installer
-      # (it fetches WebView2 itself if missing). The portable zip is the bare
-      # release exe plus a README-FIRST.txt; WebView2 ships with Windows 10/11
+        run: cargo tauri build --no-bundle
+      # The portable zip is the bare release exe plus a README-FIRST.txt; WebView2 ships with Windows 10/11
       # so a lone exe is enough on any current machine, and the README says
       # what to do on one that lacks it. Unlike the Python build there are no
       # DLLs beside the exe, so the zip really is one file plus the note.
@@ -291,7 +290,6 @@ jobs:
         run: |
           B=app/src-tauri/target/release
           PFX="cgbuy-desktop-v${{ needs.tag.outputs.version }}"
-          cp "$B"/bundle/nsis/*-setup.exe "$PFX-windows-setup.exe"
           DIR="$PFX-windows-portable"
           mkdir "$DIR"
           cp "$B/cgbuy.exe" "$DIR/cgbuy.exe"
@@ -304,7 +302,6 @@ jobs:
         with:
           name: cgbuy-desktop-windows
           path: |
-            cgbuy-desktop-*-windows-setup.exe
             cgbuy-desktop-*-windows-portable.zip
 
   publish:
@@ -329,7 +326,6 @@ jobs:
 
             The new Tauri desktop build, published alongside for now:
 
-            * `cgbuy-desktop-v${{ needs.tag.outputs.version }}-windows-setup.exe` — Windows installer
             * `cgbuy-desktop-v${{ needs.tag.outputs.version }}-windows-portable.zip` — Windows, a single `cgbuy.exe`
               with a `README-FIRST.txt`; needs the WebView2 runtime, which
               Windows 10/11 already has
@@ -347,7 +343,6 @@ jobs:
             cgbuy-v${{ needs.tag.outputs.version }}-windows.zip
             cgbuy-v${{ needs.tag.outputs.version }}-linux
             cgbuy-v${{ needs.tag.outputs.version }}-linux.tar.gz
-            cgbuy-desktop-v${{ needs.tag.outputs.version }}-windows-setup.exe
             cgbuy-desktop-v${{ needs.tag.outputs.version }}-windows-portable.zip
             cgbuy-desktop-v${{ needs.tag.outputs.version }}-linux.AppImage
             cgbuy-desktop-v${{ needs.tag.outputs.version }}-linux.deb
@@ -380,7 +375,7 @@ jobs:
           # build's two Windows files are scanned as well; vt_scan.py leaves
           # the badge on the Python zip (see the comment there) until the
           # desktop build becomes the main download.
-          SUMMARY=$(python3 .github/scripts/vt_scan.py --badge=.github/badges/virustotal.json "cgbuy-v$V-windows.zip" "cgbuy-v$V-linux" "cgbuy-desktop-v$V-windows-setup.exe" "cgbuy-desktop-v$V-windows-portable.zip")
+          SUMMARY=$(python3 .github/scripts/vt_scan.py --badge=.github/badges/virustotal.json "cgbuy-v$V-windows.zip" "cgbuy-v$V-linux" "cgbuy-desktop-v$V-windows-portable.zip")
           # Empty means no VT_API_KEY configured; nothing to append.
           [ -n "$SUMMARY" ] || exit 0
           gh release view "$TAG" --json body --jq .body > body.md

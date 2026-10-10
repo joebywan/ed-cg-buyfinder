@@ -48,9 +48,8 @@ wrapper, and a plain download of that one needs `chmod +x` first, because a
 GitHub release asset cannot record the execute bit.
 
 **New desktop build (preview)** — a rewrite as a Tauri app is published
-alongside, with `desktop` in the file name (`cgbuy-desktop-v*-windows-setup.exe`,
-`-windows-portable.zip`, `-linux.AppImage`, `-linux.deb`). It is not yet the
-recommended download; the builds above remain the main ones. Windows needs the
+alongside, with `desktop` in the file name (`cgbuy-desktop-v*-windows-portable.zip`,
+`-linux.AppImage`, `-linux.deb`). It is not yet the recommended download; the builds above remain the main ones. Windows needs the
 WebView2 runtime, which Windows 10/11 already include. See
 [DEVELOPMENT.md](DEVELOPMENT.md#the-desktop-app-app).
 

@@ -190,15 +190,14 @@ jobs:
         run: |
           npm test
           node stamp-version.mjs --check
-      # NSIS only: the default "all" would also build an .msi, which needs a
-      # WiX download and is a second installer nobody asked for.
+      # No installer: the NSIS setup.exe drew 3/75 heuristic VirusTotal hits
+      # (APEX, Cylance, DeepInstinct - common for unsigned installers) while
+      # the same exe zipped scored 0/75, so only the portable zip ships.
       - name: Build
         shell: bash
         working-directory: app
-        run: cargo tauri build --bundles nsis
-      # Two downloads from one build. The setup.exe is Tauri's NSIS installer
-      # (it fetches WebView2 itself if missing). The portable zip is the bare
-      # release exe plus a README-FIRST.txt; WebView2 ships with Windows 10/11
+        run: cargo tauri build --no-bundle
+      # The portable zip is the bare release exe plus a README-FIRST.txt; WebView2 ships with Windows 10/11
       # so a lone exe is enough on any current machine, and the README says
       # what to do on one that lacks it. Unlike the Python build there are no
       # DLLs beside the exe, so the zip really is one file plus the note.
@@ -207,7 +206,6 @@ jobs:
         run: |
           B=app/src-tauri/target/release
           PFX="cgbuy-desktop-$(echo "${{ github.sha }}" | cut -c1-7)"
-          cp "$B"/bundle/nsis/*-setup.exe "$PFX-windows-setup.exe"
           DIR="$PFX-windows-portable"
           mkdir "$DIR"
           cp "$B/cgbuy.exe" "$DIR/cgbuy.exe"
@@ -220,7 +218,6 @@ jobs:
         with:
           name: cgbuy-desktop-windows
           path: |
-            cgbuy-desktop-*-windows-setup.exe
             cgbuy-desktop-*-windows-portable.zip
 
   # Preview of the VirusTotal verdict for the desktop Windows files, so a
@@ -247,7 +244,7 @@ jobs:
         if: env.VT_API_KEY != ''
         # tee: the table goes to the run summary AND the job log, so it can be
         # read with `gh run view --log` as well as on the run page.
-        run: python .github/scripts/vt_scan.py --when="for this pull request build" cgbuy-desktop-*-windows-setup.exe cgbuy-desktop-*-windows-portable.zip | tee -a "$GITHUB_STEP_SUMMARY"
+        run: python .github/scripts/vt_scan.py --when="for this pull request build" cgbuy-desktop-*-windows-portable.zip | tee -a "$GITHUB_STEP_SUMMARY"
       - name: No VT_API_KEY here
         if: env.VT_API_KEY == ''
         run: echo "VT_API_KEY is not available (fork PR?), skipping the VirusTotal preview." >> "$GITHUB_STEP_SUMMARY"
@@ -294,7 +291,6 @@ jobs:
             The new Tauri desktop build (work in progress; the Python one above
             is still the main download):
 
-            * `cgbuy-desktop-${{ env.SHORT }}-windows-setup.exe` — Windows installer
             * `cgbuy-desktop-${{ env.SHORT }}-windows-portable.zip` — Windows, a single `cgbuy.exe`, no install
             * `cgbuy-desktop-${{ env.SHORT }}-linux.AppImage` — Linux x86-64 (needs `chmod +x`)
             * `cgbuy-desktop-${{ env.SHORT }}-linux.deb` — Debian/Ubuntu package
@@ -309,7 +305,6 @@ jobs:
             cgbuy-${{ env.SHORT }}-windows.zip
             cgbuy-${{ env.SHORT }}-linux
             cgbuy-${{ env.SHORT }}-linux.tar.gz
-            cgbuy-desktop-${{ env.SHORT }}-windows-setup.exe
             cgbuy-desktop-${{ env.SHORT }}-windows-portable.zip
             cgbuy-desktop-${{ env.SHORT }}-linux.AppImage
             cgbuy-desktop-${{ env.SHORT }}-linux.deb

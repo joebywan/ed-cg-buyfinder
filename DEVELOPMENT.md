@@ -222,7 +222,6 @@ Built by `cargo tauri build` (not `tauri-action`, which would want to own the
 release and the file names that this repo's workflows already own). Asset names
 carry `desktop` so they never collide with the Python ones:
 
-- `cgbuy-desktop-v<ver>-windows-setup.exe` — NSIS installer
 - `cgbuy-desktop-v<ver>-windows-portable.zip` — a folder with the single
   `cgbuy.exe` and `README-FIRST.txt` (`packaging/README-FIRST-desktop.txt`).
   Needs WebView2, which Windows 10/11 ship with

@@ -12,8 +12,6 @@ RUNNING IT
 
 That is the entire install. There is no installer, nothing is
 written to the registry, and nothing is set to run at startup.
-(The -setup.exe download is the installer version of the same
-program, if you would rather have a Start menu entry.)
 
 Unlike the older cgbuy-v*-windows.zip, this one really is a single
 file: cgbuy.exe can be moved or copied on its own.
@@ -26,7 +24,6 @@ Windows 11 and with up-to-date Windows 10, so you almost certainly
 have it. If cgbuy.exe will not open, install the "Evergreen
 Bootstrapper" from
 https://developer.microsoft.com/microsoft-edge/webview2/
-(the -setup.exe installer fetches it for you automatically).
 
 
 THE FIRST TIME YOU RUN IT
