@@ -4,6 +4,7 @@ import { buildRows, defaultFetchJson } from "./src/ardent.js";
 import { BodyLookup } from "./src/bodies.js";
 import { folderTooltip } from "./src/browser.js";
 import { FRONTIER_URL, historyFromLines, parseLive, suggestDestination } from "./src/cg.js";
+import { DESKTOP, DesktopDir, desktopStore, journalDir } from "./src/desktop.js";
 import { Sender } from "./src/eddn.js";
 import { JournalState } from "./src/journal.js";
 import { JournalTail, readJournalFiles, readStationFile } from "./src/tail.js";
@@ -29,7 +30,7 @@ const JOURNAL_FILES = 12;
 const CAN_TAIL = "showDirectoryPicker" in window;
 const CAN_SNAPSHOT = "webkitdirectory" in document.createElement("input");
 
-const store = {
+const store = desktopStore ?? {
   get(key, fallback) {
     try { const v = localStorage.getItem(key); return v ? JSON.parse(v) : fallback; } catch { return fallback; }
   },
@@ -638,6 +639,11 @@ async function pickJournal() {
 /** Decided before anything loads, so a quick click never finds a dead button. */
 function setupJournalButton() {
   const btn = $("journal-btn");
+  if (DESKTOP) {                      // the app finds the folder; nothing to pick
+    btn.hidden = true;
+    renderJournal();
+    return;
+  }
   btn.title = "Usually C:\\Users\\<you>\\Saved Games\\Frontier Developments\\Elite Dangerous";
   if (CAN_TAIL) {
     btn.onclick = pickJournal;
@@ -658,6 +664,11 @@ function setupJournalButton() {
 }
 
 async function restoreJournal() {
+  if (DESKTOP) {
+    if (journalDir) await connectJournal(new DesktopDir());
+    else $("journal-status").textContent = "Couldn't find the Elite Dangerous journal folder: enter your ship's figures by hand.";
+    return;
+  }
   if (!CAN_TAIL) return;
   const btn = $("journal-btn");
   let dir;
