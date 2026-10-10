@@ -234,9 +234,26 @@ scanned on VirusTotal with the Python ones, but the README badge still follows
 the Python zip: `vt_scan.py` skips `desktop` names when writing it. Remove that
 condition when the desktop build becomes the main download.
 
-### Moving the website (GitHub Pages)
+### Website (GitHub Pages)
 
-Nothing here publishes a site on purpose. To move it: add a `pages.yml` that
-copies `app/index.html app.js style.css icon.png src` into `_site` and deploys
-it (the web repo's one did exactly that), set the Pages source to GitHub
-Actions in this repo's settings, and decide what happens to the old site's URL.
+The site is `app/index.html app.js style.css icon.png src` served as-is by
+`.github/workflows/pages.yml`. It deploys from this repo on a push to main (or
+a manual run); on a PR it runs the tests and builds the artifact but does not
+deploy. The old home was the separate `ed-cg-buyfinder-web` repo.
+
+One-time step, by the owner: Settings -> Pages -> Source = "GitHub Actions".
+Until that is set the first deploy fails. The expected URL is
+`https://knowhowit.com.au/ed-cg-buyfinder/` (the custom domain was inferred
+from the old repo's README; confirm it serves the new path).
+
+Decommissioning the old site, in order:
+
+1. Merge this PR and enable Pages as above.
+2. Check the new URL loads and works.
+3. In the old repo, push the `moved-notice` branch (banner plus a 10 s redirect
+   to the new URL) and merge it to its main so its Pages workflow redeploys.
+4. Later, once nobody is using the old URL, archive the old repo.
+
+`virustotal-preview` in `build.yml` scans the desktop Windows files on PRs and
+manual runs and writes the verdicts to the job summary (never the badge); it is
+skipped when `VT_API_KEY` is unavailable, e.g. on fork PRs.

@@ -223,6 +223,33 @@ jobs:
             cgbuy-desktop-*-windows-setup.exe
             cgbuy-desktop-*-windows-portable.zip
 
+  # Preview of the VirusTotal verdict for the desktop Windows files, so a
+  # change that makes engines unhappy shows up on the PR instead of only after
+  # a release. release.yml still does the real scan; this one never writes the
+  # README badge (no --badge), only the job summary.
+  #
+  # Skipped, not failed, when there is no key: secrets are not passed to PRs
+  # from forks. It also spends quota (free key: 500 requests/day), hence PRs and
+  # manual runs only, not every push to main.
+  virustotal-preview:
+    needs: build-desktop-windows
+    if: github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    env:
+      VT_API_KEY: ${{ secrets.VT_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+        if: env.VT_API_KEY != ''
+      - uses: actions/download-artifact@v4
+        if: env.VT_API_KEY != ''
+        with: { name: cgbuy-desktop-windows }
+      - name: Scan and write the result to the job summary
+        if: env.VT_API_KEY != ''
+        run: python .github/scripts/vt_scan.py cgbuy-desktop-*-windows-setup.exe cgbuy-desktop-*-windows-portable.zip >> "$GITHUB_STEP_SUMMARY"
+      - name: No VT_API_KEY here
+        if: env.VT_API_KEY == ''
+        run: echo "VT_API_KEY is not available (fork PR?), skipping the VirusTotal preview." >> "$GITHUB_STEP_SUMMARY"
+
   snapshot:
     # Every push to main refreshes a single rolling pre-release, so there is
     # always a current build to download without minting version numbers.
