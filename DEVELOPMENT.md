@@ -3,193 +3,29 @@
 Everything here is for working *on* cgbuy. If you only want to use it, the
 [README](README.md) is the whole story.
 
+cgbuy is a web page (`app/`) that runs two ways: as the website, served as-is
+by GitHub Pages, and inside a native window built with Tauri v2, which is the
+downloadable desktop app. (It used to be a Python/tkinter program; that was
+retired and its code removed once the desktop app replaced it.)
+
 ## Layout
 
-Stdlib only, no dependencies, no build step to run it. `cgbuy` is the entry
-point and has no `.py` extension, which is why the build scripts copy it to
-`build_src.py` before packaging and why the tests load it through
-`importlib.machinery.SourceFileLoader`.
-
 | | |
 |---|---|
-| `cgbuy` | the app: UI, search orchestration, ranking, config and cache |
-| `cg.py` | community goal discovery and parsing |
-| `eddn.py` | EDDN upload: `commodity/3`, `outfitting/2`, `shipyard/2` |
-| `journal.py` | journal tailing and trip-time calibration |
-| `notify.py` | per-OS notifications |
-| `update.py` | asks GitHub for the latest release tag; compares, never fetches |
-| `verify.py` | market re-checks against EDSM |
-| `version.py` | the version number and the User-Agent, for everything else |
-| `test_cgbuy.py` | the whole suite, one file |
-
-`version.py` is the only place the version lives. `cgbuy`, `cg.py`,
-`verify.py` and `eddn.py` all import it, so one line governs `--version`, all
-three User-Agent strings and the `softwareVersion` EDDN records. They used to
-carry a literal each, and three had drifted to `2.0` while the app shipped
-`1.5` — harmless while nothing read it, which stopped being true when the
-update check started comparing against it. A test asserts nothing declares its
-own again.
-
-## Running it
-
-```
-python cgbuy                  # searches immediately
-python cgbuy --no-autosearch  # open without hitting the APIs
-python cgbuy --version
-```
-
-tkinter is `python3-tk` on Debian/Ubuntu/Mint; the python.org installer already
-includes it. It needs a desktop session and exits with a clear message without
-one.
-
-## Tests
-
-```
-python test_cgbuy.py
-```
-
-tkinter needs a display even to construct widgets, so CI runs it under
-`xvfb-run -a`. Do the same on a headless box.
-
-## Building
-
-```
-./build.sh     # Linux
-build.bat      # Windows
-```
-
-Each creates a `.venv` and installs its packager — the only step needing
-network. Neither packager can cross-compile, so each binary must be built on the
-OS it targets, which is why CI runs a job per platform rather than a matrix.
-
-The two platforms are packaged differently on purpose:
-
-| | Packager | Output |
-|---|---|---|
-| Linux | PyInstaller `--onefile` | `cgbuy-linux`, one file |
-| Windows | Nuitka `--standalone` | `cgbuy-windows/`, a folder |
-
-## Why Windows ships as a folder
-
-This is the one piece of build trivia worth knowing before changing anything,
-because it is easy to "tidy up" and silently undo.
-
-Up to v1.4 Windows shipped a PyInstaller `--onefile` build and a handful of
-engines flagged it — 14/75 at v1.3, 7/75 at v1.4, **Microsoft Defender among
-them**, which matters more than the count because Defender can quarantine a
-download rather than merely warn.
-
-The cause was packaging, not code. `--onefile` appends a compressed archive to a
-small stub; at runtime the stub unpacks CPython, Tcl/Tk and the extension
-modules into a temp directory and executes from there. A high-entropy blob glued
-to an unsigned executable that then self-extracts and runs is, to a heuristic,
-indistinguishable from a dropper.
-
-Four builds from one commit, scanned minutes apart, isolate the variable. The
-exe column is an on-disk scan; the zip column is what people download:
-
-| Build | Layout | Zip | Exe |
-|---|---|---|---|
-| PyInstaller one-file *(shipped up to v1.4)* | one file | — | 7/75 |
-| Nuitka one-file | one file | — | 15/75 |
-| PyInstaller `--onedir` | exe + `_internal/` | 1/74 | 5/75 |
-| **Nuitka standalone** *(shipped from v1.5)* | flat folder | **0/73** | **0/75** |
-
-Denominators vary because VirusTotal does not run the same number of engines on
-every submission.
-
-Compiling to C rather than bundling an interpreter made it *worse*: Nuitka's
-one-file mode extracts at startup too. **It is the extraction step engines
-score**, not the language and not the code.
-
-`--onedir` deserves singling out, because it is the tidier shape — the exe alone
-at the top with everything under `_internal/` — and it is the first thing anyone
-looking at two dozen DLLs beside `cgbuy.exe` will reach for. It was rejected on
-numbers, not taste: dropping self-extraction got it most of the way, Defender
-included, but PyInstaller's bootloader is itself scored and five engines still
-flagged it. Nuitka's standalone output is flat with no way to nest the DLLs, so
-the price of zero detections is a cluttered folder. That trade was made
-deliberately.
-
-Two tests guard it: every Windows build script must pass `--standalone`, and
-`build.bat` must never contain `--onefile`. Linux keeps `--onefile` — it scans
-clean there and one file is the better download.
-
-Go was considered and rejected for the same reason. A static Go binary would
-land near zero because there is nothing to unpack — but so does the Python, at
-the price of a build flag rather than 4,400 lines and a new GUI toolkit.
-
-## What ships, and under what name
-
-Release assets carry their version, so a second download never lands as
-`cgbuy-linux(1)`:
-
-- `cgbuy-v<ver>-windows.zip` — a folder, with `README-FIRST.txt` beside
-  `cgbuy.exe`. The zip wraps a directory rather than loose files so extracting
-  cannot spray ~950 files across someone's Downloads.
-- `cgbuy-v<ver>-linux.tar.gz` — tar stores the mode, so the extracted binary is
-  already executable.
-- `cgbuy-v<ver>-linux` — the same binary loose, needing `chmod +x`.
-
-That last point is the reason the tarball exists at all: **a GitHub release
-asset carries no POSIX mode.** The execute bit is dropped on upload and again on
-download, so a plain binary can never arrive runnable however it was built. Git
-storing mode `100755` does not help — these are never committed, they are built
-in CI and pushed through the releases API.
-
-`packaging/README-FIRST.txt` is the note that ships inside the Windows zip.
-`@VERSION@` is substituted at build time and line endings are forced to CRLF
-during packaging, because the `.gitattributes` `eol=crlf` rule cannot be relied
-on to survive checkout on the runner — a build that trusted it shipped an LF
-file that opens in Notepad as one long line.
-
-## CI
-
-| Workflow | Trigger | Does |
-|---|---|---|
-| `build.yml` | push to `main`, PRs | tests, both builds; on `main` also refreshes the `snapshot` pre-release |
-| `release.yml` | manual dispatch | validates the version, tests, tags, builds, publishes, scans |
-
-Both also build the Tauri desktop app (`build-desktop-linux`,
-`build-desktop-windows`); see [The desktop app](#the-desktop-app-app).
-
-The `snapshot` tag is reused on every push, and its assets are keyed to the
-short commit. Because those names change per push, same-name replacement no
-longer clears the previous build, so the snapshot release is emptied of assets
-before new ones are uploaded. Forget that and the downloads list grows forever.
-
-## Cutting a release
-
-Actions → **release** → Run workflow → a version like `2.2` (no leading `v`),
-plus optional extra notes. It refuses a version that is malformed or already
-tagged, runs both suites before anything is tagged, rewrites `VERSION` in
-`version.py` and stamps the same number into `app/`, commits, tags, builds both platforms, checks each binary reports
-the version it claims, publishes, and then scans the published files on
-VirusTotal — appending counts, hashes and flagging engine names to the release
-notes and refreshing the badge on `main`.
-
-The VirusTotal step needs the `VT_API_KEY` secret and never fails a release:
-the binaries are already out, and VirusTotal being slow is not a broken build.
-It is release-only because doing it per push would burn the free key's daily
-quota.
-
-## The desktop app (`app/`)
-
-A rewrite of cgbuy as a web page in a Tauri v2 window. It lives in `app/`,
-imported from the `ed-cg-buyfinder-web` repo with its history
-(`git subtree`), and is released from this repo so existing users' update
-checks, the README and the VirusTotal badge carry over. The Python app is
-untouched and still the main download for now.
-
-| | |
-|---|---|
+| `VERSION` | the one place the version number is typed, e.g. `1.9` |
 | `app/index.html`, `app.js`, `style.css`, `src/` | the page; runs in a plain browser too |
 | `app/src/desktop.js` | everything that only exists inside the Tauri window: settings file, journal folder, no-CORS fetch, external links |
-| `app/src/update.js` | "a newer version exists" check, a port of `update.py` |
+| `app/src/update.js` | "a newer version exists" check against GitHub releases |
 | `app/src-tauri/` | the Rust shell: `src/main.rs`, `tauri.conf.json` (CSP), `capabilities/` (what the page may call, including the allowed HTTP hosts) |
 | `app/src-tauri/prep.mjs` | copies the page files into `src-tauri/dist`, which is what gets embedded |
-| `app/stamp-version.mjs` | copies `version.py` into the app's version files |
+| `app/stamp-version.mjs` | copies `VERSION` into the app's version files |
 | `app/test/` | `node --test`, no dependencies |
+| `packaging/README-FIRST.txt` | the note shipped inside the Windows zip |
+| `.github/` | workflows, the VirusTotal scanner (`scripts/vt_scan.py`, stdlib Python run only in CI) and its badge |
+
+`app/README.md` describes the website itself and its module map.
+
+## Running and testing
 
 Needs Node 22+, Rust (rustup) and `cargo install tauri-cli --version "^2" --locked`.
 On Debian/Ubuntu also `libwebkit2gtk-4.1-dev build-essential libxdo-dev
@@ -207,52 +43,85 @@ cargo tauri build --no-bundle   # just the binary: src-tauri/target/release/cgbu
 Opening `app/index.html` through any static server also works, as the website:
 anything that needs the app is behind `DESKTOP` in `desktop.js`.
 
-### Versions
+## Versions
 
-`version.py` is still the only place a version is typed. The app's copies —
-`src/version.js` (`"1.9"`), and `tauri.conf.json`, `Cargo.toml` and the
-`cgbuy` entry in `Cargo.lock` (`"1.9.0"`; Tauri insists on three parts) — are
-written by `node app/stamp-version.mjs`. `node app/stamp-version.mjs --check`
-and `app/test/version.test.js` fail if any has drifted, so after changing
-`version.py` by hand, run the stamp. The release workflow does that itself.
+`VERSION` is the only place a version is typed (two parts, `1.9`). The app's
+copies — `src/version.js` (`"1.9"`), and `tauri.conf.json`, `Cargo.toml` and
+the `cgbuy` entry in `Cargo.lock` (`"1.9.0"`; Tauri insists on three parts) —
+are written by `node app/stamp-version.mjs`. `node app/stamp-version.mjs
+--check` and `app/test/version.test.js` fail if any has drifted, so after
+changing `VERSION` by hand, run the stamp. The release workflow does that
+itself. The version is also what EDDN records as `softwareVersion` and what
+the update check compares against.
 
-### What the desktop build ships as
+## What ships, and under what name
 
 Built by `cargo tauri build` (not `tauri-action`, which would want to own the
-release and the file names that this repo's workflows already own). Asset names
-carry `desktop` so they never collide with the Python ones:
+release and the file names that this repo's workflows already own). Release
+assets carry their version, so a second download never lands as `cgbuy(1)`:
 
-- `cgbuy-desktop-v<ver>-windows-portable.zip` — a folder with the single
-  `cgbuy.exe` and `README-FIRST.txt` (`packaging/README-FIRST-desktop.txt`).
-  Needs WebView2, which Windows 10/11 ship with
-- `cgbuy-desktop-v<ver>-linux.AppImage`, `-linux.deb`, and `-linux`, the bare
-  binary, which needs libwebkit2gtk-4.1 installed
+- `cgbuy-v<ver>-windows.zip` — a folder with the single `cgbuy.exe` and
+  `README-FIRST.txt` (`packaging/README-FIRST.txt`). Needs WebView2, which
+  Windows 10/11 ship with. Built with `--no-bundle`: no installer, because the
+  NSIS setup.exe drew 3/75 heuristic VirusTotal hits (APEX, Cylance,
+  DeepInstinct) while the same exe zipped scored 0/75.
+- `cgbuy-v<ver>-linux.AppImage`, `-linux.deb`, and `-linux`, the bare binary,
+  which needs libwebkit2gtk-4.1 installed.
 
-Snapshots use the short commit instead of `v<ver>`. The two Windows files are
-scanned on VirusTotal with the Python ones, but the README badge still follows
-the Python zip: `vt_scan.py` skips `desktop` names when writing it. Remove that
-condition when the desktop build becomes the main download.
+Snapshots use the short commit instead of `v<ver>`. A GitHub release asset
+carries no POSIX mode, so the execute bit is lost on upload and the Linux files
+need a `chmod +x` after download.
 
-### Website (GitHub Pages)
+`packaging/README-FIRST.txt` has `@VERSION@` substituted at build time and its
+line endings forced to CRLF during packaging, because the `.gitattributes`
+`eol=crlf` rule cannot be relied on to survive checkout on the runner — a build
+that trusted it shipped an LF file that opens in Notepad as one long line.
+
+## CI
+
+| Workflow | Trigger | Does |
+|---|---|---|
+| `build.yml` | push to `main`, PRs | `build-linux` and `build-windows` (web + Rust tests, version check, build, package); on PRs `virustotal-preview`; on `main` also `snapshot`, which refreshes the rolling pre-release |
+| `release.yml` | manual dispatch | `tag` (validate, test, bump `VERSION`, stamp, tag), `build-linux`, `build-windows`, `publish`, `virustotal` |
+| `pages.yml` | push to `main`, PRs | tests and builds the website; deploys it on `main` |
+
+The `snapshot` tag is reused on every push, and its assets are keyed to the
+short commit. Because those names change per push, same-name replacement no
+longer clears the previous build, so the snapshot release is emptied of assets
+before new ones are uploaded. Forget that and the downloads list grows forever.
+
+## Cutting a release
+
+Actions → **release** → Run workflow → a version like `2.2` (no leading `v`),
+plus optional extra notes. It refuses a version that is malformed or already
+tagged, runs the web tests before anything is tagged, writes `VERSION` and
+stamps the same number into `app/`, commits, tags, builds both platforms,
+publishes, and then scans the Windows zip and the Linux binary on VirusTotal —
+appending counts, hashes and flagging engine names to the release notes and
+refreshing the badge (which tracks the Windows zip) on `main`.
+
+The VirusTotal step needs the `VT_API_KEY` secret and never fails a release:
+the binaries are already out, and VirusTotal being slow is not a broken build.
+It is release-only because doing it per push would burn the free key's daily
+quota. `virustotal-preview` in `build.yml` scans the Windows zip on PRs and
+manual runs and writes the verdict to the job summary (never the badge); it is
+skipped when `VT_API_KEY` is unavailable, e.g. on fork PRs.
+
+## Website (GitHub Pages)
 
 The site is `app/index.html app.js style.css icon.png src` served as-is by
 `.github/workflows/pages.yml`. It deploys from this repo on a push to main (or
 a manual run); on a PR it runs the tests and builds the artifact but does not
-deploy. The old home was the separate `ed-cg-buyfinder-web` repo.
+deploy.
 
 One-time step, by the owner: Settings -> Pages -> Source = "GitHub Actions".
 Until that is set the first deploy fails. The expected URL is
-`https://knowhowit.com.au/ed-cg-buyfinder/` (the custom domain was inferred
-from the old repo's README; confirm it serves the new path).
+`https://knowhowit.com.au/ed-cg-buyfinder/` (confirm it serves the new path).
 
-Decommissioning the old site, in order:
+Decommissioning the old `ed-cg-buyfinder-web` site, in order:
 
 1. Merge this PR and enable Pages as above.
 2. Check the new URL loads and works.
 3. In the old repo, push the `moved-notice` branch (banner plus a 10 s redirect
    to the new URL) and merge it to its main so its Pages workflow redeploys.
 4. Later, once nobody is using the old URL, archive the old repo.
-
-`virustotal-preview` in `build.yml` scans the desktop Windows files on PRs and
-manual runs and writes the verdicts to the job summary (never the badge); it is
-skipped when `VT_API_KEY` is unavailable, e.g. on fork PRs.

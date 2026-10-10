@@ -1,5 +1,6 @@
-// Makes the app's version follow ../version.py, which is the one place the
-// number lives (the release workflow rewrites that line and nothing else).
+// Makes the app's version follow ../VERSION, which is the one place the
+// number lives: a plain file holding e.g. 1.9 (the release workflow rewrites
+// it and nothing else).
 //
 //   node stamp-version.mjs          rewrite the files below to match
 //   node stamp-version.mjs --check  exit 1 if any of them has drifted
@@ -15,9 +16,9 @@ import { fileURLToPath } from "node:url";
 const here = (p) => fileURLToPath(new URL(p, import.meta.url));
 
 export function sourceVersion() {
-  const m = readFileSync(here("../version.py"), "utf8").match(/^VERSION = "(\d+\.\d+(?:\.\d+)?)"/m);
-  if (!m) throw new Error("could not find VERSION in ../version.py");
-  return m[1];
+  const v = readFileSync(here("../VERSION"), "utf8").trim();
+  if (!/^\d+\.\d+(\.\d+)?$/.test(v)) throw new Error(`../VERSION should hold a number like 1.9, found "${v}"`);
+  return v;
 }
 
 /** [file, pattern whose first group is the old number, replacement number]. */
@@ -31,12 +32,12 @@ function targets(v) {
   ];
 }
 
-/** The files whose number differs from version.py, as "file: found, want". */
+/** The files whose number differs from VERSION, as "file: found, want". */
 export function drift() {
   return targets(sourceVersion()).flatMap(([file, re, want]) => {
     const found = readFileSync(here(file), "utf8").match(re);
     const have = found && found[0].slice(found[1].length, found[0].length - found[2].length);
-    return have === want ? [] : [`${file}: has ${have}, version.py says ${want}`];
+    return have === want ? [] : [`${file}: has ${have}, VERSION says ${want}`];
   });
 }
 

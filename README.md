@@ -8,6 +8,7 @@ by credits per minute of round trip — not by profit per tonne, because a rich
 station 40 minutes away loses to a decent one 15 minutes away.
 
 ![Best mixed loads](screenshots/01-best-mixed-loads.png)
+<!-- TODO(owner): the three screenshots/ images show the retired tkinter UI; replace them with shots of the new app (same file names keep this page working). -->
 
 It reads your journal to know which goal you joined, what ship you are flying
 and how long your jumps actually take, then discovers candidate markets through
@@ -22,57 +23,56 @@ current in place.
 
 ## Install
 
-**Download a binary** — no Python needed:
+**No install at all:** the same app runs as a website at
+<https://knowhowit.com.au/ed-cg-buyfinder/>. It reads your journal through the
+browser (Chrome or Edge can keep watching the folder as you play) and takes its
+markets from Ardent only; the desktop app below adds Spansh, the EDSM
+re-check, desktop notifications and finds your journal folder by itself.
+
+**Or download the desktop app:**
 
 | | |
 |---|---|
 | [Latest release](https://github.com/joebywan/ed-cg-buyfinder/releases/latest) | stable, version-tagged |
 | [Snapshot](https://github.com/joebywan/ed-cg-buyfinder/releases/tag/snapshot) | rebuilt on every push to `main` |
 
-Every asset carries its version — `cgbuy-v1.5-windows.zip`, `cgbuy-v1.5-linux`
-and so on — so a second download never lands as `cgbuy-linux(1)`.
+**Windows** — take `cgbuy-v<ver>-windows.zip`, extract it somewhere you will
+find it again (not from inside the zip), and run `cgbuy.exe`. That is the whole
+install: one file, nothing written to the registry, nothing set to run at
+startup. The window is drawn by Microsoft's WebView2 runtime, which comes with
+Windows 11 and up-to-date Windows 10; if `cgbuy.exe` will not open, install
+the "Evergreen Bootstrapper" from
+[Microsoft](https://developer.microsoft.com/microsoft-edge/webview2/).
+`README-FIRST.txt` in the zip says the same for anyone who skips this page.
 
-**Windows** — take the `.zip` (~12 MB), extract the whole folder, and run
-`cgbuy.exe` from inside it. **Keep the folder together**: `cgbuy.exe` needs the
-files beside it and will not start on its own, so move the folder, not the exe.
-For a desktop entry, make a shortcut rather than a copy. `README-FIRST.txt`
-ships inside the zip and says the same for anyone who skips this page.
+**Linux** — pick one:
 
-It is a folder rather than a single `.exe` deliberately — that is what took the
-Windows build to zero antivirus detections, and the
-[reasoning is in DEVELOPMENT.md](DEVELOPMENT.md#why-windows-ships-as-a-folder).
+- `cgbuy-v<ver>-linux.AppImage` — `chmod +x` it and run it. Carries its own
+  WebKitGTK.
+- `cgbuy-v<ver>-linux.deb` — `sudo apt install ./cgbuy-v<ver>-linux.deb`.
+- `cgbuy-v<ver>-linux` — the bare binary (`chmod +x` first). It needs
+  `libwebkit2gtk-4.1` installed.
 
-**Linux** — take the `.tar.gz` and `tar -xzf cgbuy-v*-linux.tar.gz`; the binary
-comes out executable. The loose binary next to it is the same thing without the
-wrapper, and a plain download of that one needs `chmod +x` first, because a
-GitHub release asset cannot record the execute bit.
-
-**New desktop build (preview)** — a rewrite as a Tauri app is published
-alongside, with `desktop` in the file name (`cgbuy-desktop-v*-windows-portable.zip`,
-`-linux.AppImage`, `-linux.deb`). It is not yet the recommended download; the builds above remain the main ones. Windows needs the
-WebView2 runtime, which Windows 10/11 already include. See
-[DEVELOPMENT.md](DEVELOPMENT.md#the-desktop-app-app).
+A GitHub release asset cannot record the execute bit, which is why the
+AppImage and the bare binary need the `chmod`.
 
 Neither build is code-signed, so Windows SmartScreen will warn on first run
 ("More info" → "Run anyway") — see [Antivirus](#antivirus).
 
-**Or run from source** — Python 3 with tkinter, nothing else. Stdlib only, no
-pip installs:
+**Coming from the old Python/tkinter cgbuy?** This is a new app and replaces
+it. Your settings carry over: on first run it reads the old `cgbuy.json` and
+keeps its own in `cgbuy-desktop.json` beside it. The old app is gone from this
+repository; its last release stays on the releases page.
+
+**Run it from source** — Node 22+, Rust and `tauri-cli`; the full steps are in
+[DEVELOPMENT.md](DEVELOPMENT.md):
 
 ```
 git clone https://github.com/joebywan/ed-cg-buyfinder
-cd ed-cg-buyfinder
-python cgbuy                  # searches immediately
-python cgbuy --no-autosearch  # open without hitting the APIs
+cd ed-cg-buyfinder/app
+node src-tauri/prep.mjs
+cargo tauri dev
 ```
-
-tkinter is `python3-tk` on Debian/Ubuntu/Mint; Python from python.org already
-includes it. It needs a desktop session and exits with a clear message if there
-is no display. The file has no `.py` extension, so on Windows run it through
-`python` rather than double-clicking.
-
-Building it yourself, and how it is packaged, are in
-[DEVELOPMENT.md](DEVELOPMENT.md).
 
 ## What you are looking at
 
@@ -84,7 +84,9 @@ A station that fills your hold with one commodity is a single line, with that co
 next to its name. Only a mixed load (a short hold topped up with more products) has an
 arrow: expand it for the per-commodity breakdown. Both views sort on any column
 header — click once for high-to-low, again to reverse it. Or switch to
-**all sources** for the flat one-row-per-commodity table:
+**all sources** for the flat one-row-per-commodity table. The tabs along the
+top are **BEST MIXED LOADS**, **ALL SOURCES**, **LOGS** (what the app has been
+doing, with COPY for bug reports), **SETTINGS** and **INFO**:
 
 ![All sources](screenshots/02-all-sources.png)
 
@@ -115,7 +117,7 @@ The tool works out where you are selling rather than asking:
    you joining.
 3. **Whatever you set by hand**, which always wins and is never overwritten.
 
-**Settings → DESTINATION** takes a system (with name completion), then
+The **DESTINATION** panel under the search controls takes a system (with name completion), then
 `LOAD STATIONS` lists that system's markets, nearest arrival star first.
 `CHOOSE FROM LIST` opens a filterable checklist of everything the destination
 trades — type to narrow it, click to tick, `ADD SHOWN` to take every match at
@@ -149,8 +151,20 @@ station turnarounds.
 
 Filters applied when collecting sources: a landing pad your ship fits, supply
 and buy price must be positive, profit must be positive, the station must be
-inside the radius, and the market data must be newer than MAX AGE. Fleet
+inside the radius, and the market data must be newer than MAX AGE D. Surface
+stations get a flat time penalty (Settings → *Surface penalty*, in minutes) added
+to the round trip, so they only rank high when clearly worth the landing. Fleet
 carriers are excluded unless you tick the box.
+
+## Where the markets come from
+
+**SOURCE** (desktop app) picks the market feed: **Ardent**, **Spansh**, or
+**Both**. Ardent is built from EDDN and is fresh; Spansh finds more candidates
+but lags by days, so with Spansh the best few stations are re-checked against
+EDSM (Settings → *Re-check top results against EDSM*, *Stations to check*).
+Their `AGE` then shows a green ✓ once EDSM confirmed the reading. **Both**
+merges the two and keeps the EDSM-confirmed figures. EDSM rate-limits, so only
+the top few are checked; the rest keep their dim ? until their turn.
 
 ## The two views
 
@@ -168,6 +182,10 @@ those two headers do not sort; every other one does. Whatever the order, the
 best cr/min plan keeps its highlight, so re-sorting never loses it. Top 40
 stations, none expanded until you open them.
 
+The **COLUMNS** button on each table tab chooses which columns show and in what
+order; you can also drag a header to move it and its right edge to resize.
+Settings → *RESET COLUMNS* undoes it.
+
 *Reading the table.* An orange bar on a row's left edge marks the best cr/min
 station. An amber bar with an underline marks your copied station when the
 target alert says it moved, until you press GOT IT. `◂ copied` tags the station you
@@ -178,9 +196,10 @@ explanation; the footer legend lists whichever markers are on screen, and the
 
 Once results are up, the search controls and DESTINATION fold into one summary line
 (with SEARCH still on it); ✎ EDIT unfolds them until the next search. Alerts: a banner
-appears only when the station you copied moves, drops out or is hidden by a filter, when
-your reward tier changes, or when EDSM has been rate-limiting for 5+ minutes with stations
-still unconfirmed. Nothing else raises one.
+appears only when the station you copied (the *target*) moves, drops out or is hidden by a
+filter, when your reward tier changes, or when EDSM has been rate-limiting for 5+ minutes
+with stations still unconfirmed. Nothing else raises one. *Sound on changes* (Settings)
+adds a chime to those.
 
 **ALL SOURCES** — one row per commodity-at-station, click any header to sort.
 
@@ -219,8 +238,8 @@ already re-checked against EDSM costs nothing, because it is the same response.
 ## Interface
 
 Inputs across the top: hold size, radius (30 ly), jump range empty and laden,
-minimum supply (200), and toggles for fleet carriers and Odyssey. Enter or
-SEARCH runs it.
+minimum supply (200), landing pad, how old a source may be, the SOURCE, and
+toggles for fleet carriers and Odyssey. Enter or SEARCH runs it.
 
 **ODYSSEY** decides whether stations on a planet surface are candidates at all
 — settlements, planetary outposts and ports. It is off by default because a
@@ -256,24 +275,25 @@ Hold and the two jump ranges are marked `*` and locked while your journal can
 see a ship — they are the ship's, not yours to guess at. Hover one to see
 where its number came from. See [Ship detection](#ship-detection).
 
-**Font scaling.** The default size is picked from your screen width (9pt under
-2560px, 14 under 3840, 17 above). Ctrl+`+` / Ctrl+`-`, or Settings → DISPLAY,
-rescales everything — fonts, row heights, column widths, and the window itself —
-and the choice is saved.
+**Font scaling.** Ctrl+`+` / Ctrl+`-` (Ctrl+`0` resets), or Settings → DISPLAY,
+rescales the whole window — fonts, row heights, column widths — and the choice
+is saved.
 
-**Settings** (SETTINGS button): journal folder (auto-detected, override only if
-you have several installs), the destination, how many minutes cached results
-count as fresh (10), how many top results to re-check against EDSM (18), how old
-a source may be (7 days), font size, toggles for desktop notifications and EDDN,
-and a readout of current trip
-timings with a reset.
+**Settings** (SETTINGS tab): display font size, how old a source may be (7
+days), how many minutes cached results count as fresh (10), the surface penalty,
+the EDSM re-check and how many top results it covers (18), the journal folder
+(auto-detected; override only if you have several installs), toggles for the
+update check, desktop notifications and EDDN, column reset, and a readout of
+current trip timings with a reset.
 
 On startup the last results are shown straight away; if they are older than
 the freshness window a new search runs behind them without asking.
 
-**Config** lives at `~/.config/cgbuy.json` (`$XDG_CONFIG_HOME` respected) and holds font
-size, journal path, search parameters, the Odyssey toggle, the integration
-toggles, EDSM verification settings and accumulated calibration samples.
+**Config** lives in `cgbuy-desktop.json` in your config folder (see
+[Windows and macOS](#windows-and-macos)) and holds font size, journal path,
+search parameters, columns, the Odyssey toggle, the integration toggles, EDSM
+verification settings and accumulated calibration samples. The old app's
+`cgbuy.json`, if present, is read once to carry those over.
 
 ## Journal calibration
 
@@ -398,6 +418,7 @@ you. There is no second prompt and nothing to dismiss: the line is either
 there or it is not.
 
 Running from source? The notice still appears, and `git pull` is your update.
+The website needs no update: it is always the latest.
 The rolling [snapshot](#install) build is a pre-release, so it is never
 offered as an update to anyone.
 
@@ -410,10 +431,12 @@ offered as an update to anyone.
   fast during a CG, and a station showing 40,000t three weeks ago may be empty.
   Watch the AGE column; it is coloured for exactly this reason.
 - **Fleet carriers move and reprice.** Off by default for that reason.
-- **The Linux binary is glibc-specific** and is built on a current Ubuntu runner,
-  so it may not start on an older distro. Run from source or build it locally
-  if so.
-- **No macOS binary.** The code runs there from source; nothing builds one.
+- **The Linux builds are made on Ubuntu 22.04**, so they may not start on a
+  distro older than that. Build it locally if so.
+- **No macOS build.** Nothing builds one; Tauri can, from source, but it is
+  untested.
+- **The website cannot use Spansh or EDSM**, which do not let other web pages
+  read their data, so it uses Ardent alone and has no desktop notifications.
 
 ## Windows and macOS
 
@@ -422,61 +445,55 @@ What adapts automatically:
 - **Journals** — `%USERPROFILE%\Saved Games\Frontier Developments\Elite Dangerous`,
   including the OneDrive-redirected variant, plus Steam libraries on other
   drive letters. Override it in Settings if detection misses.
-- **Config** — `%APPDATA%\cgbuy.json` on Windows, `~/Library/Application Support`
-  on macOS, `~/.config` elsewhere. `XDG_CONFIG_HOME` always wins if set.
-- **Cache** — `%LOCALAPPDATA%` / `~/Library/Caches` / `~/.cache`.
-- **Font** — first installed of DejaVu Sans Mono, Consolas, Menlo, Liberation
-  Mono, Courier New.
-
-Beyond those paths, the only platform-specific code is
-[notifications](#notifications), which call each OS's own notifier.
+- **Config** — `%APPDATA%\cgbuy-desktop.json` on Windows,
+  `~/Library/Application Support` on macOS, `~/.config` elsewhere.
+  `XDG_CONFIG_HOME` always wins if set.
 
 ## Antivirus
 
-**Both downloads currently scan clean on VirusTotal — zero detections, Windows
-and Linux alike.** Every release scans itself: after a version is published CI
-submits both downloads and appends the counts, hashes and the names of any
-flagging engines to the release notes, so anyone forwarded an alarming-looking
-scan link finds the same figures already on the download page.
+**The Windows download is a single `cgbuy.exe` in a zip, and it scans clean on
+VirusTotal: 0 detections of 75 engines** when this build was previewed on its
+pull request. Every release scans itself: after a version is published CI
+submits the Windows zip and the Linux binary and appends the counts, hashes and
+the names of any flagging engines to the release notes, so anyone forwarded an
+alarming-looking scan link finds the same figures already on the download page.
+The badge at the top follows the Windows zip.
 
-This was not always true. Up to v1.4 the Windows download was a single
-self-extracting `.exe`, and a handful of engines flagged that shape generically
-no matter what the program did — Microsoft Defender among them, which matters
-because Defender can quarantine a download rather than just warn. Shipping a
-folder instead cleared every detection. It was never the code, and the full
-investigation is in
-[DEVELOPMENT.md](DEVELOPMENT.md#why-windows-ships-as-a-folder).
+It is **unsigned**, so Windows SmartScreen may warn on first run ("More info" →
+"Run anyway"). A certificate is a recurring annual cost and this is a free tool
+written for its author's own use; sharing it is a courtesy. A heuristic engine
+may also flag an unsigned exe from a project with no reputation, and detections
+can come and go. The one packaging choice that mattered: the Windows build
+ships as a portable zip with no installer, because the same exe wrapped in an
+NSIS setup drew 3 generic heuristic hits while the bare exe drew none.
 
-Detections can come back — heuristics change, and an unsigned binary from a
-small project has no reputation to fall back on. If one does:
+If something is flagged:
 
-- **Run from source** — `python cgbuy`. No binary, no packaging, and the source
-  is all in this repository.
+- **Use the website** — <https://knowhowit.com.au/ed-cg-buyfinder/>, nothing to
+  download.
+- **Run from source** — see [Install](#install). No binary, and the source is
+  all in this repository.
 - **Check the hash.** `Get-FileHash` on Windows, `sha256sum` elsewhere, against
   the figures in the release notes.
 - **Read the sandbox report** rather than the score. The relevant question is
   what it did: contacted hosts, files written, processes spawned.
 
-Neither build is code-signed, and neither will be. A certificate is a recurring
-annual cost and this is a free tool written for its author's own use; sharing it
-is a courtesy. Signing would also quiet SmartScreen, which shipping a folder
-does not, but not at that price.
-
 ## Notifications
 
-The window normally sits behind the game, so it tells you when something
-changes rather than waiting to be looked at:
+The window normally sits behind the game, so it can tell you when something
+changes rather than waiting to be looked at. **Off by default; turn it on with
+Desktop notifications in Settings** (the app asks the OS for permission). It
+notifies when:
 
 - **the best target changed** — a different station is now top, usually
   because the previous one drained or fresher data arrived
-- **your reward bracket moved** — up, or *down* when other commanders
-  overtake you, which is the one you would otherwise never see coming
+- **the station you copied moved or dropped out** — the same event as the
+  in-app alert
+- **a trading goal is running that you have not joined**, or you dock at its
+  station unregistered — deliveries before you sign up do not count
 
-Delivered through `notify-send` on Linux, a toast on Windows 10+, and
-`osascript` on macOS. Whatever the platform, the window title is also marked
-and the bell rung, so there is a visible sign even with no notification
-daemon; the mark clears when you next focus the window. Turn it off with
-**Desktop notifications** in Settings.
+They are delivered through the OS's own notification system. *Sound on
+changes* is separate and adds a chime to the in-app alerts.
 
 The status bar also shows how long ago the shown data was fetched, ticking
 live and turning amber once it passes the auto-refresh threshold — so you can
