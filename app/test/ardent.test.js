@@ -3,7 +3,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { ageFilter, buildRows } from "../src/ardent.js";
-import { padLetter, tripMinutes } from "../src/model.js";
+import { padLetter, tripMinutes, viewRows } from "../src/model.js";
 
 const NOW = new Date("2026-09-15T10:00:00Z");
 const FRESH = "2026-09-15T01:00:00.000Z";
@@ -87,11 +87,8 @@ test("queries use the commodity symbol and the search parameters", async () => {
   assert.match(nearby.pathname, /\/system\/name\/Ega\/commodity\/name\/palladium\/nearby\/exports$/);
   assert.equal(nearby.searchParams.get("maxDistance"), "30");
   assert.equal(nearby.searchParams.get("minVolume"), "300");
-  assert.equal(nearby.searchParams.get("fleetCarriers"), "false");
+  assert.equal(nearby.searchParams.has("fleetCarriers"), false);   // carriers are a view filter
   assert.ok(Number(nearby.searchParams.get("maxDaysAgo")) >= 7);
-  const { seen: seen2, fetchJson: f2 } = fakeArdent(routes());
-  await buildRows(P({ carriers: true }), { fetchJson: f2, now: NOW });
-  assert.equal(new URL(seen2.find((u) => u.includes("/nearby/"))).searchParams.has("fleetCarriers"), false);
 });
 
 test("the destination system's own markets are sources too", async () => {
@@ -104,20 +101,24 @@ test("the destination system's own markets are sources too", async () => {
     ],
   }));
   const { rows } = await buildRows(P(), { fetchJson, now: NOW });
-  assert.deepEqual(rows.map((r) => r.station).sort(), ["Near", "Same System"]);
+  assert.deepEqual(rows.map((r) => r.station).sort(), ["A Carrier", "Near", "Same System"]);
   assert.equal(rows.find((r) => r.station === "Same System").ly, 0);
 });
 
-test("carriers are sources only when asked for", async () => {
-  const r = routes({ "palladium/nearby": [rec({ station: "Near" }), rec({ station: "FC", type: "FleetCarrier" })] });
-  const off = await buildRows(P(), { fetchJson: fakeArdent(r).fetchJson, now: NOW });
-  assert.deepEqual(off.rows.map((x) => x.station), ["Near"]);
-  const on = await buildRows(P({ carriers: true }), { fetchJson: fakeArdent(r).fetchJson, now: NOW });
-  assert.deepEqual(on.rows.map((x) => x.station).sort(), ["FC", "Near"]);
-  assert.equal(on.rows.find((x) => x.station === "FC").carrier, true);
+test("carriers, surface stations and every pad size are kept for the view to filter", async () => {
+  const r = routes({ "palladium/nearby": [rec({ station: "Near" }), rec({ station: "FC", type: "FleetCarrier" }),
+    rec({ station: "Surf", type: "CraterPort" }), rec({ station: "Small", pad: 1 })] });
+  const a = fakeArdent(r);
+  const res = await buildRows(P(), { fetchJson: a.fetchJson, now: NOW });
+  assert.deepEqual(res.rows.map((x) => x.station).sort(), ["FC", "Near", "Small", "Surf"]);
+  assert.equal(res.rows.find((x) => x.station === "FC").carrier, true);
+  // Toggling the filters is viewRows' job: no request is made.
+  const n = a.seen.length;
+  for (const o of [{ odyssey: true }, { carriers: true, pad: "S" }, {}]) viewRows(res.rows, o);
+  assert.equal(a.seen.length, n);
 });
 
-test("pad, radius, supply and profit filters all apply", async () => {
+test("radius, supply and profit filters apply; pad is left to the view", async () => {
   const { fetchJson } = fakeArdent(routes({
     "palladium/nearby": [
       rec({ station: "Ok" }),
@@ -129,7 +130,8 @@ test("pad, radius, supply and profit filters all apply", async () => {
     ],
   }));
   const { rows } = await buildRows(P(), { fetchJson, now: NOW });
-  assert.deepEqual(rows.map((r) => r.station), ["Ok"]);
+  assert.deepEqual(rows.map((r) => r.station), ["Ok", "Medium Pad", "Unknown Pad"]);
+  assert.deepEqual(viewRows(rows, { pad: "L" }).map((r) => r.station), ["Ok"]);   // unknown pad never fits
 });
 
 test("a commodity the destination does not buy yields nothing", async () => {
@@ -186,18 +188,16 @@ test("age filter hides stale rows, stands down when all are stale, 0 disables", 
 
 // -- the ODYSSEY filter, and what a station is ---------------------------------
 
-test("stations on a surface are dropped unless ODYSSEY is on", async () => {
+test("stations on a surface are hidden unless ODYSSEY is on", async () => {
   const both = routes({ "palladium/nearby": [
     rec({ station: "Near", x: 10 }),
     rec({ station: "Berdo Drilling Hub", x: 11, type: "OnFootSettlement" }),
     rec({ station: "Walz Depot", x: 12, type: "CraterOutpost" }),
     rec({ station: "Ehrlich City", x: 13, type: "CraterPort" }),
   ] });
-  const off = await buildRows(P(), { fetchJson: fakeArdent(both).fetchJson, now: NOW });
-  assert.deepEqual(off.rows.map((r) => r.station), ["Near"]);
-
-  const on = await buildRows(P({ odyssey: true }), { fetchJson: fakeArdent(both).fetchJson, now: NOW });
-  assert.deepEqual(on.rows.map((r) => r.station).sort(),
+  const res = await buildRows(P(), { fetchJson: fakeArdent(both).fetchJson, now: NOW });
+  assert.deepEqual(viewRows(res.rows, {}).map((r) => r.station), ["Near"]);
+  assert.deepEqual(viewRows(res.rows, { odyssey: true }).map((r) => r.station).sort(),
     ["Berdo Drilling Hub", "Ehrlich City", "Near", "Walz Depot"]);
 });
 

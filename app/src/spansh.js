@@ -158,20 +158,28 @@ function rescore(r, hold, cgLs, p, cal) {
  * { checked, corrected }.
  */
 export async function refresh(rows, edsm, { top = VERIFY_TOP_DEFAULT, budget = EDSM_BUDGET,
-    onStation = null, onApply = null, cancelled = null } = {}) {
-  const ranked = [...rows].sort((a, b) => b.cr_per_min - a.cr_per_min);
-  const stations = [];
+    onStation = null, onApply = null, cancelled = null, rank = (r) => r.cr_per_min,
+    skip = new Set(), more = false } = {}) {
+  // `rank(row)` orders the queue and is null for a row the view hides, so a
+  // hidden station is neither picked nor, if hidden again before its turn,
+  // checked. `skip` holds stations already handled; `more` tops up a finished
+  // pass (the view just revealed rows) instead of starting over.
+  const ranked = rows.map((r) => [rank(r), r]).filter(([s]) => s != null)
+    .sort((a, b) => b[0] - a[0]).map(([, r]) => r);
+  const picked = [];
   const seen = new Set();
   for (const r of ranked) {
     const key = `${r.system}\n${r.station}`;
-    if (!seen.has(key)) { seen.add(key); stations.push([r.system, r.station]); }
-    if (stations.length >= top) break;
+    if (!seen.has(key)) { seen.add(key); picked.push([r.system, r.station]); }
+    if (picked.length >= top) break;
   }
+  const stations = picked.filter(([s, n]) => !skip.has(`${s}\n${n}`));
+  const queued = new Set(stations.map(([s, n]) => `${s}\n${n}`));
   const spanshDates = new Map();
   for (const r of rows) {
     const k = `${r.system}\n${r.station}`;
-    r.edsm = false;
-    r.pending = seen.has(k);
+    if (!more) r.edsm = false;
+    r.pending = queued.has(k);
     if (!spanshDates.has(k)) spanshDates.set(k, r.updated || "");
   }
 
@@ -183,6 +191,8 @@ export async function refresh(rows, edsm, { top = VERIFY_TOP_DEFAULT, budget = E
   let k = 0;
   for (const [sys, stn] of stations) {
     if (cancelled?.() || spent >= budget) break;
+    if (!rows.some((r) => r.system === sys && r.station === stn && rank(r) != null)) continue;
+    skip.add(`${sys}\n${stn}`);
     onStation?.(k++, stations.length, stn);
     try {
       if (!times[sys]) {
@@ -314,13 +324,8 @@ export async function buildRows(p, { fetchJson = defaultFetchJson, cal = null, n
         errors.push(`${name}: Spansh failed${page ? ` on page ${page}` : ""}: ${err.message}`);
       }
       for (const st of found) {
-        if (!stationFits(st, p.pad ?? "L")) continue;
+        // Carriers, surface stations and pad sizes are all kept: the page filters them.
         const carrier = String(st.type ?? "").includes("Carrier");
-        if (carrier && !p.carriers) continue;
-        // Landing on a surface is a different trip from docking at a
-        // starport - a glide, a pad on a rock, and a client that has to own
-        // the expansion. Off unless the journal says otherwise.
-        if (st.is_planetary && !p.odyssey) continue;
         const e = (st.market ?? []).find((c) => c.commodity === name);
         if (!e || e.supply <= 0 || e.buy_price <= 0) continue;
         const dist = st.distance ?? 0;
@@ -363,13 +368,14 @@ export async function buildRows(p, { fetchJson = defaultFetchJson, cal = null, n
   };
   const first = snapshot();
   if (!verify) return first;
+  const handled = new Set();      // stations already asked about
+  const apply = () => {
+    for (const r of rows) if (r.edsm) rescore(r, p.hold, cgLs, p, cal);
+    if (!cancelled?.()) onUpdate?.(snapshot());
+  };
   first.verifying = (async () => {
-    const apply = () => {
-      for (const r of rows) if (r.edsm) rescore(r, p.hold, cgLs, p, cal);
-      if (!cancelled?.()) onUpdate?.(snapshot());
-    };
     try {
-      const v = await refresh(rows, edsm, { top, cancelled, onApply: apply, onStation: (k, n, stn) => {
+      const v = await refresh(rows, edsm, { top, cancelled, rank: p.rank ?? undefined, skip: handled, onApply: apply, onStation: (k, n, stn) => {
         edsmDone = 2 + k;
         edsmTotal = 2 + n;
         emitE("verify", stn ? `confirming ${k + 1}/${n} stations (${stn}) against fresher data`
@@ -383,5 +389,16 @@ export async function buildRows(p, { fetchJson = defaultFetchJson, cal = null, n
     emitE("done", "");
     apply();
   })();
+  // The view filters changed and rows came into sight: confirm just the ones
+  // that now make the verified top N, after the pass in flight.
+  let tail = first.verifying;
+  first.verifyMore = (rank, onProgress) => (tail = tail.then(async () => {
+    const queue = rows.filter((r) => rank(r) != null && !handled.has(`${r.system}\n${r.station}`));
+    if (!queue.length || cancelled?.()) return;
+    await refresh(rows, edsm, { top, cancelled, rank, skip: handled, more: true, onApply: apply,
+      onStation: (k, n) => onProgress?.({ provider: "edsm", stage: k < n ? "verify" : "done", done: k, total: n,
+        detail: `confirming ${n} newly shown stations` }) }).catch(() => {});
+    apply();
+  }));
   return first;
 }

@@ -188,6 +188,7 @@ tr.child td { color: var(--dim); }
 tr.child td.station { padding-left: 34px; color: var(--txt); }
 td.short { color: var(--warn); }
 .toggle { border: 0; background: none; padding: 0 6px 0 0; color: var(--or); width: 1.6em; text-align: left; }
+.surface { color: var(--dim); font-size: 11px; }
 .fc { color: var(--dim); font-size: 11px; }
 .age-ok { color: var(--good); }
 .age-mid { color: var(--warn); }

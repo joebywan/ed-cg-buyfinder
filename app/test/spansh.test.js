@@ -3,6 +3,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { EdsmGate } from "../src/edsm.js";
+import { viewRows } from "../src/model.js";
 import { buildRows, fetchSources, refresh, stationFits, stationPad, worthRetrying } from "../src/spansh.js";
 
 const NOW = new Date("2026-09-15T10:00:00Z");
@@ -155,13 +156,14 @@ test("rows have the ardent shape; destination price and arrival come from EDSM",
   assert.equal(rows[0].updated, "2026-09-14");
 });
 
-test("pad, carrier, surface and unprofitable rows are filtered", async () => {
+test("carrier, surface and pad rows are kept (the view filters them); unprofitable ones are not", async () => {
   const spansh = [src("Small", { large_pads: 0, small_pads: 1 }), src("FC", { type: "Drake-Class Carrier" }),
     src("Surf", { is_planetary: true }), src("Cheap", { market: [{ commodity: "Palladium", supply: 5, buy_price: 200000 }] }),
     src("Empty", { market: [{ commodity: "Palladium", supply: 0, buy_price: 10 }] }), src("Far", { distance: 31 }), src("Ok")];
-  assert.deepEqual((await run(fake({ spansh, edsm: DEST }))).rows.map((r) => r.station), ["Ok"]);
-  const all = await run(fake({ spansh, edsm: DEST }), P({ pad: "S", carriers: true, odyssey: true }));
+  const all = await run(fake({ spansh, edsm: DEST }));
   assert.deepEqual(all.rows.map((r) => r.station).sort(), ["FC", "Ok", "Small", "Surf"]);
+  assert.deepEqual(viewRows(all.rows, {}).map((r) => r.station), ["Ok"]);
+  assert.deepEqual(viewRows(all.rows, { pad: "S", carriers: true, odyssey: true }).length, 4);
 });
 
 test("a destination EDSM has no market for is an error", async () => {
@@ -274,4 +276,27 @@ test("a superseded search stops verifying and says nothing", async () => {
   await first.verifying;
   assert.equal(n, 0);
   assert.equal(w.urls.filter((u) => u.includes("Src")).length, 0);
+});
+
+test("verifyMore confirms only newly shown stations that make the top N, skipping the done and the re-hidden", async () => {
+  const t = "2026-09-15 02:00:00";
+  const goods = { time: t, goods: { Palladium: [1100, 900] } };
+  const edsm = { ...DEST, Src: { Near: goods, Surf: goods, Late: goods } };
+  const spansh = [src("Near", { distance: 10 }), src("Surf", { distance: 5, is_planetary: true }),
+    src("Late", { distance: 6, is_planetary: true })];
+  const w = fake({ spansh, edsm });
+  const seen = (n) => w.urls.filter((u) => u.includes("/stations/market") && u.includes(n)).length;
+  const hideSurface = (r) => (r.planetary ? null : r.cr_per_min);
+  const first = await buildRows(P({ verify_edsm: true, verify_top: 1, rank: hideSurface }),
+    { fetchJson: w.fetchJson, sleep: nap, now: NOW, gate: fakeGate() });
+  await first.verifying;
+  assert.deepEqual([seen("Near"), seen("Surf"), seen("Late")], [1, 0, 0]);
+  const progress = [];
+  await first.verifyMore((r) => r.cr_per_min, (ev) => progress.push(ev));   // surface shown: Surf (5 ly) is the best
+  assert.deepEqual([seen("Near"), seen("Surf"), seen("Late")], [1, 1, 0]);   // top 1 only; Near not asked again
+  assert.match(progress[0].detail, /confirming 1 newly shown stations/);
+  await first.verifyMore((r) => (r.station === "Late" ? null : r.cr_per_min));   // hidden again before its turn
+  assert.deepEqual([seen("Surf"), seen("Late")], [1, 0]);
+  await first.verifyMore((r) => r.cr_per_min);                                    // shown again: now it is asked
+  assert.equal(seen("Late"), 1);
 });

@@ -88,13 +88,14 @@ export async function searchSources(source, p, builders, opts) {
     }, () => {}));
   }
   const out = await Promise.allSettled(runs);
-  let verifying;
+  let verifying, verifyMore;
   out.forEach((o, i) => {
     if (o.status === "fulfilled") {
       verifying = o.value.verifying ?? verifying;
+      verifyMore = o.value.verifyMore ?? verifyMore;
       res[names[i]] ??= o.value;      // a newer update may already be in
     } else fails.push(`${SOURCES[names[i]]}: ${o.reason.message}`);
   });
   if (!Object.keys(res).length) throw new Error(fails.join("; "));
-  return { ...assemble(res, names, p, fails), verifying };
+  return { ...assemble(res, names, p, fails), verifying, verifyMore };
 }

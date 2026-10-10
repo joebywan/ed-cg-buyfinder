@@ -17,6 +17,7 @@ export const PREF_DEFAULTS = {
   colw_single: {},
   update_check: true,        // desktop only: say so in the header when a newer release exists
   alert_sound: true,         // chime when the top 5 or your copied target changes
+  surface_penalty: 0,        // minutes added to a planetary station's round trip before cr/min
   calAfter: 0,               // epoch secs, set by RESET TIMINGS
 };
 
@@ -26,7 +27,7 @@ export const clampFont = (n) => Math.min(FONT_MAX, Math.max(FONT_MIN, Math.round
 export function loadPrefs(saved) {
   const p = { ...PREF_DEFAULTS, ...(saved && typeof saved === "object" ? saved : {}) };
   p.font_size = clampFont(Number(p.font_size) || FONT_DEFAULT);
-  for (const k of ["cache_fresh_minutes", "verify_top", "calAfter"]) {
+  for (const k of ["cache_fresh_minutes", "verify_top", "surface_penalty", "calAfter"]) {
     const n = Math.round(Number(p[k]));
     p[k] = Number.isFinite(n) && n >= 0 ? n : PREF_DEFAULTS[k];
   }

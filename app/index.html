@@ -44,7 +44,7 @@
   <label>MAX AGE D <input id="f-max_age_days" type="number" min="0" step="1"></label>
   <label class="check"><input id="f-carriers" type="checkbox"> CARRIERS</label>
   <label id="source-label" hidden>SOURCE <select id="f-source"><option value="ardent">Ardent</option><option value="spansh">Spansh</option><option value="both">Both</option></select></label>
-  <label class="check" title="Include stations on a planet surface - settlements, planetary outposts and ports.&#10;&#10;Off, only orbital stations and carriers are ranked. A surface market is a different trip: a glide down, a pad on a rock, and a client that owns the expansion.&#10;&#10;Set from your journal the first time it sees a game, then it is yours. Hover a station to see which body it is on."><input id="f-odyssey" type="checkbox"> ODYSSEY</label>
+  <label class="check" title="Include stations on a planet surface - settlements, planetary outposts and ports.&#10;&#10;Off, surface stations are hidden (instantly - nothing is re-fetched). A surface market is a different trip: a glide down, a pad on a rock, and a client that owns the expansion.&#10;&#10;Set from your journal the first time it sees a game, then it is yours. Hover a station to see which body it is on."><input id="f-odyssey" type="checkbox"> ODYSSEY</label>
   <button id="search" type="submit" class="primary">SEARCH</button>
 </form>
 
@@ -86,6 +86,9 @@
     <h2>DATA ACCURACY</h2>
     <label class="row" title="A CG drains supply fast, so a week-old report of 40,000t may be a wasted trip. Raising this shows the older rows rather than hiding them; the AGE column is coloured so you can judge each one. Changing it re-runs the search.">Hide sources older than (days) <input id="s-max_age" type="number" min="0" step="1"></label>
     <label class="row" title="On startup, a cached result newer than this is shown as-is; anything older starts a fresh search straight away, with the old numbers on screen while it runs.">Auto-refresh after (min) <input id="s-fresh" type="number" min="0" step="1"></label>
+    <h2>RANKING</h2>
+    <label class="row">Surface penalty (min) <input id="s-surface" type="number" min="0" step="1"></label>
+    <p class="dim small">Extra minutes a planetary landing costs you - glide, risk, hassle - so surface markets only rank high when they're clearly worth it. Added to the round trip of surface stations before credits per minute is worked out; 0 treats them like any other. Changes re-rank straight away.</p>
     <div class="desktop-only">
       <label class="row check"><input id="s-verify" type="checkbox"> Re-check top results against EDSM</label>
       <label class="row check" title="A chime when the top 5, or the station you last copied, changes after the results are up."><input id="s-sound" type="checkbox"> Sound on changes</label>

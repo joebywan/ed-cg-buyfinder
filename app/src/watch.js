@@ -86,10 +86,37 @@ export class Watcher {
     this.sig = "";
   }
 
+  /** The user changed a view filter: the new ranking is the baseline (no
+   *  "top 5 changed"), but a target the filter hides is reported, naming
+   *  the filter (`hidden` is its reason, or "" when it still shows). */
+  rebase(plans, hidden = "") {
+    this.#see(plans);
+    this.sig = "";
+    const t = this.target;
+    if (!t) return null;
+    t.rank = this.#rank(plans, t.key);
+    t.hiddenBy = t.rank ? "" : hidden;
+    return t.hiddenBy ? this.#beep(this.#hidden(plans)) : null;
+  }
+
+  #hidden(plans) {
+    const t = this.target, best = plans[0];
+    const lead = best ? `${best.station} (${best.system}) is now #1` : "nothing is shown";
+    return { kind: "target", text: `Your target ${t.station} is hidden by the ${t.hiddenBy} - ${lead}. New destination?`,
+      keys: new Set([t.key, ...(best ? [keyOf(best)] : [])]),
+      copy: best ? { label: "COPY NEW #1", plan: best } : null, ok: "KEEP" };
+  }
+
   #target(plans, dropped) {
     const t = this.target;
     if (!t) return null;
     const rank = this.#rank(plans, t.key);
+    if (t.hiddenBy) {                          // hidden by a filter: say so until it shows again
+      if (!rank) return this.#hidden(plans);
+      t.hiddenBy = "";
+      t.rank = rank;
+      return null;
+    }
     if (rank === t.rank) return null;
     const best = plans[0];
     const lead = best ? `${best.station} (${best.system}) is now #1` : "nothing is ranked";

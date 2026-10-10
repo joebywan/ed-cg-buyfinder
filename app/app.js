@@ -18,8 +18,8 @@ import { JournalTail, readJournalFiles, readStationFile } from "./src/tail.js";
 import { Watcher, keyOf } from "./src/watch.js";
 import { VERSION } from "./src/version.js";
 import { checkForUpdate } from "./src/update.js";
-import { MAX_AGE_DEFAULT, ageTag, ageText, buildMixed, compareValues, mixedSortValue, padForShip,
-  whereItIs } from "./src/model.js";
+import { MAX_AGE_DEFAULT, ageTag, ageText, buildMixed, compareValues, hiddenBy, mixedSortValue, padForShip,
+  viewRows, whereItIs } from "./src/model.js";
 
 const $ = (id) => document.getElementById(id);
 const fmt = (n) => (n == null || n === "" ? "" : Number(n).toLocaleString("en-US"));
@@ -132,11 +132,21 @@ function shipFigures() {
 }
 
 function params() {
-  const p = { ...S.settings, dest: S.dest, verify_edsm: ui.prefs.verify_edsm, verify_top: ui.prefs.verify_top };
+  const p = { ...S.settings, dest: S.dest, verify_edsm: ui.prefs.verify_edsm, verify_top: ui.prefs.verify_top,
+              rank: rankRow };      // EDSM checks the rows the view shows, best first
   const f = shipFigures();
   if (f) for (const k of SHIP_FIELDS) if (f[k] != null) p[k] = f[k];
   return p;
 }
+
+/** The view filters and surface penalty as they stand now. Searches keep every
+ *  station; these only decide what is shown, so changing them needs no network. */
+function viewOpts() {
+  const { carriers, odyssey, pad } = S.settings;
+  return { carriers, odyssey, pad: shipFigures()?.pad ?? pad, penalty: ui.prefs.surface_penalty };
+}
+const viewed = (r = S.result) => (r ? viewRows(r.rows, viewOpts()) : []);
+const rankRow = (r) => viewRows([r], viewOpts())[0]?.cr_per_min ?? null;
 
 function renderControls() {
   const f = shipFigures();
@@ -202,7 +212,7 @@ function runFigures() {
   const hold = S.result?.p.hold ?? S.journal?.cargoCapacity ?? 1;
   const [real, n] = S.journal && S.dest ? runMinutes(S.journal.dockLog, S.dest.station) : [null, 0];
   if (real) return { hold, mins: real, basis: `the median of your last ${n}, flying time plus a two-minute turnaround at each end` };
-  const top = S.result && buildMixed(S.result.rows, S.result.p.hold)[0];
+  const top = plansNow()[0];
   return { hold, mins: top?.trip_minutes ?? null, basis: "the route plus a two-minute turnaround at each end" };
 }
 
@@ -251,7 +261,7 @@ function renderDest() {
 
 /** Tell the user when the top target changes: the window usually sits behind the game. */
 function checkBest() {
-  const top = buildMixed(S.result.rows, S.result.p.hold)[0];
+  const top = plansNow()[0];
   const key = top && `${top.station}\0${top.system}`;
   const was = S.lastBest;
   if (key) S.lastBest = key;
@@ -281,7 +291,7 @@ function chime() {
   });
 }
 
-const plansNow = () => (S.result ? buildMixed(S.result.rows, S.result.p.hold) : []);
+const plansNow = () => (S.result ? buildMixed(viewed(), S.result.p.hold) : []);
 
 /** Show (or clear) the one banner; sound and notify only when the watcher says so. */
 function showAlert(a) {
@@ -329,6 +339,38 @@ document.addEventListener("copy", () => {
 const sameDest = (a, b) => !!a && !!b && a.system === b.system && a.station === b.station
   && JSON.stringify(a.commodities) === JSON.stringify(b.commodities);
 
+// -- view filters ------------------------------------------------------------------
+
+const FILTER_NAME = { odyssey: "ODYSSEY filter (surface station)", carriers: "CARRIERS filter (fleet carrier)" };
+
+/** ODYSSEY, CARRIERS, PAD or the surface penalty changed: re-show the cached rows.
+ *
+ *  The user did this, so the new ranking is the baseline - no "top 5 changed".
+ *  The one thing worth saying is a copied target the filters now hide. Rows
+ *  that came into sight may make the verified top N: confirm just those. */
+function viewChanged() {
+  if (!S.result) return;
+  const t = S.watch.target;
+  const raw = t && S.result.rows.find((r) => r.station === t.station && r.system === t.system);
+  const why = raw && hiddenBy(raw, viewOpts());
+  const a = S.watch.rebase(plansNow(), why && (FILTER_NAME[why] ?? `PAD filter (largest pad is ${raw.pad || "unknown"})`));
+  if (a || S.alert?.kind !== "standing") showAlert(a);
+  render();
+  const more = S.verifyMore;
+  if (!more) return;
+  const gen = S.gen, prog = new Progress();
+  more(rankRow, (ev) => {
+    if (gen !== S.gen) return;
+    prog.update(ev);
+    $("prog-panel").hidden = false;
+    renderProgress(prog);
+  }).then(() => {
+    if (gen !== S.gen || S.searching) return;
+    $("prog-panel").hidden = true;
+    store.set("cgbuy.result", S.result);
+  });
+}
+
 // -- search ---------------------------------------------------------------------
 
 async function search() {
@@ -345,6 +387,7 @@ async function search() {
     return;
   }
   S.searching = true;
+  S.verifyMore = null;
   $("search").disabled = true;
   const gen = ++S.gen;
   const stale = () => gen !== S.gen;
@@ -388,6 +431,7 @@ async function search() {
       },
     });
     S.result = { ...res, p, at: Date.now() };
+    S.verifyMore = res.verifyMore;
     renderCredit();
     S.expanded = null;
     store.set("cgbuy.result", S.result);
@@ -519,7 +563,8 @@ const stationCell = (x, ...extra) =>
             // A carrier orbits nothing, so there is nothing to look up and
             // nothing to rewrite.
             "data-carrier": x.carrier || null },
-    ...extra, x.station, x.carrier ? h("span", { class: "fc" }, " FC") : null,
+    ...extra, x.station, x.planetary ? h("span", { class: "surface", title: `Surface station${x.body ? ` on ${x.body}` : ""}` }, " ⏚") : null,
+    x.carrier ? h("span", { class: "fc" }, " FC") : null,
     keyOf(x) === S.watch.target?.key ? h("span", { class: "copied-tag", title: "the station you last copied" }, " ◂ copied") : null);
 
 /** Rewrite the titles for one system in place, without a re-render.
@@ -558,6 +603,8 @@ const ageCell = (x) => h("td", { class: `num ${ageTag(x.updated)}`,
     : x.pending ? "unconfirmed - Spansh data, EDSM check pending" : null },
   ageText(x.updated), x.edsm ? h("span", { class: "ok" }, " ✓") : x.pending ? h("span", { class: "dim" }, " ?") : null);
 
+const penaltyTip = (c, x, m) => (c.id === "trip_minutes" && !m && x.penalty ? `+${x.penalty} min surface penalty` : null);
+
 /** One cell of a mixed-loads row: station row when `m` is null, else the commodity sub-row. */
 function mixedCell(c, plan, m, open, k) {
   if (c.id === "station" && !m) return stationCell(plan,
@@ -569,7 +616,7 @@ function mixedCell(c, plan, m, open, k) {
   const text = typeof v === "number" && !c.raw ? fmt(v) : v;
   const short = c.id === "tonnes" && !m && plan.short > 0;
   return h("td", { class: c.num ? `num${short ? " short" : ""}` : null,
-    title: short ? `${fmt(plan.short)} t short of your hold` : c.num ? null : text || null }, text ?? "");
+    title: short ? `${fmt(plan.short)} t short of your hold` : penaltyTip(c, plan, m) ?? (c.num ? null : text || null) }, text ?? "");
 }
 
 /** One footer line explaining the row markers, only the ones on screen. */
@@ -581,6 +628,7 @@ function renderLegend(plans, key) {
     plans.some((x) => key(x) === S.watch.target?.key) && [mark("copied-tag", "◂"), "copied"],
     plans.some((x) => x.confirmed) && [mark("ok", "✓"), "EDSM-confirmed"],
     plans.some((x) => x.pending) && [mark("dim", "?"), "awaiting EDSM"],
+    plans.some((x) => x.planetary) && [mark("surface", "⏚"), "surface station"],
   ].filter(Boolean);
   $("legend").replaceChildren(...items.flatMap(([m, t], i) => [i ? "   " : "", m, ` ${t}`]));
   $("legend").hidden = !items.length;
@@ -588,7 +636,7 @@ function renderLegend(plans, key) {
 
 function renderMixed(r) {
   const hold = r.p.hold;
-  const plans = buildMixed(r.rows, hold).slice(0, TOP_STATIONS);
+  const plans = buildMixed(viewed(r), hold).slice(0, TOP_STATIONS);
   const key = (x) => `${x.station}\0${x.system}`;
   const best = plans[0] && key(plans[0]);
   if (!S.expanded) S.expanded = new Set(plans.slice(0, EXPANDED_BY_DEFAULT).map(key));
@@ -617,13 +665,13 @@ function singleCell(c, x) {
   if (c.id === "updated") return ageCell(x);
   if (c.id === "src") return srcCell(x);
   const v = c.st(x);
-  return h("td", { class: c.num ? "num" : null, title: c.num ? null : v || null }, typeof v === "number" && !c.raw ? fmt(v) : v ?? "");
+  return h("td", { class: c.num ? "num" : null, title: penaltyTip(c, x) ?? (c.num ? null : v || null) }, typeof v === "number" && !c.raw ? fmt(v) : v ?? "");
 }
 
 function renderSingle(r) {
   const body = h("tbody", { onclick: copySystem, onmouseover: wantBody, onmouseout: dropBody });
   const cols = colsFor("single");
-  for (const x of sorted(r.rows, S.sort.single)) {
+  for (const x of sorted(viewed(r), S.sort.single)) {
     body.append(h("tr", { class: "row", "data-system": x.system }, ...cols.map((c) => singleCell(c, x))));
   }
   putTable("single", cols, headRow("single", cols), body);
@@ -695,15 +743,16 @@ function render() {
   }
   const stations = renderMixed(r);
   renderSingle(r);
-  $("empty").hidden = r.rows.length > 0;
+  const shown = viewed(r).length;
+  $("empty").hidden = shown > 0;
   $("empty").textContent = "Nothing within range makes a profit. Try a wider radius, a lower minimum supply, or carriers.";
   const maxAge = r.p.max_age_days;
   $("age-line").textContent = !maxAge ? "Age filter off: showing sources of any age."
     : r.allStale ? `Every source is older than ${maxAge} days — showing them anyway.`
-    : r.hiddenStale ? `Hid ${fmt(r.hiddenStale)} of ${fmt(r.hiddenStale + r.rows.length)} sources older than ${maxAge} days.`
+    : r.hiddenStale ? `Hid ${fmt(r.hiddenStale)} of ${fmt(r.hiddenStale + shown)} sources older than ${maxAge} days.`
     : `Nothing hidden: every source is within ${maxAge} days.`;
   const errs = r.errors?.length ? `  ·  failed: ${r.errors.join("; ")}` : "";
-  setStatus(`${stations} stations, ${fmt(r.rows.length)} sources for ${r.p.dest.station}${stale ? " (for a previous destination — search again)" : ""}${errs}`, !!errs);
+  setStatus(`${stations} stations, ${fmt(shown)} sources for ${r.p.dest.station}${stale ? " (for a previous destination — search again)" : ""}${errs}`, !!errs);
 }
 
 /** "Markets come from" names the source(s) the last search actually used. */
@@ -1005,6 +1054,7 @@ function bind() {
   $("controls").addEventListener("change", (e) => {
     readControls();
     if (e.target.id === "f-max_age_days") search();   // hidden rows aren't kept anywhere
+    else if (["f-odyssey", "f-carriers", "f-pad"].includes(e.target.id)) viewChanged();
   });
   $("f-eddn").onchange = () => {
     S.eddn = $("f-eddn").checked;
@@ -1079,6 +1129,7 @@ async function main() {
     store,
     journal: () => S.journal,
     reconnectJournal: () => connectJournal(new DesktopDir()),
+    onPenalty: viewChanged,
   });
   bind();
   window.addEventListener("cgbuy-font", () => render());   // unsaved column widths follow the font

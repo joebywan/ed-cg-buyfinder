@@ -110,6 +110,30 @@ export function tripMinutes(distLy, srcLs, cgLs, jumpEmpty, jumpLaden, cal = nul
   return Math.max(jumps + legs + (EST_DOCK_MIN + departMin) * 2, 0.5);
 }
 
+/** The view filters and the surface penalty, applied to cached rows.
+
+ Searches keep every station; ODYSSEY, CARRIERS and PAD only decide what is
+ shown, so toggling them needs no network. A planetary row gets `penalty`
+ extra minutes on its (unpenalised, stored) round trip and its rates are
+ re-derived from that, so changing the penalty re-scores from the cache too.
+ A blank pad (unknown) never fits, as before. */
+export function viewRows(rows, { carriers = false, odyssey = false, pad = "L", penalty = 0 } = {}) {
+  return rows.flatMap((r) => {
+    if (hiddenBy(r, { carriers, odyssey, pad })) return [];
+    if (!r.planetary || !(penalty > 0)) return [r];
+    const mins = r.trip_minutes + penalty;
+    return [{ ...r, trip_minutes: Math.round(mins * 10) / 10, penalty,
+      cr_per_min: Math.round(r.load * r.profit_per_t / mins), t_per_min: Math.round(r.load / mins * 10) / 10 }];
+  }).sort((a, b) => b.cr_per_min - a.cr_per_min);
+}
+
+/** Which view filter hides this row: "carriers", "odyssey" or "pad", else "". */
+export function hiddenBy(r, { carriers = false, odyssey = false, pad = "L" } = {}) {
+  if (r.carrier && !carriers) return "carriers";
+  if (r.planetary && !odyssey) return "odyssey";
+  return PAD_ORDER[r.pad] >= PAD_ORDER[pad] ? "" : "pad";
+}
+
 /** Rank stations by the best hold they can fill, topping up greedily. */
 export function buildMixed(rows, hold) {
   const stations = new Map();
@@ -139,7 +163,7 @@ export function buildMixed(rows, hold) {
     plans.push({
       station: top.station, system: top.system, ly: top.ly, ls: top.ls, carrier: top.carrier,
       // Properties of the station, so any of its rows can supply them.
-      planetary: top.planetary, stype: top.stype, body: top.body, pad: top.pad,
+      planetary: top.planetary, stype: top.stype, body: top.body, pad: top.pad, penalty: top.penalty || 0,
       // DATA AGE mark (`edsm` below is the watcher's "any"): confirmed only if every row in the load is.
       confirmed: used.every((r) => r.edsm), pending: used.some((r) => r.pending),
       updated: top.updated, tonnes: hold - remaining, short: remaining,

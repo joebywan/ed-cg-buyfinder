@@ -1,6 +1,6 @@
 // Market discovery through Ardent Insight, which follows EDDN live and,
 // unlike Spansh, lets a web page read its answers.
-import { MAX_AGE_DEFAULT, daysOld, isPlanetary, padFits, padLetter, tripMinutes } from "./model.js";
+import { MAX_AGE_DEFAULT, daysOld, isPlanetary, padLetter, tripMinutes } from "./model.js";
 import { symbolFor } from "./commodities.js";
 import { log, loggedFetch } from "./log.js";
 
@@ -24,10 +24,8 @@ function sourceRows(records, { commodity, sell, cgLs, origin, p, cal }) {
   const seen = new Set();
   for (const e of records) {
     const carrier = e.stationType === "FleetCarrier";
-    if (carrier && !p.carriers) continue;
+    // Carriers, surface stations and pad sizes are all kept: the page filters them.
     const planetary = isPlanetary(e.stationType);
-    if (planetary && !p.odyssey) continue;
-    if (!padFits(e.maxLandingPadSize, p.pad)) continue;
     const stock = e.stock || 0;
     const buy = e.buyPrice || 0;
     if (stock <= 0 || buy <= 0 || stock < p.min_supply) continue;
@@ -109,7 +107,6 @@ export async function buildRows(p, { fetchJson = defaultFetchJson, cal = null,
     const path = `${ARDENT}/system/name/${sys}/commodity/name/${encodeURIComponent(symbolFor(name))}`;
     const q = new URLSearchParams({ maxDistance: String(Math.ceil(p.range)),
       minVolume: String(Math.max(1, p.min_supply)), maxDaysAgo: String(days) });
-    if (!p.carriers) q.set("fleetCarriers", "false");
     try {
       // "nearby" leaves out the reference system itself, so ask for it separately.
       const [inSystem, nearby] = await Promise.all([

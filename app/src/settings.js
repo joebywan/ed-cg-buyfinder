@@ -7,7 +7,7 @@ import { FONT_DEFAULT, clampFont, loadPrefs } from "./prefs.js";
 const $ = (id) => document.getElementById(id);
 const tauri = () => window.__TAURI__;
 
-/** ctx: { store, journal() -> JournalState|null, reconnectJournal() } */
+/** ctx: { store, journal() -> JournalState|null, reconnectJournal(), onPenalty() } */
 export function initSettings(ctx) {
   const { store } = ctx;
   const prefs = loadPrefs(store.get("cgbuy.prefs", null));
@@ -47,6 +47,8 @@ export function initSettings(ctx) {
   };
   num("s-fresh", "cache_fresh_minutes");
   num("s-vtop", "verify_top");
+  num("s-surface", "surface_penalty");
+  $("s-surface").addEventListener("change", ctx.onPenalty);
   $("s-verify").onchange = () => { prefs.verify_edsm = $("s-verify").checked; save(); };
   $("s-update").onchange = () => { prefs.update_check = $("s-update").checked; save(); };
   $("s-sound").onchange = () => { prefs.alert_sound = $("s-sound").checked; save(); };
@@ -100,6 +102,7 @@ export function initSettings(ctx) {
       || "Needs a journal folder: it uploads as the commander the journal names.";
     $("s-fresh").value = prefs.cache_fresh_minutes;
     $("s-vtop").value = prefs.verify_top;
+    $("s-surface").value = prefs.surface_penalty;
     $("s-verify").checked = prefs.verify_edsm;
     $("s-sound").checked = prefs.alert_sound;
     $("s-update").checked = prefs.update_check;
