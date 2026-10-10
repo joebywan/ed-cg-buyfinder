@@ -10,103 +10,154 @@ permissions:
   contents: write
 
 jobs:
-  test:
-    runs-on: ubuntu-latest
+  # The app is a Tauri webview shell around app/, so these jobs need a Rust
+  # toolchain and, on Linux, WebKitGTK to link against.
+  #
+  # Why `cargo tauri build` and not tauri-apps/tauri-action: that action wants
+  # to create the release and upload the bundles itself, under Tauri's own
+  # file names. Here the tag job, the artifact hand-off, the renaming and the
+  # VirusTotal step already exist and own all of that, so we only need the
+  # builder, and the CLI is one cached `cargo install` away.
+  build-linux:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-node@v4
         with:
-          python-version: "3.12"
-      - name: Run the suite
-        # tkinter needs a display even to construct widgets
+          node-version: "22"
+      - name: Install the Tauri system libraries
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq python3-tk xvfb
-          xvfb-run -a python test_cgbuy.py
-
-  # Linux and Windows no longer share a build; see the comment in release.yml
-  # for why the Windows side is compiled with Nuitka into a folder instead of
-  # packed into a single self-extracting exe.
-  build-linux:
-    needs: test
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+          sudo apt-get install -y -qq libwebkit2gtk-4.1-dev build-essential curl wget file \
+            libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
+      - uses: dtolnay/rust-toolchain@stable
+      # Caches target/ and ~/.cargo/bin, which is what makes the cargo install
+      # below a no-op on every run after the first. Keep it ahead of that step.
+      - uses: Swatinem/rust-cache@v2
         with:
-          python-version: "3.12"
-      - run: sudo apt-get update -qq && sudo apt-get install -y -qq python3-tk
-      - name: Install PyInstaller
-        run: python -m pip install --quiet --upgrade pip pyinstaller
+          workspaces: app/src-tauri
+      - name: Install tauri-cli
+        run: command -v cargo-tauri || cargo install tauri-cli --version "^2" --locked
+      - name: Web tests, and the version stamps must agree with VERSION
+        working-directory: app
+        run: |
+          npm test
+          node stamp-version.mjs --check
+      # cargo test compiles the app, and the app embeds dist/, which only
+      # exists once prep.mjs has copied the web files into it.
+      - name: Rust tests
+        working-directory: app/src-tauri
+        run: |
+          node prep.mjs
+          cargo test
+      # AppImage and deb only: the default "all" would also try rpm.
       - name: Build
-        run: |
-          python -c "import shutil; shutil.copy('cgbuy', 'build_src.py')"
-          pyinstaller --onefile --name cgbuy --clean --noconfirm --windowed \
-            --distpath dist --workpath .build --specpath .build build_src.py
-      - name: Smoke test
-        run: |
-          OUT=$(dist/cgbuy --version)
-          echo "$OUT"
-          [ -n "$OUT" ] || { echo "::error::--version printed nothing"; exit 1; }
+        working-directory: app
+        run: cargo tauri build --bundles appimage,deb
+      # The raw binary links WebKitGTK dynamically, so it only runs where
+      # libwebkit2gtk-4.1 is installed; the AppImage carries its own copy and
+      # the deb declares the dependency. None of these keep the execute bit
+      # through a release upload, hence the chmod note in the release text.
       - name: Package
         run: |
-          BIN="cgbuy-$(echo "${{ github.sha }}" | cut -c1-7)-linux"
-          mv dist/cgbuy "$BIN"
-          chmod +x "$BIN"
-          tar -czf "$BIN.tar.gz" "$BIN"
-          echo "ASSET=$BIN" >> "$GITHUB_ENV"
+          B=app/src-tauri/target/release
+          PFX="cgbuy-$(echo "${{ github.sha }}" | cut -c1-7)"
+          cp "$B/cgbuy" "$PFX-linux"
+          chmod +x "$PFX-linux"
+          cp "$B"/bundle/appimage/*.AppImage "$PFX-linux.AppImage"
+          cp "$B"/bundle/deb/*.deb "$PFX-linux.deb"
+          ls -lh "$PFX"-linux*
       - uses: actions/upload-artifact@v4
         with:
-          name: ${{ env.ASSET }}
-          path: ${{ env.ASSET }}*
+          name: cgbuy-linux
+          path: cgbuy-*-linux*
 
   build-windows:
-    needs: test
     runs-on: windows-latest
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-node@v4
         with:
-          python-version: "3.12"
-      - name: Install Nuitka
-        run: python -m pip install --quiet --upgrade pip nuitka
+          node-version: "22"
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: app/src-tauri
+      - name: Install tauri-cli
+        shell: bash
+        run: command -v cargo-tauri || cargo install tauri-cli --version "^2" --locked
+      - name: Web tests, and the version stamps must agree with VERSION
+        shell: bash
+        working-directory: app
+        run: |
+          npm test
+          node stamp-version.mjs --check
+      # No installer: the NSIS setup.exe drew 3/75 heuristic VirusTotal hits
+      # (APEX, Cylance, DeepInstinct - common for unsigned installers) while
+      # the same exe zipped scored 0/75, so only the portable zip ships.
       - name: Build
         shell: bash
-        run: |
-          python -c "import shutil; shutil.copy('cgbuy', 'build_src.py')"
-          python -m nuitka --standalone --assume-yes-for-downloads \
-            --enable-plugin=tk-inter --windows-console-mode=disable \
-            --windows-icon-from-ico=icon.ico \
-            --output-dir=nuitka --output-filename=cgbuy.exe build_src.py
-      - name: Smoke test
-        shell: bash
-        run: |
-          OUT=$(nuitka/build_src.dist/cgbuy.exe --version)
-          echo "$OUT"
-          [ -n "$OUT" ] || { echo "::error::--version printed nothing"; exit 1; }
+        working-directory: app
+        run: cargo tauri build --no-bundle
+      # The portable zip is the bare release exe plus a README-FIRST.txt; WebView2
+      # ships with Windows 10/11 so a lone exe is enough on any current machine,
+      # and the README says what to do on one that lacks it.
       - name: Package
         shell: bash
         run: |
-          DIR="cgbuy-$(echo "${{ github.sha }}" | cut -c1-7)-windows"
-          mv nuitka/build_src.dist "$DIR"
+          B=app/src-tauri/target/release
+          PFX="cgbuy-$(echo "${{ github.sha }}" | cut -c1-7)"
+          DIR="$PFX-windows"
+          mkdir "$DIR"
+          cp "$B/cgbuy.exe" "$DIR/cgbuy.exe"
           # Notepad is the default handler and the .gitattributes eol=crlf rule
           # cannot be trusted to have survived checkout, so force CRLF here
-          # rather than shipping a file that opens as one long line. The \r*
-          # makes it idempotent whichever way the checkout landed.
+          # (the \r* makes it idempotent whichever way the checkout landed).
           sed "s/@VERSION@/$(echo "${{ github.sha }}" | cut -c1-7)/" packaging/README-FIRST.txt \
             | sed 's/\r*$/\r/' > "$DIR/README-FIRST.txt"
           7z a -tzip -mx=9 "$DIR.zip" "$DIR" > /dev/null
-          echo "ASSET=$DIR.zip" >> "$GITHUB_ENV"
+          ls -lh "$DIR.zip"
       - uses: actions/upload-artifact@v4
         with:
-          name: ${{ env.ASSET }}
-          path: ${{ env.ASSET }}
+          name: cgbuy-windows
+          path: |
+            cgbuy-*-windows.zip
+
+  # Preview of the VirusTotal verdict for the Windows zip, so a
+  # change that makes engines unhappy shows up on the PR instead of only after
+  # a release. release.yml still does the real scan; this one never writes the
+  # README badge (no --badge), only the job summary.
+  #
+  # Skipped, not failed, when there is no key: secrets are not passed to PRs
+  # from forks. It also spends quota (free key: 500 requests/day), hence PRs and
+  # manual runs only, not every push to main.
+  virustotal-preview:
+    needs: build-windows
+    if: github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    env:
+      VT_API_KEY: ${{ secrets.VT_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+        if: env.VT_API_KEY != ''
+      - uses: actions/download-artifact@v4
+        if: env.VT_API_KEY != ''
+        with: { name: cgbuy-windows }
+      - name: Scan and write the result to the job summary
+        if: env.VT_API_KEY != ''
+        # tee: the table goes to the run summary AND the job log, so it can be
+        # read with `gh run view --log` as well as on the run page.
+        run: python .github/scripts/vt_scan.py --when="for this pull request build" cgbuy-*-windows.zip | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: No VT_API_KEY here
+        if: env.VT_API_KEY == ''
+        run: echo "VT_API_KEY is not available (fork PR?), skipping the VirusTotal preview." >> "$GITHUB_STEP_SUMMARY"
 
   snapshot:
     # Every push to main refreshes a single rolling pre-release, so there is
     # always a current build to download without minting version numbers.
-    needs: [build-linux, build-windows]
+    needs: [build-linux, build-windows, build-linux, build-windows]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     steps:
@@ -138,16 +189,15 @@ jobs:
 
             Commit `${{ github.sha }}`
 
-            * `cgbuy-${{ env.SHORT }}-windows.zip` — Windows x86-64, extract the folder and run `cgbuy.exe`
-            * `cgbuy-${{ env.SHORT }}-linux.tar.gz` — Linux x86-64, extracts ready to run
-            * `cgbuy-${{ env.SHORT }}-linux` — the same binary, loose (needs `chmod +x`)
+            * `cgbuy-${{ env.SHORT }}-windows.zip` — Windows x86-64, extract the folder and run `cgbuy.exe` (needs WebView2, which Windows 10/11 include)
+            * `cgbuy-${{ env.SHORT }}-linux.AppImage` — Linux x86-64 (needs `chmod +x`)
+            * `cgbuy-${{ env.SHORT }}-linux.deb` — Debian/Ubuntu package
+            * `cgbuy-${{ env.SHORT }}-linux` — the bare binary (needs `chmod +x` and libwebkit2gtk-4.1)
 
-            Neither binary is signed and neither will be; Windows SmartScreen
-            will warn on first run. The Windows build ships as a folder because
-            the self-extracting one-file format was what engines flagged — see
-            [Antivirus](../../#antivirus),
-            or run from source: `python cgbuy`.
+            Nothing here is signed; Windows SmartScreen will warn on first run.
+            See [Antivirus](../../#antivirus).
           files: |
             cgbuy-${{ env.SHORT }}-windows.zip
+            cgbuy-${{ env.SHORT }}-linux.AppImage
+            cgbuy-${{ env.SHORT }}-linux.deb
             cgbuy-${{ env.SHORT }}-linux
-            cgbuy-${{ env.SHORT }}-linux.tar.gz

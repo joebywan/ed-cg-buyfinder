@@ -1,0 +1,146 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>cgbuy</title>
+<meta name="description" content="Elite Dangerous: where to buy for a community goal, ranked by credits per minute of round trip">
+<link rel="icon" href="icon.png">
+<link rel="stylesheet" href="style.css">
+<script type="module" src="app.js"></script>
+</head>
+<body>
+<header>
+  <h1>cgbuy</h1>
+  <div id="dest-line" class="dest-line">Finding the community goal…</div>
+  <div class="journal">
+    <span id="journal-status" class="dim"></span>
+    <button id="journal-btn" type="button">Connect journal folder</button>
+    <input id="journal-files" type="file" webkitdirectory multiple hidden>
+    <label id="eddn-label" class="check" hidden><input id="f-eddn" type="checkbox"> SHARE TO EDDN</label>
+    <span id="eddn-status" class="dim"></span>
+  </div>
+  <div id="standing" class="standing"></div>
+</header>
+
+<div id="alert" class="alert" role="alert" hidden>
+  <span id="alert-text"></span>
+  <button id="alert-copy" type="button"></button>
+  <button id="alert-ack" type="button"></button>
+</div>
+
+<div id="notice" class="notice" hidden>
+  <span id="notice-text"></span>
+  <button id="notice-close" type="button" aria-label="Dismiss">×</button>
+</div>
+
+<form id="controls" class="controls">
+  <span id="ctl-summary" class="ctl-summary" hidden></span>
+  <button id="ctl-edit" type="button" hidden title="Show the search controls and the destination">✎ EDIT</button>
+  <label>HOLD <input id="f-hold" type="number" min="1" step="1" inputmode="numeric"></label>
+  <label>RADIUS LY <input id="f-range" type="number" min="1" max="500" step="1"></label>
+  <label>JUMP EMPTY <input id="f-jump_empty" type="number" min="1" step="0.1"></label>
+  <label>JUMP LADEN <input id="f-jump_laden" type="number" min="1" step="0.1"></label>
+  <label>MIN SUPPLY <input id="f-min_supply" type="number" min="1" step="1"></label>
+  <label>PAD <select id="f-pad"><option>L</option><option>M</option><option>S</option></select></label>
+  <label>MAX AGE D <input id="f-max_age_days" type="number" min="0" step="1"></label>
+  <label class="check"><input id="f-carriers" type="checkbox"> CARRIERS</label>
+  <label id="source-label" hidden>SOURCE <select id="f-source"><option value="ardent">Ardent</option><option value="spansh">Spansh</option><option value="both">Both</option></select></label>
+  <label class="check" title="Include stations on a planet surface - settlements, planetary outposts and ports.&#10;&#10;Off, surface stations are hidden (instantly - nothing is re-fetched). A surface market is a different trip: a glide down, a pad on a rock, and a client that owns the expansion.&#10;&#10;Set from your journal the first time it sees a game, then it is yours. Hover a station to see which body it is on."><input id="f-odyssey" type="checkbox"> ODYSSEY</label>
+  <button id="search" type="submit" class="primary">SEARCH</button>
+</form>
+
+<details id="dest-panel" class="dest-panel">
+  <summary>DESTINATION</summary>
+  <div class="dest-grid">
+    <label>LIVE TRADE GOALS <select id="d-live"></select></label>
+    <label>SYSTEM <input id="d-system" autocomplete="off"></label>
+    <label>STATION <input id="d-station" autocomplete="off"></label>
+    <label class="wide">COMMODITIES <input id="d-commodities" placeholder="Gold, Silver, Palladium" autocomplete="off"></label>
+    <div class="dest-actions">
+      <button id="d-use" type="button" class="primary">USE THIS DESTINATION</button>
+      <button id="d-auto" type="button">BACK TO AUTOMATIC</button>
+    </div>
+    <p class="dim small">Automatic picks the goal your journal says you joined, else a live trade goal. One you set here always wins until you go back to automatic.</p>
+  </div>
+</details>
+
+<nav class="tabs" role="tablist">
+  <button id="tab-mixed" type="button" role="tab" aria-selected="true">BEST MIXED LOADS</button>
+  <button id="tab-single" type="button" role="tab" aria-selected="false">ALL SOURCES</button>
+  <button id="tab-log" type="button" role="tab" aria-selected="false">LOGS</button>
+  <button id="tab-settings" type="button" role="tab" aria-selected="false">SETTINGS</button>
+  <button id="tab-info" type="button" role="tab" aria-selected="false">INFO</button>
+  <button id="cols-btn" type="button" class="cols-btn" aria-expanded="false" title="Choose and reorder this table's columns; you can also drag headers to move them and their right edges to resize">COLUMNS</button>
+</nav>
+
+<main>
+  <div id="cols-panel" class="cols-panel" hidden></div>
+  <div id="wrap-mixed" class="table-wrap"><table id="t-mixed"></table></div>
+  <div id="wrap-single" class="table-wrap" hidden><table id="t-single"></table></div>
+  <div id="wrap-log" class="log-wrap" hidden>
+    <div class="log-bar"><button id="log-copy" type="button">COPY</button> <button id="log-clear" type="button">CLEAR</button></div>
+    <pre id="log-view" class="log-view"></pre>
+  </div>
+  <section id="wrap-settings" class="settings" hidden>
+    <h2>DISPLAY</h2>
+    <div class="row">Font size <button id="s-font-minus" type="button" aria-label="Smaller">-</button> <b id="s-font"></b> <button id="s-font-plus" type="button" aria-label="Larger">+</button>
+      <span class="dim small">Scales the whole window. Ctrl+plus, Ctrl+minus and Ctrl+0 do the same.</span></div>
+    <h2>DATA ACCURACY</h2>
+    <label class="row" title="A CG drains supply fast, so a week-old report of 40,000t may be a wasted trip. Raising this shows the older rows rather than hiding them; the AGE column is coloured so you can judge each one. Changing it re-runs the search.">Hide sources older than (days) <input id="s-max_age" type="number" min="0" step="1"></label>
+    <label class="row" title="On startup, a cached result newer than this is shown as-is; anything older starts a fresh search straight away, with the old numbers on screen while it runs.">Auto-refresh after (min) <input id="s-fresh" type="number" min="0" step="1"></label>
+    <div class="desktop-only">
+      <label class="row check"><input id="s-verify" type="checkbox"> Re-check top results against EDSM</label>
+      <label class="row">Stations to check <input id="s-vtop" type="number" min="0" step="1"></label>
+      <p class="dim small">Spansh finds candidates but lags days; EDSM follows EDDN live. EDSM rate-limits, so only the best few are re-checked. Applies to Spansh results.</p>
+    </div>
+    <h2>RANKING</h2>
+    <label class="row">Surface penalty (min) <input id="s-surface" type="number" min="0" step="1"></label>
+    <p class="dim small">Extra minutes a planetary landing costs you - glide, risk, hassle - so surface markets only rank high when they're clearly worth it. Added to the round trip of surface stations before credits per minute is worked out; 0 treats them like any other. Changes re-rank straight away.</p>
+    <div class="desktop-only">
+      <h2>ELITE DANGEROUS</h2>
+      <div class="row">Journal folder <input id="s-dir" size="50" placeholder="auto-detect" autocomplete="off">
+        <button id="s-dir-browse" type="button">BROWSE</button> <button id="s-dir-set" type="button">USE</button> <button id="s-dir-auto" type="button">AUTO-DETECT</button></div>
+      <p class="dim small"><span id="s-dir-now"></span> <span id="s-dir-msg" class="bad"></span><br>Auto-detected - change only if you have several installs.</p>
+    </div>
+    <h2>ALERTS</h2>
+    <label class="row check" title="A chime when the station you last copied moves or drops out of the results, when your reward band changes, or when EDSM has been rate-limiting for 5+ minutes."><input id="s-sound" type="checkbox"> Sound on changes</label>
+    <div class="desktop-only"><label class="row check" title="The same alerts as a system notification, for when the window sits behind the game - plus docking at the goal station without having registered."><input id="s-notify" type="checkbox"> Desktop notifications</label></div>
+    <h2>INTEGRATIONS</h2>
+    <div class="desktop-only"><label class="row check" title="One request to GitHub when the app starts; it only shows a link in the header, nothing is downloaded or installed."><input id="s-update" type="checkbox"> Check for a new version at startup</label></div>
+    <label class="row check"><input id="s-eddn" type="checkbox"> Share market data to EDDN</label>
+    <p id="s-eddn-note" class="dim small"></p>
+    <h2>BEST MIXED LOADS</h2>
+    <div class="row">Columns are chosen with the COLUMNS button on each table tab; drag headers to move them, their right edges to resize. <button id="s-cols-reset" type="button">RESET COLUMNS</button></div>
+    <h2>TRIP TIMINGS</h2>
+    <p id="s-cal" class="dim"></p>
+    <button id="s-reset" type="button">RESET TIMINGS</button>
+  </section>
+  <section id="wrap-info" class="settings" hidden>
+    <h2>DATA</h2>
+    <p>Market data from <span id="credit-src"><a href="https://ardent-insight.com" target="_blank" rel="noopener">Ardent Insight</a></span>, goals from Frontier.</p>
+    <p>Click a row to copy its system.</p>
+    <h2>ROW MARKERS</h2>
+    <p><span class="lg-top">▌</span> best cr/min &nbsp; <span class="lg-moved">▌</span> your copied station moved (see the alert) &nbsp; <span class="copied-tag">◂</span> the station you last copied</p>
+    <p><span class="ok">✓</span> confirmed by EDSM &nbsp; <span class="dim">?</span> Spansh data still awaiting EDSM &nbsp; <span class="surface">⏚</span> surface station &nbsp; <span class="fc">FC</span> fleet carrier</p>
+    <p class="dim small">The footer lists whichever of these are on screen.</p>
+    <h2>VERSION</h2>
+    <p>cgbuy <span id="info-version"></span> <span id="update-status" class="dim"></span>
+      <a id="update-link" href="https://github.com/joebywan/ed-cg-buyfinder/releases/latest" target="_blank" rel="noopener" hidden></a></p>
+  </section>
+  <p id="empty" class="empty" hidden></p>
+  <p id="age-line" class="age-line dim"></p>
+</main>
+
+<footer>
+  <div id="prog-panel" class="prog-panel" hidden>
+    <div id="progress" class="progress"><div id="progress-bar"></div></div>
+    <div id="prog-rows"></div>
+  </div>
+  <div id="legend" class="dim small" hidden></div>
+  <div id="status" class="status"></div>
+</footer>
+
+<div id="toast" class="toast" hidden></div>
+</body>
+</html>

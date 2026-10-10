@@ -104,7 +104,9 @@ def main():
         print("VT_API_KEY not set - skipping the VirusTotal scan.", file=sys.stderr)
         return 0
 
-    args = [a for a in sys.argv[1:] if not a.startswith("--badge=")]
+    args = [a for a in sys.argv[1:] if not a.startswith(("--badge=", "--when="))]
+    when = next((a.split("=", 1)[1] for a in sys.argv[1:] if a.startswith("--when=")),
+                "when this release was published")
     badge = next((a.split("=", 1)[1] for a in sys.argv[1:] if a.startswith("--badge=")), None)
     rows, all_flagged = [], {}
     for path in args:
@@ -115,13 +117,14 @@ def main():
             rows.append(row)
             if flagged:
                 all_flagged[os.path.basename(path)] = flagged
-            # The badge tracks the Windows download, which is the one that
-            # ever had detections. Matched on the name rather than on ".exe"
-            # so it survived the move from a one-file exe to a zipped folder.
-            if badge_path and ratio and "windows" in os.path.basename(path):
+            # The badge tracks the Windows download (the portable zip). Matched
+            # on the name rather than on ".exe" because that is a zip, and the
+            # Linux files are scanned and listed but must not move it.
+            name = os.path.basename(path)
+            if badge_path and ratio and "windows" in name:
                 bad, total = ratio
-                # Blue rather than red: a non-zero count here is the expected
-                # state for an unsigned one-file build, not a failure. The badge
+                # Blue rather than red: a non-zero count here is a heuristic hit on
+                # an unsigned exe, not a failure. The badge
                 # links to the explanation so the number is never context-free.
                 with open(badge_path, "w") as fh:
                     json.dump({"schemaVersion": 1,
@@ -137,7 +140,7 @@ def main():
            "| --- | --- | --- | --- |"]
     out += rows
     out += ["",
-            "Counts are a point-in-time reading taken when this release was published; "
+            f"Counts are a point-in-time reading taken {when}; "
             "follow the links for the current verdict."]
     if all_flagged:
         out.append("")

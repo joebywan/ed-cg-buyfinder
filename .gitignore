@@ -1,13 +1,5 @@
-.venv/
-__pycache__/
-*.pyc
-.build/
-dist/
-build_src.py
-cgbuy-linux
 # built artefacts belong in Releases, never in the repo
 *.exe
-cgbuy-windows/
-nuitka/
 *.zip
 *.tar.gz
+__pycache__/

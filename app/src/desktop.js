@@ -1,0 +1,117 @@
+// Running inside the Tauri desktop app (withGlobalTauri): the app supplies the
+// journal folder and the settings file, so neither browser API is needed.
+
+export const DESKTOP = typeof window !== "undefined" && !!window.__TAURI__;
+
+const tauriInvoke = (name, args) => window.__TAURI__.core.invoke(name, args);
+
+/** fetch through the Tauri http plugin (no CORS), parsed, with the same
+ *  `.status` on failure that Spansh's retry logic looks for. */
+export async function tauriFetchJson(url, init) {
+  const res = await window.__TAURI__.http.fetch(url, init);
+  if (!res.ok) throw Object.assign(new Error(`HTTP ${res.status} from ${new URL(url).host}`),
+    { status: res.status, retryAfter: res.headers?.get?.("retry-after") });
+  return res.json();
+}
+
+/** target=_blank links would otherwise open inside the app window, which has
+ *  no address bar and no way back. Hand them to the default browser instead.
+ *  Delegated on the document so links built later (credits, the update link)
+ *  are covered too. */
+export function openLinksExternally(root = document, opener = () => window.__TAURI__.opener) {
+  root.addEventListener("click", (e) => {
+    const a = e.target.closest?.("a[target=_blank][href^='http']");
+    if (!a) return;
+    e.preventDefault();
+    opener().openUrl(a.href).catch(() => {});
+  });
+}
+
+/** The old app's font_size is tk points (9 = normal), the same scale as prefs.font_size. */
+function legacyPrefs(l) {
+  const out = {};
+  for (const k of ["font_size", "cache_fresh_minutes", "verify_top"]) {
+    const n = Number(l[k]);
+    if (l[k] !== "" && l[k] != null && Number.isFinite(n) && n >= 0) out[k] = Math.round(n);
+  }
+  for (const k of ["notifications", "verify_edsm", "update_check"]) if (typeof l[k] === "boolean") out[k] = l[k];
+  return out;
+}
+
+/** The old Python app's cgbuy.json as this page's store keys. Only what maps
+ *  cleanly: search boxes, odyssey, the hand-set destination, EDDN on/off. */
+export function mapLegacy(legacy) {
+  const out = {};
+  if (!legacy || typeof legacy !== "object") return out;
+  const settings = {};
+  const p = legacy.params || {};
+  for (const k of ["hold", "range", "jump_empty", "jump_laden", "min_supply", "max_age_days"]) {
+    const n = Number(p[k]);
+    if (p[k] !== "" && p[k] != null && Number.isFinite(n) && n >= 0) settings[k] = n;
+  }
+  if (["L", "M", "S"].includes(legacy.pad_override)) settings.pad = legacy.pad_override;
+  if (typeof legacy.odyssey === "boolean") settings.odyssey = legacy.odyssey;
+  if (Object.keys(settings).length) out["cgbuy.settings"] = settings;
+  if (typeof legacy.eddn_enabled === "boolean") out["cgbuy.eddn"] = legacy.eddn_enabled;
+  const prefs = legacyPrefs(legacy);
+  if (Object.keys(prefs).length) out["cgbuy.prefs"] = prefs;
+  if (typeof legacy.journal_dir === "string" && legacy.journal_dir) out["cgbuy.journalDir"] = legacy.journal_dir;
+  const d = legacy.dest;
+  if (legacy.dest_manual && d?.system && d.station && d.commodities?.length) {
+    out["cgbuy.dest"] = { system: d.system, station: d.station, commodities: d.commodities,
+                          title: d.title || "", expiry: d.expiry || null };
+  }
+  return out;
+}
+
+/** Same get/set shape as the localStorage store, but synchronous over an
+ *  in-memory object that is saved behind it. */
+export async function loadStore(invoke = tauriInvoke, delay = 300) {
+  let data = {};
+  try {
+    const { store, legacy } = await invoke("config_load");
+    data = store ?? mapLegacy(legacy);
+  } catch { /* start empty */ }
+  let timer;
+  return {
+    get: (key, fallback) => (key in data ? data[key] : fallback),
+    set(key, value) {
+      data[key] = value;
+      clearTimeout(timer);
+      timer = setTimeout(() => invoke("config_save", { store: data }).catch(() => {}), delay);
+    },
+  };
+}
+
+/** The slice of FileSystemDirectoryHandle that JournalTail uses, over the
+ *  journal_list / journal_read commands. */
+export class DesktopDir {
+  constructor(invoke = tauriInvoke) { this.invoke = invoke; }
+
+  #file({ name, size, mtime_ms }) {
+    const read = (offset) => this.invoke("journal_read", { name, offset });
+    return {
+      kind: "file", name,
+      getFile: async () => ({
+        size, lastModified: mtime_ms, name,
+        slice: (from) => ({ arrayBuffer: () => read(from) }),
+        arrayBuffer: () => read(0),
+        text: async () => new TextDecoder().decode(await read(0)),
+      }),
+    };
+  }
+
+  async *entries() {
+    for (const f of await this.invoke("journal_list")) yield [f.name, this.#file(f)];
+  }
+
+  async getFileHandle(name) {
+    const f = (await this.invoke("journal_list")).find((x) => x.name === name);
+    if (!f) throw Object.assign(new Error(`${name} not found`), { name: "NotFoundError" });
+    return this.#file(f);
+  }
+}
+
+export const desktopStore = DESKTOP ? await loadStore() : null;
+if (DESKTOP) openLinksExternally();
+export const journalDir = DESKTOP ? await tauriInvoke("journal_dir").catch(() => null) : null;

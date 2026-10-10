@@ -1,0 +1,62 @@
+name: pages
+
+# The website: the same app/ as the desktop build, served as plain static
+# files. (It used to be deployed from the separate ed-cg-buyfinder-web repo.)
+#
+# ONE-TIME SETUP BY THE REPO OWNER: Settings -> Pages -> Build and deployment
+# -> Source must be set to "GitHub Actions" before the first deploy will work.
+# This workflow cannot and must not change that setting itself.
+#
+# Pull requests build the site and upload the artifact, which proves the
+# copy step and the tests are fine, but never deploy. Only main (and a manual
+# run from main) publishes.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Never cancel a deploy half way through.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+      - name: Run the suite
+        working-directory: app
+        run: npm test
+      # Only what the page loads: tests, package.json and src-tauri stay
+      # behind. src/desktop.js is in src/ and is harmless on the web: it only
+      # switches on when window.__TAURI__ exists, so DESKTOP is false here.
+      - name: Collect the site
+        run: |
+          mkdir _site
+          cd app
+          cp -r index.html app.js style.css icon.png src ../_site/
+      - uses: actions/upload-pages-artifact@v5
+        with:
+          path: _site
+
+  deploy:
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - id: deploy
+        uses: actions/deploy-pages@v5
