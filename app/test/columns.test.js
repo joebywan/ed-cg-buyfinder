@@ -76,3 +76,14 @@ test("mixed plans: EDSM confirmed only if all rows are, pending if any; pad carr
   assert.equal(plan([r("A", {})]).pending, false);
   assert.equal(plan([r("A", {})]).pad, "M");
 });
+
+test("fitWidth: content width, text columns capped, unmeasured falls back to the default", async () => {
+  const { fitWidth, MIXED_COLS } = await import("../src/columns.js");
+  const col = (id) => MIXED_COLS.find((c) => c.id === id);
+  assert.equal(fitWidth(95.2, col("total"), 13), 96);            // numbers: exactly what they need
+  assert.equal(fitWidth(5000, col("total"), 13), 1200);          // only the global ceiling
+  assert.equal(fitWidth(900, col("system"), 13), 22 * 13);       // long text stops at its cap
+  assert.equal(fitWidth(150, col("system"), 13), 150);
+  assert.equal(fitWidth(0, col("station"), 13), 18 * 13);        // could not measure
+  assert.equal(fitWidth(10, col("pad"), 13), 30);                // never vanishes
+});

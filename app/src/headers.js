@@ -13,14 +13,28 @@ if (typeof document !== "undefined") {
 const clampW = (w) => Math.min(MAX_W, Math.max(MIN_W, Math.round(w)));
 
 /** Give `table` a <colgroup> of `widths` (px, one per th) and wire its headers.
- *  onWidth(id, px) after a resize; onMove(id, targetId, after) after a reorder. */
-export function wireHeaders(table, ids, widths, { onWidth, onMove }) {
+ *  onWidth(id, px) after a resize; onMove(id, targetId, after) after a reorder.
+ *  auto[i], when a function, sizes column i from its measured content (px). */
+export function wireHeaders(table, ids, widths, { onWidth, onMove, auto = [] }) {
   const cols = widths.map((w) => { const c = document.createElement("col"); c.style.width = `${w}px`; return c; });
   const group = document.createElement("colgroup");
   group.append(...cols);
   table.prepend(group);
   const fit = () => { table.style.width = `${cols.reduce((n, c) => n + parseFloat(c.style.width), 0)}px`; };
   fit();
+  // Content width of every column at once (cells clip, so measure from the
+  // narrowest): one layout pass, not one per column.
+  const measure = () => {
+    cols.forEach((c) => { c.style.width = `${MIN_W}px`; });
+    table.style.width = "1px";
+    const need = ids.map((_, i) => Math.max(0, ...[...table.rows].map((r) => r.cells[i]?.scrollWidth ?? 0)));
+    return need;
+  };
+  if (auto.some(Boolean)) {
+    const need = measure();
+    cols.forEach((c, i) => { c.style.width = `${clampW(auto[i] ? auto[i](need[i] + 4) : widths[i])}px`; });
+    fit();
+  }
   const ths = [...table.querySelectorAll("thead th")];
   ths.forEach((th, i) => {
     th.dataset.col = ids[i];
@@ -34,8 +48,20 @@ export function wireHeaders(table, ids, widths, { onWidth, onMove }) {
       e.preventDefault();
       grip.setPointerCapture(e.pointerId);
       const x0 = e.clientX, w0 = parseFloat(cols[i].style.width);
-      grip.onpointermove = (m) => { cols[i].style.width = `${clampW(w0 + m.clientX - x0)}px`; fit(); };
+      // A line through the whole table at the edge being moved.
+      const line = document.createElement("div");
+      line.className = "resize-line";
+      table.parentElement.append(line);
+      th.classList.add("resizing");
+      const place = () => {
+        line.style.left = `${cols.slice(0, i + 1).reduce((n, c) => n + parseFloat(c.style.width), 0) - 1}px`;
+        line.style.height = `${table.offsetHeight}px`;
+      };
+      place();
+      grip.onpointermove = (m) => { cols[i].style.width = `${clampW(w0 + m.clientX - x0)}px`; fit(); place(); };
       grip.onpointerup = () => {
+        line.remove();
+        th.classList.remove("resizing");
         grip.onpointermove = grip.onpointerup = null;
         onWidth(ids[i], parseFloat(cols[i].style.width));
       };
@@ -43,9 +69,10 @@ export function wireHeaders(table, ids, widths, { onWidth, onMove }) {
     grip.addEventListener("click", (e) => e.stopPropagation());
     grip.addEventListener("dblclick", (e) => {
       e.stopPropagation();
-      cols[i].style.width = `${MIN_W}px`;       // cells clip, so measure from the narrowest
-      const need = Math.max(...[...table.rows].map((r) => r.cells[i]?.scrollWidth ?? 0));
-      cols[i].style.width = `${clampW(need + 2)}px`;
+      const w0 = cols.map((c) => c.style.width);
+      const need = measure()[i];
+      cols.forEach((c, j) => { c.style.width = w0[j]; });
+      cols[i].style.width = `${clampW(need + 4)}px`;
       fit();
       onWidth(ids[i], parseFloat(cols[i].style.width));
     });

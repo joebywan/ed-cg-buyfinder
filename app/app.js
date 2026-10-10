@@ -6,7 +6,7 @@ import { folderTooltip } from "./src/browser.js";
 import { FRONTIER_URL, historyFromLines, parseLive, standing, standingChanges, standingText, suggestDestination } from "./src/cg.js";
 import { DESKTOP, DesktopDir, desktopStore, journalDir, tauriFetchJson } from "./src/desktop.js";
 import { initSettings } from "./src/settings.js";
-import { VIEWS, colWidths, moveCol, placeCol, toggleCol } from "./src/columns.js";
+import { VIEWS, colWidths, fitWidth, moveCol, placeCol, toggleCol } from "./src/columns.js";
 import { wireHeaders } from "./src/headers.js";
 import { Sender } from "./src/eddn.js";
 import { JournalState, runMinutes } from "./src/journal.js";
@@ -479,8 +479,11 @@ function putTable(view, cols, head, body) {
   const table = $(`t-${view}`);
   table.replaceChildren(head, body);
   const em = parseFloat(getComputedStyle(table).fontSize) || 14;
-  const widths = colWidths(cols.map((c) => c.id), ui.prefs[`colw_${view}`], view, em);
+  const saved = ui.prefs[`colw_${view}`];
+  const widths = colWidths(cols.map((c) => c.id), saved, view, em);
   wireHeaders(table, cols.map((c) => c.id), widths, {
+    // No dragged width yet: fit the content, so numbers never clip.
+    auto: cols.map((c) => (c.id in saved ? null : (need) => fitWidth(need, c, em))),
     onWidth: (id, w) => { ui.prefs[`colw_${view}`][id] = w; ui.save(); },
     onMove: (id, target, after) => setCols(view, placeCol(ui.prefs[`cols_${view}`], id, target, after)),
   });
@@ -505,8 +508,8 @@ function copySystem(ev) {
 const bodies = new BodyLookup({ onResolved: retitle });
 
 function stationTitle(x) {
-  return whereItIs(x, { body: bodies.known(x.system, x.station),
-                        waiting: bodies.waiting(x.system) });
+  return `${x.station}\n${whereItIs(x, { body: bodies.known(x.system, x.station),
+                                         waiting: bodies.waiting(x.system) })}`;
 }
 
 const stationCell = (x, ...extra) =>
@@ -566,7 +569,7 @@ function mixedCell(c, plan, m, open, k) {
   const text = typeof v === "number" && !c.raw ? fmt(v) : v;
   const short = c.id === "tonnes" && !m && plan.short > 0;
   return h("td", { class: c.num ? `num${short ? " short" : ""}` : null,
-    title: short ? `${fmt(plan.short)} t short of your hold` : null }, text ?? "");
+    title: short ? `${fmt(plan.short)} t short of your hold` : c.num ? null : text || null }, text ?? "");
 }
 
 /** One footer line explaining the row markers, only the ones on screen. */
@@ -614,7 +617,7 @@ function singleCell(c, x) {
   if (c.id === "updated") return ageCell(x);
   if (c.id === "src") return srcCell(x);
   const v = c.st(x);
-  return h("td", { class: c.num ? "num" : null }, typeof v === "number" && !c.raw ? fmt(v) : v ?? "");
+  return h("td", { class: c.num ? "num" : null, title: c.num ? null : v || null }, typeof v === "number" && !c.raw ? fmt(v) : v ?? "");
 }
 
 function renderSingle(r) {
@@ -1078,6 +1081,7 @@ async function main() {
     reconnectJournal: () => connectJournal(new DesktopDir()),
   });
   bind();
+  window.addEventListener("cgbuy-font", () => render());   // unsaved column widths follow the font
   setupJournalButton();
   $("source-label").hidden = !DESKTOP;
   renderControls();

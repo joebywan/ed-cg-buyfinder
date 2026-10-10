@@ -2,14 +2,14 @@
 // station row (st) and on a commodity sub-row (ch); null means blank. Values
 // are raw - the page formats numbers (except `raw` columns). `key` is the field
 // the header sorts by (station rows only; sub-rows are not sorted). `w` is the
-// default width in em.
+// default width in em, `max` (em) caps the auto-fit of a long text column.
 export const MIXED_COLS = [
   { id: "system", label: "SYSTEM", title: "Star system the station is in.", key: "system",
-    st: (p) => p.system, w: 14 },
+    st: (p) => p.system, w: 14, max: 22 },
   { id: "ly", label: "DIST\n(LY)", num: true, key: "ly", raw: true, title: "Distance in light years from the goal system.",
     st: (p) => p.ly },
   { id: "station", label: "STATION", key: "station", title: "Station name; expand it to see what to buy there.",
-    st: (p) => p.station, ch: (m) => m.commodity, w: 18 },
+    st: (p) => p.station, ch: (m) => m.commodity, w: 18, max: 30 },
   { id: "ls", label: "ARRIVAL\n(LS)", num: true, key: "ls", title: "Supercruise distance from the arrival star to the station, in light seconds.",
     st: (p) => p.ls },
   { id: "updated", label: "DATA\nAGE", num: true, key: "updated", title: "How old the market report is; green is fresh, red is stale.",
@@ -29,16 +29,16 @@ export const MIXED_COLS = [
   { id: "trip_minutes", label: "TRIP\n(MIN)", num: true, key: "trip_minutes", raw: true, title: "Estimated round-trip minutes, goal to station and back.",
     st: (p) => p.trip_minutes },
   { id: "body", label: "BODY", key: "body", title: "Planet or star the station orbits or sits on, when known.",
-    st: (p) => p.body, w: 14 },
+    st: (p) => p.body, w: 14, max: 22 },
   { id: "pad", label: "PAD", key: "pad", title: "Largest landing pad the station has (L, M or S); blank when the source did not say.",
     st: (p) => p.pad, w: 6 },
 ];
 
 // ALL SOURCES: one row per station+commodity, so a column has one renderer.
 export const SINGLE_COLS = [
-  { id: "commodity", label: "COMMODITY", key: "commodity", title: "What to buy.", st: (x) => x.commodity, w: 14 },
-  { id: "system", label: "SYSTEM", key: "system", title: "Star system the station is in.", st: (x) => x.system, w: 14 },
-  { id: "station", label: "STATION", key: "station", title: "Station name.", st: (x) => x.station, w: 18 },
+  { id: "commodity", label: "COMMODITY", key: "commodity", title: "What to buy.", st: (x) => x.commodity, w: 14, max: 22 },
+  { id: "system", label: "SYSTEM", key: "system", title: "Star system the station is in.", st: (x) => x.system, w: 14, max: 22 },
+  { id: "station", label: "STATION", key: "station", title: "Station name.", st: (x) => x.station, w: 18, max: 30 },
   { id: "ly", label: "DIST\n(LY)", num: true, raw: true, key: "ly", title: "Distance in light years from the goal system.", st: (x) => x.ly },
   { id: "ls", label: "ARRIVAL\n(LS)", num: true, key: "ls", title: "Supercruise distance from the arrival star to the station, in light seconds.", st: (x) => x.ls },
   { id: "supply", label: "SUPPLY\n(t)", num: true, key: "supply", title: "Stock for sale, in tonnes.", st: (x) => x.supply },
@@ -50,7 +50,7 @@ export const SINGLE_COLS = [
   { id: "t_per_min", label: "T/MIN", num: true, raw: true, key: "t_per_min", title: "Tonnes moved per minute of round trip.", st: (x) => x.t_per_min },
   { id: "updated", label: "DATA\nAGE", num: true, key: "updated", title: "How old the market report is; green is fresh, red is stale.", st: (x) => x.updated, w: 8 },
   { id: "src", label: "SRC", key: "src", sortable: false, desktop: true, title: "Which service the row came from: Ardent or Spansh.", st: (x) => x.src, w: 5 },
-  { id: "body", label: "BODY", key: "body", title: "Planet or star the station orbits or sits on, when known.", st: (x) => x.body, w: 14 },
+  { id: "body", label: "BODY", key: "body", title: "Planet or star the station orbits or sits on, when known.", st: (x) => x.body, w: 14, max: 22 },
   { id: "pad", label: "PAD", key: "pad", title: "Largest landing pad the station has (L, M or S); blank when the source did not say.", st: (x) => x.pad, w: 6 },
 ];
 
@@ -86,6 +86,14 @@ export function cleanWidths(saved, view = "mixed") {
 /** Pixel width of each id in `list`: the saved one, else the registry default (em). */
 export function colWidths(list, saved, view, emPx) {
   return list.map((id) => saved[id] ?? Math.round((VIEWS[view].cols.find((c) => c.id === id).w ?? 7) * emPx));
+}
+
+/** Width of an unsaved column: fit its measured content (`need` px; 0 = could not
+ *  measure, so the em default), but a long text column stops at its `max` em. */
+export function fitWidth(need, col, emPx) {
+  if (!(need > 0)) return Math.round((col.w ?? 7) * emPx);
+  const cap = col.max ? col.max * emPx : MAX_W;
+  return Math.min(MAX_W, Math.max(MIN_W, Math.min(Math.ceil(need), Math.round(cap))));
 }
 
 /** Show or hide `id`. STATION stays: it holds the expand arrow. */

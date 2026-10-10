@@ -146,18 +146,19 @@ main[data-view="log"] #empty, main[data-view="log"] #age-line { display: none; }
 
 /* main scrolls both ways, so the sideways scrollbar sits above the pinned
    footer instead of at the far end of a long table */
-.table-wrap { overflow-x: visible; }
+.table-wrap { overflow-x: visible; position: relative; }
 table { width: 100%; border-collapse: collapse; white-space: nowrap; table-layout: fixed; }
 td, th { overflow: hidden; text-overflow: ellipsis; }
 .grip { position: absolute; top: 0; right: 0; width: 7px; height: 100%; cursor: col-resize; touch-action: none; }
-.grip:hover { background: var(--or-dim); }
-th.dragging { opacity: .5; }
+.grip:hover, th.resizing .grip { background: linear-gradient(to left, var(--or) 0 2px, rgba(255, 113, 0, .18) 2px); }
+.resize-line { position: absolute; top: 0; width: 1px; background: var(--or); pointer-events: none; z-index: 2; }
+th.dragging { opacity: .5; cursor: grabbing; }
 th.drop-before { box-shadow: inset 3px 0 var(--or); }
 th.drop-after { box-shadow: inset -3px 0 var(--or); }
 th {
   position: sticky;
   top: 0;
-  background: var(--bg);
+  background: var(--bg) linear-gradient(var(--line), var(--line)) right / 1px 100% no-repeat;   /* column divider; a border would not follow the sticky cell */
   color: var(--or);
   font-weight: normal;
   text-align: left;
@@ -172,7 +173,7 @@ th { vertical-align: bottom; line-height: 1.15; }
 .cols-panel button { padding: 0 6px; }
 .cols-panel .row label { flex: 1; }
 .cols-panel .row.off { color: var(--dim); }
-th.sortable { cursor: pointer; }
+th { cursor: grab; }
 th.sortable:hover { color: #ff9a4a; }
 th.num, td.num { text-align: right; }
 td { padding: 3px 8px; border-bottom: 1px solid #1a1512; }

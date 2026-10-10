@@ -17,6 +17,7 @@ export function initSettings(ctx) {
   const applyFont = () => {
     document.documentElement.style.zoom = String(prefs.font_size / FONT_DEFAULT);
     $("s-font").textContent = String(prefs.font_size);
+    window.dispatchEvent(new Event("cgbuy-font"));
   };
   const bumpFont = (d) => { prefs.font_size = d ? clampFont(prefs.font_size + d) : FONT_DEFAULT; applyFont(); save(); };
   $("s-font-minus").onclick = () => bumpFont(-1);
