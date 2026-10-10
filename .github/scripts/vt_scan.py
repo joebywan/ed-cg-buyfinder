@@ -104,7 +104,9 @@ def main():
         print("VT_API_KEY not set - skipping the VirusTotal scan.", file=sys.stderr)
         return 0
 
-    args = [a for a in sys.argv[1:] if not a.startswith("--badge=")]
+    args = [a for a in sys.argv[1:] if not a.startswith(("--badge=", "--when="))]
+    when = next((a.split("=", 1)[1] for a in sys.argv[1:] if a.startswith("--when=")),
+                "when this release was published")
     badge = next((a.split("=", 1)[1] for a in sys.argv[1:] if a.startswith("--badge=")), None)
     rows, all_flagged = [], {}
     for path in args:
@@ -142,7 +144,7 @@ def main():
            "| --- | --- | --- | --- |"]
     out += rows
     out += ["",
-            "Counts are a point-in-time reading taken when this release was published; "
+            f"Counts are a point-in-time reading taken {when}; "
             "follow the links for the current verdict."]
     if all_flagged:
         out.append("")

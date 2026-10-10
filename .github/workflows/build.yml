@@ -245,7 +245,9 @@ jobs:
         with: { name: cgbuy-desktop-windows }
       - name: Scan and write the result to the job summary
         if: env.VT_API_KEY != ''
-        run: python .github/scripts/vt_scan.py cgbuy-desktop-*-windows-setup.exe cgbuy-desktop-*-windows-portable.zip >> "$GITHUB_STEP_SUMMARY"
+        # tee: the table goes to the run summary AND the job log, so it can be
+        # read with `gh run view --log` as well as on the run page.
+        run: python .github/scripts/vt_scan.py --when="for this pull request build" cgbuy-desktop-*-windows-setup.exe cgbuy-desktop-*-windows-portable.zip | tee -a "$GITHUB_STEP_SUMMARY"
       - name: No VT_API_KEY here
         if: env.VT_API_KEY == ''
         run: echo "VT_API_KEY is not available (fork PR?), skipping the VirusTotal preview." >> "$GITHUB_STEP_SUMMARY"
