@@ -118,7 +118,12 @@ def main():
             # The badge tracks the Windows download, which is the one that
             # ever had detections. Matched on the name rather than on ".exe"
             # so it survived the move from a one-file exe to a zipped folder.
-            if badge_path and ratio and "windows" in os.path.basename(path):
+            # The Tauri build's Windows files (cgbuy-desktop-*) are scanned and
+            # listed but must not move the badge: it still describes the
+            # download the README points at. Drop the "desktop" test when the
+            # desktop build replaces the Python one.
+            name = os.path.basename(path)
+            if badge_path and ratio and "windows" in name and "desktop" not in name:
                 bad, total = ratio
                 # Blue rather than red: a non-zero count here is the expected
                 # state for an unsigned one-file build, not a failure. The badge

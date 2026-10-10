@@ -43,11 +43,16 @@ jobs:
         with:
           python-version: "3.12"
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
       - name: Tests must pass before anything is tagged
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq python3-tk xvfb
           xvfb-run -a python test_cgbuy.py
+          (cd app && npm test)
 
       # version.py is the only place the number lives: cgbuy, cg.py, verify.py
       # and eddn.py all import it, so bumping one line bumps the --version
@@ -65,6 +70,11 @@ jobs:
               raise SystemExit("could not find the VERSION line in version.py")
           open("version.py", "w").write(new)
           PY
+          # The desktop app (app/) takes its version from version.py too:
+          # this copies it into src/version.js, tauri.conf.json, Cargo.toml
+          # and Cargo.lock, and --check fails the job if any was missed.
+          node app/stamp-version.mjs
+          node app/stamp-version.mjs --check
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git commit -am "Release v$V"
@@ -171,8 +181,134 @@ jobs:
           name: cgbuy-v${{ needs.tag.outputs.version }}-windows.zip
           path: cgbuy-v${{ needs.tag.outputs.version }}-windows.zip
 
+  # The Tauri rewrite of the app, built alongside the Python one above and
+  # shipped under cgbuy-desktop-* names so the two never collide. It is a
+  # webview shell around app/, so unlike the Python jobs these need a Rust
+  # toolchain and, on Linux, WebKitGTK to link against.
+  #
+  # Why `cargo tauri build` and not tauri-apps/tauri-action: that action wants
+  # to create the release and upload the bundles itself, under Tauri's own
+  # file names. Here the tag job, the artifact hand-off, the renaming and the
+  # VirusTotal step already exist and own all of that, so we only need the
+  # builder, and the CLI is one cached `cargo install` away.
+  build-desktop-linux:
+    needs: tag
+    runs-on: ubuntu-22.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: v${{ needs.tag.outputs.version }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Install the Tauri system libraries
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq libwebkit2gtk-4.1-dev build-essential curl wget file \
+            libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
+      - uses: dtolnay/rust-toolchain@stable
+      # Caches target/ and ~/.cargo/bin, which is what makes the cargo install
+      # below a no-op on every run after the first. Keep it ahead of that step.
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: app/src-tauri
+      - name: Install tauri-cli
+        run: command -v cargo-tauri || cargo install tauri-cli --version "^2" --locked
+      - name: Web tests, and the version stamps must agree with version.py
+        working-directory: app
+        run: |
+          npm test
+          node stamp-version.mjs --check
+      # cargo test compiles the app, and the app embeds dist/, which only
+      # exists once prep.mjs has copied the web files into it.
+      - name: Rust tests
+        working-directory: app/src-tauri
+        run: |
+          node prep.mjs
+          cargo test
+      # AppImage and deb only: the default "all" would also try rpm.
+      - name: Build
+        working-directory: app
+        run: cargo tauri build --bundles appimage,deb
+      # The raw binary links WebKitGTK dynamically, so it only runs where
+      # libwebkit2gtk-4.1 is installed; the AppImage carries its own copy and
+      # the deb declares the dependency. Like the Python binary, none of these
+      # keep the execute bit through a release upload, hence the chmod note in
+      # the release text.
+      - name: Package
+        run: |
+          B=app/src-tauri/target/release
+          PFX="cgbuy-desktop-v${{ needs.tag.outputs.version }}"
+          cp "$B/cgbuy" "$PFX-linux"
+          chmod +x "$PFX-linux"
+          cp "$B"/bundle/appimage/*.AppImage "$PFX-linux.AppImage"
+          cp "$B"/bundle/deb/*.deb "$PFX-linux.deb"
+          ls -lh "$PFX"-linux*
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cgbuy-desktop-linux
+          path: cgbuy-desktop-*-linux*
+
+  build-desktop-windows:
+    needs: tag
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: v${{ needs.tag.outputs.version }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: app/src-tauri
+      - name: Install tauri-cli
+        shell: bash
+        run: command -v cargo-tauri || cargo install tauri-cli --version "^2" --locked
+      - name: Web tests, and the version stamps must agree with version.py
+        shell: bash
+        working-directory: app
+        run: |
+          npm test
+          node stamp-version.mjs --check
+      # NSIS only: the default "all" would also build an .msi, which needs a
+      # WiX download and is a second installer nobody asked for.
+      - name: Build
+        shell: bash
+        working-directory: app
+        run: cargo tauri build --bundles nsis
+      # Two downloads from one build. The setup.exe is Tauri's NSIS installer
+      # (it fetches WebView2 itself if missing). The portable zip is the bare
+      # release exe plus a README-FIRST.txt; WebView2 ships with Windows 10/11
+      # so a lone exe is enough on any current machine, and the README says
+      # what to do on one that lacks it. Unlike the Python build there are no
+      # DLLs beside the exe, so the zip really is one file plus the note.
+      - name: Package
+        shell: bash
+        run: |
+          B=app/src-tauri/target/release
+          PFX="cgbuy-desktop-v${{ needs.tag.outputs.version }}"
+          cp "$B"/bundle/nsis/*-setup.exe "$PFX-windows-setup.exe"
+          DIR="$PFX-windows-portable"
+          mkdir "$DIR"
+          cp "$B/cgbuy.exe" "$DIR/cgbuy.exe"
+          # Same CRLF handling as the Python package step, for the same reason.
+          sed "s/@VERSION@/v${{ needs.tag.outputs.version }}/" packaging/README-FIRST-desktop.txt \
+            | sed 's/\r*$/\r/' > "$DIR/README-FIRST.txt"
+          7z a -tzip -mx=9 "$DIR.zip" "$DIR" > /dev/null
+          ls -lh "$PFX"-windows*
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cgbuy-desktop-windows
+          path: |
+            cgbuy-desktop-*-windows-setup.exe
+            cgbuy-desktop-*-windows-portable.zip
+
   publish:
-    needs: [tag, build-linux, build-windows]
+    needs: [tag, build-linux, build-windows, build-desktop-linux, build-desktop-windows]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
@@ -191,7 +327,17 @@ jobs:
             * `cgbuy-v${{ needs.tag.outputs.version }}-linux.tar.gz` — Linux x86-64, extracts ready to run
             * `cgbuy-v${{ needs.tag.outputs.version }}-linux` — the same binary, loose (needs `chmod +x`)
 
-            Neither binary is signed and neither will be; Windows SmartScreen
+            The new Tauri desktop build, published alongside for now:
+
+            * `cgbuy-desktop-v${{ needs.tag.outputs.version }}-windows-setup.exe` — Windows installer
+            * `cgbuy-desktop-v${{ needs.tag.outputs.version }}-windows-portable.zip` — Windows, a single `cgbuy.exe`
+              with a `README-FIRST.txt`; needs the WebView2 runtime, which
+              Windows 10/11 already has
+            * `cgbuy-desktop-v${{ needs.tag.outputs.version }}-linux.AppImage` — Linux x86-64 (needs `chmod +x`)
+            * `cgbuy-desktop-v${{ needs.tag.outputs.version }}-linux.deb` — Debian/Ubuntu package
+            * `cgbuy-desktop-v${{ needs.tag.outputs.version }}-linux` — the bare binary (needs `chmod +x` and libwebkit2gtk-4.1)
+
+            Neither Python binary is signed and neither will be; Windows SmartScreen
             will warn on first run. The Windows build ships as a folder rather
             than a single file because the self-extracting one-file format was
             what antivirus engines flagged — see
@@ -201,6 +347,11 @@ jobs:
             cgbuy-v${{ needs.tag.outputs.version }}-windows.zip
             cgbuy-v${{ needs.tag.outputs.version }}-linux
             cgbuy-v${{ needs.tag.outputs.version }}-linux.tar.gz
+            cgbuy-desktop-v${{ needs.tag.outputs.version }}-windows-setup.exe
+            cgbuy-desktop-v${{ needs.tag.outputs.version }}-windows-portable.zip
+            cgbuy-desktop-v${{ needs.tag.outputs.version }}-linux.AppImage
+            cgbuy-desktop-v${{ needs.tag.outputs.version }}-linux.deb
+            cgbuy-desktop-v${{ needs.tag.outputs.version }}-linux
 
   virustotal:
     # Scans what was actually published and appends the verdict to the release,
@@ -225,8 +376,11 @@ jobs:
         run: |
           V="${{ needs.tag.outputs.version }}"
           # The tarball is the same bytes as the loose binary, so scanning it
-          # too would only spend quota on a duplicate verdict.
-          SUMMARY=$(python3 .github/scripts/vt_scan.py --badge=.github/badges/virustotal.json "cgbuy-v$V-windows.zip" "cgbuy-v$V-linux")
+          # too would only spend quota on a duplicate verdict. The desktop
+          # build's two Windows files are scanned as well; vt_scan.py leaves
+          # the badge on the Python zip (see the comment there) until the
+          # desktop build becomes the main download.
+          SUMMARY=$(python3 .github/scripts/vt_scan.py --badge=.github/badges/virustotal.json "cgbuy-v$V-windows.zip" "cgbuy-v$V-linux" "cgbuy-desktop-v$V-windows-setup.exe" "cgbuy-desktop-v$V-windows-portable.zip")
           # Empty means no VT_API_KEY configured; nothing to append.
           [ -n "$SUMMARY" ] || exit 0
           gh release view "$TAG" --json body --jq .body > body.md
