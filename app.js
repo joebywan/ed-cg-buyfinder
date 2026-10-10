@@ -6,7 +6,8 @@ import { folderTooltip } from "./src/browser.js";
 import { FRONTIER_URL, historyFromLines, parseLive, standing, standingText, suggestDestination } from "./src/cg.js";
 import { DESKTOP, DesktopDir, desktopStore, journalDir, tauriFetchJson } from "./src/desktop.js";
 import { initSettings } from "./src/settings.js";
-import { MIXED_COLS, DEFAULT_MIXED, moveCol, toggleCol } from "./src/columns.js";
+import { VIEWS, colWidths, moveCol, placeCol, toggleCol } from "./src/columns.js";
+import { wireHeaders } from "./src/headers.js";
 import { Sender } from "./src/eddn.js";
 import { JournalState } from "./src/journal.js";
 import { clearLog, formatLog, getLog, formatLine, log, onLog } from "./src/log.js";
@@ -421,21 +422,6 @@ function renderLog() {
 
 // -- tables ---------------------------------------------------------------------
 
-const SINGLE_COLS = [
-  ["commodity", "COMMODITY", false, true, "What to buy."], ["system", "SYSTEM", false, true, "Star system the station is in."],
-  ["station", "STATION", false, true, "Station name."], ["ly", "DIST\n(LY)", true, true, "Distance in light years from the goal system."],
-  ["ls", "ARRIVAL\n(LS)", true, true, "Supercruise distance from the arrival star to the station, in light seconds."],
-  ["supply", "SUPPLY\n(t)", true, true, "Stock for sale, in tonnes."],
-  ["loads_available", "LOADS", true, true, "How many full holds the stock would fill."],
-  ["buy", "BUY\nPRICE", true, true, "Price per tonne you pay at this station."],
-  ["profit_per_t", "PROFIT\nPER t", true, true, "Profit per tonne at the goal."],
-  ["trip_minutes", "TRIP\n(MIN)", true, true, "Estimated round-trip minutes, goal to station and back."],
-  ["cr_per_min", "CR/MIN", true, true, "Profit per minute of round trip for one full hold."],
-  ["t_per_min", "T/MIN", true, true, "Tonnes moved per minute of round trip."],
-  ["updated", "DATA\nAGE", true, true, "How old the market report is; green is fresh, red is stale."],
-  ...(DESKTOP ? [["src", "SRC", false, true, "Which service the row came from: Ardent or Spansh."]] : []),
-];
-
 function sorted(items, sort) {
   if (!sort) return items;
   const dir = sort.desc ? -1 : 1;
@@ -445,16 +431,32 @@ function sorted(items, sort) {
 
 function headRow(view, cols) {
   const cur = S.sort[view];
-  return h("thead", {}, h("tr", {}, cols.map(([key, label, num, sortable = true, title]) =>
+  return h("thead", {}, h("tr", {}, cols.map((c) =>
     h("th", {
-      title,
-      class: [num && "num", sortable && "sortable"].filter(Boolean).join(" "),
-      onclick: sortable ? () => {
-        S.sort[view] = cur?.key === key ? { key, desc: !cur.desc } : { key, desc: true };
+      title: c.title,
+      class: [c.num && "num", c.sortable !== false && "sortable"].filter(Boolean).join(" "),
+      onclick: c.sortable !== false ? () => {
+        S.sort[view] = cur?.key === c.key ? { key: c.key, desc: !cur.desc } : { key: c.key, desc: true };
         render();
       } : null,
-    }, ...label.split("\n").flatMap((t, i) => i ? [h("br"), t] : [t]),
-    cur?.key === key ? (cur.desc ? " ▼" : " ▲") : ""))));
+    }, ...c.label.split("\n").flatMap((t, i) => i ? [h("br"), t] : [t]),
+    c.key && cur?.key === c.key ? (cur.desc ? " ▼" : " ▲") : ""))));
+}
+
+/** The active column set for a tab: registry entries in the saved order (desktop-only ones hidden on the web). */
+const colsFor = (view) => ui.prefs[`cols_${view}`]
+  .map((id) => VIEWS[view].cols.find((c) => c.id === id)).filter((c) => DESKTOP || !c.desktop);
+
+/** Render a table: header, body, then fixed-layout widths and drag handles. */
+function putTable(view, cols, head, body) {
+  const table = $(`t-${view}`);
+  table.replaceChildren(head, body);
+  const em = parseFloat(getComputedStyle(table).fontSize) || 14;
+  const widths = colWidths(cols.map((c) => c.id), ui.prefs[`colw_${view}`], view, em);
+  wireHeaders(table, cols.map((c) => c.id), widths, {
+    onWidth: (id, w) => { ui.prefs[`colw_${view}`][id] = w; ui.save(); },
+    onMove: (id, target, after) => setCols(view, placeCol(ui.prefs[`cols_${view}`], id, target, after)),
+  });
 }
 
 function copySystem(ev) {
@@ -527,9 +529,9 @@ function mixedCell(c, plan, m, open, k) {
     h("button", { class: "toggle", type: "button", "aria-expanded": String(open),
       onclick: () => { open ? S.expanded.delete(k) : S.expanded.add(k); render(); } }, open ? "▾" : "▸"));
   if (c.id === "station") return h("td", { class: "station", title: whereItIs(plan) }, m.commodity);
-  if (c.id === "updated" && !m) return ageCell(plan);
+  if (c.id === "updated" && !m) return ageCell({ ...plan, edsm: plan.confirmed });
   const v = m ? c.ch?.(m, plan) : c.st?.(plan);
-  const text = typeof v === "number" && c.id !== "ly" && c.id !== "trip_minutes" ? fmt(v) : v;
+  const text = typeof v === "number" && !c.raw ? fmt(v) : v;
   const short = c.id === "tonnes" && !m && plan.short > 0;
   return h("td", { class: c.num ? `num${short ? " short" : ""}` : null,
     title: short ? `${fmt(plan.short)} t short of your hold` : null }, text ?? "");
@@ -542,7 +544,7 @@ function renderMixed(r) {
   const best = plans[0] && key(plans[0]);
   if (!S.expanded) S.expanded = new Set(plans.slice(0, EXPANDED_BY_DEFAULT).map(key));
   const body = h("tbody", { onclick: copySystem, onmouseover: wantBody });
-  const cols = ui.prefs.cols_mixed.map((id) => MIXED_COLS.find((c) => c.id === id));
+  const cols = colsFor("mixed");
   for (const plan of sorted(plans, S.sort.mixed)) {
     const k = key(plan);
     const open = S.expanded.has(k);
@@ -554,53 +556,63 @@ function renderMixed(r) {
         ...cols.map((c) => mixedCell(c, plan, m))));
     }
   }
-  $("t-mixed").replaceChildren(headRow("mixed", cols.map((c) =>
-    [c.key ?? c.id, c.label, c.num, c.sortable !== false, c.title])), body);
+  putTable("mixed", cols, headRow("mixed", cols), body);
   return plans.length;
+}
+
+function singleCell(c, x) {
+  if (c.id === "station") return stationCell(x);
+  if (c.id === "updated") return ageCell(x);
+  if (c.id === "src") return srcCell(x);
+  const v = c.st(x);
+  return h("td", { class: c.num ? "num" : null }, typeof v === "number" && !c.raw ? fmt(v) : v ?? "");
 }
 
 function renderSingle(r) {
   const body = h("tbody", { onclick: copySystem, onmouseover: wantBody });
+  const cols = colsFor("single");
   for (const x of sorted(r.rows, S.sort.single)) {
-    body.append(h("tr", { class: "row", "data-system": x.system },
-      h("td", {}, x.commodity), h("td", {}, x.system), stationCell(x),
-      h("td", { class: "num" }, x.ly), h("td", { class: "num" }, fmt(x.ls)),
-      h("td", { class: "num" }, fmt(x.supply)), h("td", { class: "num" }, x.loads_available),
-      h("td", { class: "num" }, fmt(x.buy)), h("td", { class: "num" }, fmt(x.profit_per_t)),
-      h("td", { class: "num" }, x.trip_minutes), h("td", { class: "num" }, fmt(x.cr_per_min)),
-      h("td", { class: "num" }, x.t_per_min), ageCell(x), DESKTOP ? srcCell(x) : null));
+    body.append(h("tr", { class: "row", "data-system": x.system }, ...cols.map((c) => singleCell(c, x))));
   }
-  $("t-single").replaceChildren(headRow("single", SINGLE_COLS), body);
+  putTable("single", cols, headRow("single", cols), body);
 }
 
-// -- BEST MIXED LOADS column chooser -----------------------------------------------
+// -- column chooser (shared by both tables, edits the active tab's set) --------------
 
-function setCols(list) {
-  ui.prefs.cols_mixed = list;
+function setCols(view, list) {
+  ui.prefs[`cols_${view}`] = list;
   ui.save();
   render();
 }
 
+/** Back to the default columns, at their default widths. */
+function resetCols(view) {
+  ui.prefs[`colw_${view}`] = {};
+  setCols(view, [...VIEWS[view].def]);
+}
+
 function renderCols() {
-  const mixed = S.view === "mixed";
-  $("cols-btn").hidden = !mixed;
+  const view = S.view;
+  const shown = view === "mixed" || view === "single";
+  $("cols-btn").hidden = !shown;
   const panel = $("cols-panel");
-  panel.hidden = !mixed || $("cols-btn").getAttribute("aria-expanded") !== "true";
+  panel.hidden = !shown || $("cols-btn").getAttribute("aria-expanded") !== "true";
   if (panel.hidden) return;
-  const on = ui.prefs.cols_mixed;
-  const ids = [...on, ...MIXED_COLS.map((c) => c.id).filter((id) => !on.includes(id))];
+  const reg = VIEWS[view].cols.filter((c) => DESKTOP || !c.desktop);
+  const on = ui.prefs[`cols_${view}`];
+  const ids = [...on, ...reg.map((c) => c.id).filter((id) => !on.includes(id))];
   const btn = (txt, label, d, id) => h("button", { type: "button", "aria-label": label,
     disabled: d ? on.indexOf(id) < 0 || on.indexOf(id) + d < 0 || on.indexOf(id) + d >= on.length : null,
-    onclick: () => setCols(moveCol(on, id, d)) }, txt);
+    onclick: () => setCols(view, moveCol(on, id, d)) }, txt);
   panel.replaceChildren(
     ...ids.map((id) => {
-      const c = MIXED_COLS.find((x) => x.id === id);
+      const c = reg.find((x) => x.id === id);
       return h("div", { class: `row${on.includes(id) ? "" : " off"}`, title: c.title },
         h("label", {}, h("input", { type: "checkbox", checked: on.includes(id), disabled: id === "station" ? true : null,
-          onchange: () => setCols(toggleCol(on, id)) }), " ", c.label.replace("\n", " ")),
+          onchange: () => setCols(view, toggleCol(on, id, view)) }), " ", c.label.replace("\n", " ")),
         btn("▲", `Move ${id} up`, -1, id), btn("▼", `Move ${id} down`, 1, id));
     }),
-    h("button", { type: "button", onclick: () => setCols([...DEFAULT_MIXED]) }, "RESET TO DEFAULT"));
+    h("button", { type: "button", onclick: () => resetCols(view) }, "RESET TO DEFAULT"));
 }
 
 function render() {
@@ -955,7 +967,7 @@ function bind() {
     b.setAttribute("aria-expanded", String(b.getAttribute("aria-expanded") !== "true"));
     render();
   };
-  $("s-cols-reset").onclick = () => setCols([...DEFAULT_MIXED]);
+  $("s-cols-reset").onclick = () => { resetCols("single"); resetCols("mixed"); };
   $("tab-single").onclick = () => { S.view = "single"; render(); };
   $("tab-settings").onclick = () => { S.view = "settings"; render(); };
   $("tab-log").onclick = () => { S.view = "log"; render(); };

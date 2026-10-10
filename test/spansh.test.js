@@ -3,7 +3,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { EdsmGate } from "../src/edsm.js";
-import { buildRows, fetchSources, refresh, stationFits, worthRetrying } from "../src/spansh.js";
+import { buildRows, fetchSources, refresh, stationFits, stationPad, worthRetrying } from "../src/spansh.js";
 
 const NOW = new Date("2026-09-15T10:00:00Z");
 const nap = async () => {};
@@ -82,6 +82,16 @@ test("a 502 is asked again, attempts are bounded, a 400 is not retried", async (
   assert.equal(worthRetrying(httpErr(404)), false);
 });
 
+test("stationPad reports the largest pad, and rows carry it", async () => {
+  assert.equal(stationPad({ has_large_pad: true }), "L");
+  assert.equal(stationPad({ large_pads: 2, medium_pads: 1 }), "L");
+  assert.equal(stationPad({ medium_pads: 1, small_pads: 1 }), "M");
+  assert.equal(stationPad({ small_pads: 3 }), "S");
+  assert.equal(stationPad({}), "");
+  const { fetchJson } = fake({ spansh: [src("Near", { large_pads: 0, medium_pads: 1 })], edsm: DEST });
+  assert.equal((await buildRows(P({ pad: "M" }), { fetchJson, now: NOW, sleep: nap, gate: fakeGate() })).rows[0].pad, "M");
+});
+
 test("a large pad counts for every size", () => {
   assert.ok(stationFits({ has_large_pad: true }, "S"));
   assert.ok(stationFits({ large_pads: 1 }, "M"));
@@ -138,7 +148,7 @@ test("rows have the ardent shape; destination price and arrival come from EDSM",
   assert.equal(cgLs, 5394);
   assert.deepEqual(errors, []);
   assert.deepEqual(Object.keys(rows[0]), ["commodity", "station", "system", "carrier", "planetary",
-    "stype", "body", "ly", "ls", "supply", "buy", "sell", "profit_per_t", "load", "loads_available",
+    "stype", "body", "pad", "ly", "ls", "supply", "buy", "sell", "profit_per_t", "load", "loads_available",
     "trip_minutes", "trip_profit", "cr_per_min", "t_per_min", "updated"]);
   assert.equal(rows[0].profit_per_t, 149000);
   assert.equal(rows[0].load, 720);

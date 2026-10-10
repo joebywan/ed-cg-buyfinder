@@ -1,6 +1,6 @@
 // Market discovery through Ardent Insight, which follows EDDN live and,
 // unlike Spansh, lets a web page read its answers.
-import { MAX_AGE_DEFAULT, daysOld, isPlanetary, padFits, tripMinutes } from "./model.js";
+import { MAX_AGE_DEFAULT, daysOld, isPlanetary, padFits, padLetter, tripMinutes } from "./model.js";
 import { symbolFor } from "./commodities.js";
 import { log, loggedFetch } from "./log.js";
 
@@ -49,7 +49,7 @@ function sourceRows(records, { commodity, sell, cgLs, origin, p, cal }) {
       // Ardent carries the body for orbital stations as well as surface
       // ones, which is the whole answer - the desktop app has to ask a
       // second service for half of it.
-      planetary, stype: e.stationType ?? "", body: e.bodyName ?? "",
+      planetary, stype: e.stationType ?? "", body: e.bodyName ?? "", pad: padLetter(e.maxLandingPadSize),
       ly: round1(dist), ls: Math.round(ls), supply: stock, buy, sell, profit_per_t: profit,
       load, loads_available: round1(stock / p.hold), trip_minutes: round1(mins),
       trip_profit: load * profit, cr_per_min: Math.round(load * profit / mins),

@@ -105,6 +105,11 @@ export async function fetchSources(commodity, maxLy, minSupply, referenceSystem,
   return out;
 }
 
+/** Largest pad a station has, "L"|"M"|"S", or "" when Spansh gave no counts. */
+export function stationPad(st) {
+  return st.large_pads || st.has_large_pad ? "L" : st.medium_pads ? "M" : st.small_pads ? "S" : "";
+}
+
 /** Can a ship needing `pad` ("S"|"M"|"L") land here? Spansh reports per-size
  pad counts, and a large pad accepts any ship, so it counts toward every size. */
 export function stationFits(st, pad) {
@@ -327,7 +332,7 @@ export async function buildRows(p, { fetchJson = defaultFetchJson, cal = null, n
         const load = Math.min(e.supply, p.hold);
         rows.push({
           commodity: name, station: st.name ?? "?", system: st.system_name ?? "?", carrier,
-          planetary: !!st.is_planetary, stype: st.type || "", body: st.body_name || "",
+          planetary: !!st.is_planetary, stype: st.type || "", body: st.body_name || "", pad: stationPad(st),
           ly: round1(dist), ls: Math.round(ls), supply: e.supply, buy: e.buy_price, sell,
           profit_per_t: profit, load, loads_available: round1(e.supply / p.hold),
           trip_minutes: round1(mins), trip_profit: load * profit,

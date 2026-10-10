@@ -1,7 +1,7 @@
 // Settings-tab preferences that are not search parameters. Defaults and
 // ranges come from the old app (FONT_*, CACHE_FRESH_MINUTES, VERIFY_TOP_DEFAULT).
 
-import { DEFAULT_MIXED, cleanCols } from "./columns.js";
+import { DEFAULT_MIXED, DEFAULT_SINGLE, cleanCols, cleanWidths } from "./columns.js";
 
 export const FONT_MIN = 7, FONT_MAX = 22, FONT_DEFAULT = 9;   // tk points; zoom = size / 9
 
@@ -12,6 +12,9 @@ export const PREF_DEFAULTS = {
   verify_top: 18,            // stations re-checked against EDSM per search
   notifications: false,      // desktop only; the old app had it on, a new app asks first
   cols_mixed: DEFAULT_MIXED,  // BEST MIXED LOADS columns, in order
+  cols_single: DEFAULT_SINGLE, // ALL SOURCES columns, in order
+  colw_mixed: {},            // dragged widths in px by column id; absent = default
+  colw_single: {},
   alert_sound: true,         // chime when the top 5 or your copied target changes
   calAfter: 0,               // epoch secs, set by RESET TIMINGS
 };
@@ -29,6 +32,9 @@ export function loadPrefs(saved) {
   p.verify_edsm = p.verify_edsm !== false;
   p.notifications = p.notifications === true;
   p.alert_sound = p.alert_sound !== false;
-  p.cols_mixed = cleanCols(p.cols_mixed);
+  for (const v of ["mixed", "single"]) {
+    p[`cols_${v}`] = cleanCols(p[`cols_${v}`], v);
+    p[`colw_${v}`] = cleanWidths(p[`colw_${v}`], v);
+  }
   return p;
 }

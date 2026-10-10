@@ -3,7 +3,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { ageFilter, buildRows } from "../src/ardent.js";
-import { tripMinutes } from "../src/model.js";
+import { padLetter, tripMinutes } from "../src/model.js";
 
 const NOW = new Date("2026-09-15T10:00:00Z");
 const FRESH = "2026-09-15T01:00:00.000Z";
@@ -69,6 +69,15 @@ test("destination price, exact distance and trip time come through", async () =>
   assert.equal(r.trip_minutes, Math.round(mins * 10) / 10);
   assert.equal(r.cr_per_min, Math.round(720 * 149000 / mins));
   assert.equal(r.updated, "2026-09-15");
+});
+
+test("rows carry the station's largest pad as a letter", async () => {
+  assert.equal(padLetter(3), "L");
+  assert.equal(padLetter(2), "M");
+  assert.equal(padLetter(1), "S");
+  assert.equal(padLetter(undefined), "");
+  const { fetchJson } = fakeArdent(routes());
+  assert.equal((await buildRows(P(), { fetchJson, now: NOW })).rows[0].pad, "L");
 });
 
 test("queries use the commodity symbol and the search parameters", async () => {

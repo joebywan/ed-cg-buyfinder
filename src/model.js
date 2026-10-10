@@ -83,6 +83,11 @@ export function padForShip(ship) {
   return SHIP_PADS[(ship || "").toLowerCase()] || "L";
 }
 
+/** Largest pad as "S"|"M"|"L" from Ardent's 1/2/3, or "" when unknown. */
+export function padLetter(maxPadSize) {
+  return ({ 1: "S", 2: "M", 3: "L" })[maxPadSize] || "";
+}
+
 /** Can a ship needing `pad` land where the largest pad is `maxPadSize`? */
 export function padFits(maxPadSize, pad) {
   return typeof maxPadSize === "number" && maxPadSize >= PAD_SIZE[pad];
@@ -118,13 +123,14 @@ export function buildMixed(rows, hold) {
     items.sort((a, b) => b.profit_per_t - a.profit_per_t);
     let remaining = hold;
     let total = 0;
-    const mix = [];
+    const mix = [], used = [];
     for (const it of items) {
       if (remaining <= 0) break;
       const take = Math.min(it.supply, remaining);
       if (take <= 0) continue;
       mix.push({ commodity: it.commodity, tonnes: take, profit_per_t: it.profit_per_t,
                  buy: it.buy, supply: it.supply, value: take * it.profit_per_t });
+      used.push(it);
       total += take * it.profit_per_t;
       remaining -= take;
     }
@@ -133,7 +139,9 @@ export function buildMixed(rows, hold) {
     plans.push({
       station: top.station, system: top.system, ly: top.ly, ls: top.ls, carrier: top.carrier,
       // Properties of the station, so any of its rows can supply them.
-      planetary: top.planetary, stype: top.stype, body: top.body,
+      planetary: top.planetary, stype: top.stype, body: top.body, pad: top.pad,
+      // DATA AGE mark (`edsm` below is the watcher's "any"): confirmed only if every row in the load is.
+      confirmed: used.every((r) => r.edsm), pending: used.some((r) => r.pending),
       updated: top.updated, tonnes: hold - remaining, short: remaining,
       src: top.src, edsm: items.some((i) => i.edsm),   // which reading it is, for the watcher's "why"
       supply: mix.reduce((n, m) => n + m.supply, 0),   // stock of the commodities in the load, summed
@@ -149,6 +157,7 @@ export function mixedSortValue(item, key) {
   const v = item?.[key];
   if (key === "station" || key === "system" || key === "commodity" || key === "body") return (v || "").toLowerCase();
   if (key === "updated") return v || "";
+  if (key === "pad") return PAD_ORDER[v] ?? -1;
   return v || 0;
 }
 
