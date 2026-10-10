@@ -64,3 +64,16 @@ test("a target hidden by a filter is reported by cause, until it shows again", (
   assert.equal(w.rebase(plans("A", "B", "Hub")), null);  // switched back on: alert clears
   assert.equal(w.check(plans("A", "B", "Hub")), null);
 });
+
+test("a filter change keeps an unacknowledged top-5 alert, re-ranked, silently; GOT IT clears it", () => {
+  const w = new Watcher();
+  w.begin(plans("A", "B", "C", "D", "E", "F"));
+  const a = w.check(plans("B", "C", "D", "E", "F", "A"), {});
+  assert.equal(a.kind, "top5");
+  const r = w.rebase(plans("B", "A", "C", "D", "E", "F"));
+  assert.equal(r.kind, "top5");
+  assert.match(r.text, /A #1 -> #2/);
+  assert.equal(r.beep, false);
+  w.acknowledge(plans("B", "A", "C", "D", "E", "F"));
+  assert.equal(w.rebase(plans("A", "B", "C", "D", "E", "F")), null);
+});

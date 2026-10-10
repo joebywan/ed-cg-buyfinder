@@ -1,6 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { mergeResults, searchSources } from "../src/merge.js";
+import { buildMixed } from "../src/model.js";
+import { Watcher } from "../src/watch.js";
 
 const row = (o) => ({ commodity: "Gold", station: "X", system: "Y", cr_per_min: 10, updated: "2026-10-01", ...o });
 const res = (rows, o = {}) => ({ rows, cg: {}, cgLs: 0, hiddenStale: 0, allStale: false, errors: [], ...o });
@@ -40,4 +42,28 @@ test("the first source to land is shown on its own while the other is out", asyn
   release(res([row({ station: "A" })]));
   assert.equal((await run).rows[0].src, "AS");
   assert.equal(partials.length, 1);
+});
+
+test("an EDSM drop survives Both mode: reason in the alert, no resurrection from older Ardent", async () => {
+  const mk = (n, o = {}) => ({ commodity: "Gold", station: n, system: `${n}-sys`, carrier: false, planetary: false, pad: "L",
+    supply: 1000, buy: 1000, sell: 5000, profit_per_t: 4000, load: 100, trip_minutes: 20, t_per_min: 5,
+    cr_per_min: 60000 - 1000 * "ABCDEFG".indexOf(n), updated: "2026-10-01", ...o });
+  const names = [..."ABCDEFG"];
+  const spanshAll = names.map((n) => mk(n));
+  const ardent = res(names.map((n) => mk(n, { updated: "2026-09-25" })));
+  const after = res(spanshAll.filter((r) => r.station !== "B"), {
+    dropped: { "B\0B-sys": "sold out" }, gone: ["B-sys\0B\0Gold"] });
+  let update;
+  const first = await searchSources("both", { max_age_days: 30, hold: 100 }, {
+    ardent: async () => ardent,
+    spansh: async (p, o) => { update = () => o.onUpdate(after); return res(spanshAll, { dropped: {} }); },
+  }, { onUpdate: (r) => { got = r; } });
+  let got;
+  const w = new Watcher();
+  w.begin(buildMixed(first.rows, 100), first.dropped);
+  update();
+  assert.equal(got.rows.some((r) => r.station === "B"), false);       // Ardent's older B stays dropped
+  assert.deepEqual(got.dropped, { "B\0B-sys": "sold out" });
+  const a = w.check(buildMixed(got.rows, 100), got.dropped);
+  assert.match(a.text, /B #2 dropped off the list \(EDSM: sold out\)/);
 });

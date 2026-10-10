@@ -360,11 +360,16 @@ export async function buildRows(p, { fetchJson = defaultFetchJson, cal = null, n
       .sort((a, b) => b.cr_per_min - a.cr_per_min);
     const aged = ageFilter(live, p.max_age_days ?? MAX_AGE_DEFAULT, now);
     // Why EDSM-checked stations left the list, for the watcher's wording.
-    const dropped = {};
+    // `gone` lists the system\0station\0commodity rows, so a merge with an
+    // older source can't bring them back.
+    const dropped = {}, gone = [];
     for (const r of rows) {
-      if (r.edsm && !(r.profit_per_t > 0 && r.supply > 0)) dropped[`${r.station}\0${r.system}`] = r.supply > 0 ? "no longer profitable" : "sold out";
+      if (r.edsm && !(r.profit_per_t > 0 && r.supply > 0)) {
+        dropped[`${r.station}\0${r.system}`] = r.supply > 0 ? "no longer profitable" : "sold out";
+        gone.push(`${r.system}\0${r.station}\0${r.commodity}`);
+      }
     }
-    return { rows: aged.rows, cg, cgLs, hiddenStale: aged.hidden, allStale: aged.allStale, errors, dropped };
+    return { rows: aged.rows, cg, cgLs, hiddenStale: aged.hidden, allStale: aged.allStale, errors, dropped, gone };
   };
   const first = snapshot();
   if (!verify) return first;

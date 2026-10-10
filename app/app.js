@@ -224,7 +224,7 @@ function renderStanding() {
   const cur = hist.at(-1);
   const st = standing(hist, S.live.find((g) => cur && String(g.id) === String(cur.cgid)));
   const [text, tip] = standingText(st, runFigures());
-  if (text) line.append(h("div", { class: "sub standing", title: tip }, text));
+  if (text) line.append(h("div", { class: "sub standing", title: `${text}\n${tip}` }, text));
   if (!st) return;
   const { next, notes } = standingChanges(S.lastStanding, st);
   S.lastStanding = next;
@@ -353,7 +353,7 @@ function viewChanged() {
   const t = S.watch.target;
   const raw = t && S.result.rows.find((r) => r.station === t.station && r.system === t.system);
   const why = raw && hiddenBy(raw, viewOpts());
-  const a = S.watch.rebase(plansNow(), why && (FILTER_NAME[why] ?? `PAD filter (largest pad is ${raw.pad || "unknown"})`));
+  const a = S.watch.rebase(plansNow(), why && (FILTER_NAME[why] ?? `PAD filter (largest pad is ${raw.pad || "unknown"})`), S.result.dropped);
   if (a || S.alert?.kind !== "standing") showAlert(a);
   render();
   const more = S.verifyMore;
@@ -475,7 +475,7 @@ function renderProgress(prog) {
     return h("div", { class: `prog-row ${s.state} ${s.stage}`, title: WHY[k] },
       h("span", { class: "name" }, label),
       h("div", { class: "progress" }, h("div", { style: `width:${s.total ? 100 * Math.min(1, s.done / s.total) : 0}%` })),
-      h("span", { class: "what" }, what,
+      h("span", { class: "what", title: `${what}${s.state === "run" && k !== "ardent" ? ` - ${WHY[k].split(": ")[1]}` : ""}` }, what,
         s.state === "run" && k !== "ardent" ? h("span", { class: "why" }, ` - ${WHY[k].split(": ")[1]}`) : null));
   }));
 }

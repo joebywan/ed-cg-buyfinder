@@ -88,8 +88,15 @@ export class Watcher {
 
   /** The user changed a view filter: the new ranking is the baseline (no
    *  "top 5 changed"), but a target the filter hides is reported, naming
-   *  the filter (`hidden` is its reason, or "" when it still shows). */
-  rebase(plans, hidden = "") {
+   *  the filter (`hidden` is its reason, or "" when it still shows). An
+   *  unacknowledged top-5 alert is not the filter's to clear: it is judged
+   *  again against the new view, silently. */
+  rebase(plans, hidden = "", dropped = {}) {
+    if (this.sig && this.kind === "top5") {
+      const a = this.#top5(plans, dropped);
+      this.sig = a?.text ?? "";
+      return a && { ...a, beep: false };
+    }
     this.#see(plans);
     this.sig = "";
     const t = this.target;
@@ -159,6 +166,7 @@ export class Watcher {
 
   #beep(a) {
     const t = this.now();
+    this.kind = a.kind;
     a.beep = a.text !== this.sig && t - this.lastSound >= this.quiet;
     if (a.beep) this.lastSound = t;
     this.sig = a.text;

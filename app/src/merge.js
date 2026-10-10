@@ -16,8 +16,12 @@ const rowKey = (r) => `${r.system}\0${r.station}\0${r.commodity}`;
  *  holds the losing source's {src, updated} for the tooltip. */
 export function mergeResults(ardent, spansh, p, now = new Date()) {
   const byKey = new Map();
+  // EDSM is the freshest word: what it removed from Spansh stays removed even
+  // if Ardent still lists it on an older reading.
+  const gone = new Set(spansh?.gone);
   for (const [src, res] of [["A", ardent], ["S", spansh]]) {
     for (const r of res?.rows ?? []) {
+      if (gone.has(rowKey(r))) continue;
       const have = byKey.get(rowKey(r));
       if (!have) { byKey.set(rowKey(r), { ...r, src }); continue; }
       const win = (r.updated || "") > (have.updated || "") ? { ...r } : have;
@@ -36,6 +40,8 @@ export function mergeResults(ardent, spansh, p, now = new Date()) {
     cgLs: ardent?.cgLs || spansh?.cgLs || 0,
     hiddenStale: Math.max(aged.hidden, ardent?.hiddenStale ?? 0, spansh?.hiddenStale ?? 0),
     allStale: aged.allStale,
+    dropped: spansh?.dropped ?? {},
+    gone: spansh?.gone ?? [],
     errors: [...(ardent?.errors ?? []), ...(spansh?.errors ?? [])],
   };
 }
