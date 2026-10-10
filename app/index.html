@@ -89,24 +89,25 @@
     <h2>DATA ACCURACY</h2>
     <label class="row" title="A CG drains supply fast, so a week-old report of 40,000t may be a wasted trip. Raising this shows the older rows rather than hiding them; the AGE column is coloured so you can judge each one. Changing it re-runs the search.">Hide sources older than (days) <input id="s-max_age" type="number" min="0" step="1"></label>
     <label class="row" title="On startup, a cached result newer than this is shown as-is; anything older starts a fresh search straight away, with the old numbers on screen while it runs.">Auto-refresh after (min) <input id="s-fresh" type="number" min="0" step="1"></label>
-    <h2>RANKING</h2>
-    <label class="row">Surface penalty (min) <input id="s-surface" type="number" min="0" step="1"></label>
-    <p class="dim small">Extra minutes a planetary landing costs you - glide, risk, hassle - so surface markets only rank high when they're clearly worth it. Added to the round trip of surface stations before credits per minute is worked out; 0 treats them like any other. Changes re-rank straight away.</p>
     <div class="desktop-only">
       <label class="row check"><input id="s-verify" type="checkbox"> Re-check top results against EDSM</label>
-      <label class="row check" title="A chime when the station you last copied moves or drops out of the results, or EDSM has been rate-limiting for 5+ minutes."><input id="s-sound" type="checkbox"> Sound on changes</label>
       <label class="row">Stations to check <input id="s-vtop" type="number" min="0" step="1"></label>
       <p class="dim small">Spansh finds candidates but lags days; EDSM follows EDDN live. EDSM rate-limits, so only the best few are re-checked. Applies to Spansh results.</p>
     </div>
+    <h2>RANKING</h2>
+    <label class="row">Surface penalty (min) <input id="s-surface" type="number" min="0" step="1"></label>
+    <p class="dim small">Extra minutes a planetary landing costs you - glide, risk, hassle - so surface markets only rank high when they're clearly worth it. Added to the round trip of surface stations before credits per minute is worked out; 0 treats them like any other. Changes re-rank straight away.</p>
     <div class="desktop-only">
       <h2>ELITE DANGEROUS</h2>
       <div class="row">Journal folder <input id="s-dir" size="50" placeholder="auto-detect" autocomplete="off">
         <button id="s-dir-browse" type="button">BROWSE</button> <button id="s-dir-set" type="button">USE</button> <button id="s-dir-auto" type="button">AUTO-DETECT</button></div>
       <p class="dim small"><span id="s-dir-now"></span> <span id="s-dir-msg" class="bad"></span><br>Auto-detected - change only if you have several installs.</p>
     </div>
+    <h2>ALERTS</h2>
+    <label class="row check" title="A chime when the station you last copied moves or drops out of the results, when your reward band changes, or when EDSM has been rate-limiting for 5+ minutes."><input id="s-sound" type="checkbox"> Sound on changes</label>
+    <div class="desktop-only"><label class="row check" title="The same alerts as a system notification, for when the window sits behind the game - plus docking at the goal station without having registered."><input id="s-notify" type="checkbox"> Desktop notifications</label></div>
     <h2>INTEGRATIONS</h2>
     <div class="desktop-only"><label class="row check" title="One request to GitHub when the app starts; it only shows a link in the header, nothing is downloaded or installed."><input id="s-update" type="checkbox"> Check for a new version at startup</label></div>
-    <div class="desktop-only"><label class="row check" title="Tells you when the best target changes, or when you dock at the goal station without having registered - the window usually sits behind the game."><input id="s-notify" type="checkbox"> Desktop notifications</label></div>
     <label class="row check"><input id="s-eddn" type="checkbox"> Share market data to EDDN</label>
     <p id="s-eddn-note" class="dim small"></p>
     <h2>BEST MIXED LOADS</h2>
