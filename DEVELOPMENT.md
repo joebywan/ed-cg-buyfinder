@@ -150,6 +150,9 @@ file that opens in Notepad as one long line.
 | `build.yml` | push to `main`, PRs | tests, both builds; on `main` also refreshes the `snapshot` pre-release |
 | `release.yml` | manual dispatch | validates the version, tests, tags, builds, publishes, scans |
 
+Both also build the Tauri desktop app (`build-desktop-linux`,
+`build-desktop-windows`); see [The desktop app](#the-desktop-app-app).
+
 The `snapshot` tag is reused on every push, and its assets are keyed to the
 short commit. Because those names change per push, same-name replacement no
 longer clears the previous build, so the snapshot release is emptied of assets
@@ -159,8 +162,8 @@ before new ones are uploaded. Forget that and the downloads list grows forever.
 
 Actions → **release** → Run workflow → a version like `2.2` (no leading `v`),
 plus optional extra notes. It refuses a version that is malformed or already
-tagged, runs the suite before anything is tagged, rewrites `VERSION` in
-`version.py`, commits, tags, builds both platforms, checks each binary reports
+tagged, runs both suites before anything is tagged, rewrites `VERSION` in
+`version.py` and stamps the same number into `app/`, commits, tags, builds both platforms, checks each binary reports
 the version it claims, publishes, and then scans the published files on
 VirusTotal — appending counts, hashes and flagging engine names to the release
 notes and refreshing the badge on `main`.
@@ -169,3 +172,71 @@ The VirusTotal step needs the `VT_API_KEY` secret and never fails a release:
 the binaries are already out, and VirusTotal being slow is not a broken build.
 It is release-only because doing it per push would burn the free key's daily
 quota.
+
+## The desktop app (`app/`)
+
+A rewrite of cgbuy as a web page in a Tauri v2 window. It lives in `app/`,
+imported from the `ed-cg-buyfinder-web` repo with its history
+(`git subtree`), and is released from this repo so existing users' update
+checks, the README and the VirusTotal badge carry over. The Python app is
+untouched and still the main download for now.
+
+| | |
+|---|---|
+| `app/index.html`, `app.js`, `style.css`, `src/` | the page; runs in a plain browser too |
+| `app/src/desktop.js` | everything that only exists inside the Tauri window: settings file, journal folder, no-CORS fetch, external links |
+| `app/src/update.js` | "a newer version exists" check, a port of `update.py` |
+| `app/src-tauri/` | the Rust shell: `src/main.rs`, `tauri.conf.json` (CSP), `capabilities/` (what the page may call, including the allowed HTTP hosts) |
+| `app/src-tauri/prep.mjs` | copies the page files into `src-tauri/dist`, which is what gets embedded |
+| `app/stamp-version.mjs` | copies `version.py` into the app's version files |
+| `app/test/` | `node --test`, no dependencies |
+
+Needs Node 22+, Rust (rustup) and `cargo install tauri-cli --version "^2" --locked`.
+On Debian/Ubuntu also `libwebkit2gtk-4.1-dev build-essential libxdo-dev
+libssl-dev libayatana-appindicator3-dev librsvg2-dev`.
+
+```
+cd app
+npm test                        # web tests
+node src-tauri/prep.mjs         # once, so cargo can see dist/
+(cd src-tauri && cargo test)    # Rust tests
+cargo tauri dev                 # run it
+cargo tauri build --no-bundle   # just the binary: src-tauri/target/release/cgbuy
+```
+
+Opening `app/index.html` through any static server also works, as the website:
+anything that needs the app is behind `DESKTOP` in `desktop.js`.
+
+### Versions
+
+`version.py` is still the only place a version is typed. The app's copies —
+`src/version.js` (`"1.9"`), and `tauri.conf.json`, `Cargo.toml` and the
+`cgbuy` entry in `Cargo.lock` (`"1.9.0"`; Tauri insists on three parts) — are
+written by `node app/stamp-version.mjs`. `node app/stamp-version.mjs --check`
+and `app/test/version.test.js` fail if any has drifted, so after changing
+`version.py` by hand, run the stamp. The release workflow does that itself.
+
+### What the desktop build ships as
+
+Built by `cargo tauri build` (not `tauri-action`, which would want to own the
+release and the file names that this repo's workflows already own). Asset names
+carry `desktop` so they never collide with the Python ones:
+
+- `cgbuy-desktop-v<ver>-windows-setup.exe` — NSIS installer
+- `cgbuy-desktop-v<ver>-windows-portable.zip` — a folder with the single
+  `cgbuy.exe` and `README-FIRST.txt` (`packaging/README-FIRST-desktop.txt`).
+  Needs WebView2, which Windows 10/11 ship with
+- `cgbuy-desktop-v<ver>-linux.AppImage`, `-linux.deb`, and `-linux`, the bare
+  binary, which needs libwebkit2gtk-4.1 installed
+
+Snapshots use the short commit instead of `v<ver>`. The two Windows files are
+scanned on VirusTotal with the Python ones, but the README badge still follows
+the Python zip: `vt_scan.py` skips `desktop` names when writing it. Remove that
+condition when the desktop build becomes the main download.
+
+### Moving the website (GitHub Pages)
+
+Nothing here publishes a site on purpose. To move it: add a `pages.yml` that
+copies `app/index.html app.js style.css icon.png src` into `_site` and deploys
+it (the web repo's one did exactly that), set the Pages source to GitHub
+Actions in this repo's settings, and decide what happens to the old site's URL.
