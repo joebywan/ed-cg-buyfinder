@@ -3,7 +3,7 @@
 import { buildRows, defaultFetchJson } from "./src/ardent.js";
 import { BodyLookup } from "./src/bodies.js";
 import { folderTooltip } from "./src/browser.js";
-import { FRONTIER_URL, historyFromLines, parseLive, standing, standingChanges, standingText, suggestDestination } from "./src/cg.js";
+import { FRONTIER_URL, bandOutlook, finishEstimate, hoursLeft, totalPoints, historyFromLines, parseLive, standing, standingChanges, standingText, suggestDestination } from "./src/cg.js";
 import { DESKTOP, DesktopDir, desktopStore, journalDir, tauriFetchJson } from "./src/desktop.js";
 import { initSettings } from "./src/settings.js";
 import { VIEWS, colWidths, fitWidth, moveCol, placeCol, toggleCol } from "./src/columns.js";
@@ -54,6 +54,7 @@ const S = {
   settings: { ...DEFAULTS, ...store.get("cgbuy.settings", {}) },
   manualDest: store.get("cgbuy.dest", null),
   live: [],
+  snaps: store.get("cgbuy.cgSnaps", {}),      // {goal id: [[ms, qty], ...]} feed snapshots
   cgLines: [],
   dest: null,
   journal: null,
@@ -204,11 +205,23 @@ function readControls() {
 
 async function loadLive() {
   try { S.live = parseLive(await defaultFetchJson(FRONTIER_URL)); } catch { /* keep the last feed */ }
+  snapshotFeed();
   const sel = $("d-live"), keep = sel.value;
   sel.replaceChildren(h("option", { value: "" }, S.live.some((g) => g.is_trade) ? "— pick one —" : "none running"));
   S.live.filter((g) => g.is_trade).forEach((g, i) =>
     sel.append(h("option", { value: String(i) }, `${g.title} — ${g.station}, ${g.system}`)));
   sel.value = keep;
+}
+
+/** Remember each running goal's total across restarts (500 readings a goal; ended goals dropped). */
+function snapshotFeed() {
+  const now = Date.now(), next = {};
+  for (const g of S.live) {
+    if (g.id == null || !g.qty) continue;
+    next[g.id] = [...(S.snaps[g.id] || []), [now, g.qty]].slice(-500);
+  }
+  S.snaps = next;
+  store.set("cgbuy.cgSnaps", next);
 }
 
 /** Work out where we're selling. Returns true when it changed. */
@@ -277,10 +290,21 @@ function renderStanding() {
   const line = $("standing");
   const hist = historyFromLines(S.cgLines);
   const cur = hist.at(-1);
-  const st = standing(hist, S.live.find((g) => cur && String(g.id) === String(cur.cgid)));
-  const [text, tip] = standingText(st, runFigures());
-  line.textContent = text || "";
-  line.title = text ? `${text}\n${tip}` : "";
+  const live = S.live.find((g) => cur && String(g.id) === String(cur.cgid));
+  const st = standing(hist, live);
+  const run = runFigures();
+  let fx = {};
+  if (st) {
+    const pts = totalPoints(hist, st.cgid, S.snaps[st.cgid]);
+    const exp = live?.expiry || cur.expiry, now = Date.now();
+    const finish = finishEstimate(pts, st.target, exp ? hoursLeft(exp, now) : null, now);
+    fx = { finish, now, outlook: bandOutlook(st, pts, finish, run, now) };
+  }
+  const [text, tip, mark, kind] = standingText(st, run, fx);
+  line.replaceChildren(...(mark
+    ? [text.slice(0, text.indexOf(mark)), h("span", { class: { safe: "ok", tight: "warn", haul: "bad" }[kind] }, mark), text.slice(text.indexOf(mark) + mark.length)]
+    : [text || ""]));
+  line.title = text ? `${text}\n\n${tip}` : "";
   if (!st) return;
   const { next, notes } = standingChanges(S.lastStanding, st);
   S.lastStanding = next;
@@ -1253,6 +1277,7 @@ function bind() {
   });
   setInterval(() => renderDest(), 30000);
   setInterval(checkStall, 5000);
+  setInterval(renderStanding, 60000);          // ticks the countdown
 }
 
 async function main() {

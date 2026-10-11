@@ -33,6 +33,7 @@ body {
 a { color: var(--or); }
 .dim { color: var(--dim); }
 .ok { color: var(--good); }
+.warn { color: var(--warn); }
 .small { font-size: 12px; }
 [hidden] { display: none !important; }
 

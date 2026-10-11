@@ -2,7 +2,7 @@
 // suggest_destination.
 import test from "node:test";
 import assert from "node:assert/strict";
-import { bandBrackets, effort, standingChanges, hoursLeft, historyFromLines, joinedGoal, parseLive, ratePerHour, standing, standingText,
+import { bandBrackets, bandOutlook, countdown, finishEstimate, totalPoints, effort, standingChanges, hoursLeft, historyFromLines, joinedGoal, parseLive, ratePerHour, standing, standingText,
   suggestDestination, timesAverage } from "../src/cg.js";
 
 const FEED = {
@@ -186,4 +186,95 @@ test("band changes notify both ways, the first sight only seeds", () => {
   assert.deepEqual(standingChanges(r.next, { ...st(25), cgid: "2" }).notes, []);   // a different goal
   const t = standingChanges({ cgid: "1", band: 25, inTop: true }, st(25, { top_rank_size: 10, in_top_rank: false }));
   assert.equal(t.notes[0].title, "Out of the top 10");
+});
+
+// -- finish forecast ------------------------------------------------------------
+
+const NOW = Date.parse("2026-10-10T12:00:00Z"), HR = 3.6e6;
+// hourly readings for `hours`, growing 20k t/h from 2.0M, 10k -> 12k contributors; the last is at NOW
+const series = (hours = 48, step = 1) => Array.from({ length: Math.floor(hours / step) + 1 }, (_, i) => {
+  const ago = hours - i * step;
+  return { t: NOW - ago * HR, total: 3000000 - ago * 20000, contributors: Math.round(12000 - ago * 40), contribution: null };
+});
+
+test("finish: hits the target before expiry", () => {
+  const f = finishEstimate(series(), 4000000, 105, NOW);
+  assert.equal(Math.round(f.rate), 20000);
+  assert.equal(Math.round(f.hours_to_target), 50);
+  assert.ok(f.finishes_early);
+  assert.equal(Math.round(f.end_hours), 50);
+  const [t, tip] = countdown(f, 105, NOW);
+  assert.equal(t, "ends in ~2d 2h (est., expiry 4d 9h)");
+  assert.match(tip, /20,000 t\/h/);
+});
+
+test("finish: expiry first when growth is too slow; stalled goal has no target date", () => {
+  const f = finishEstimate(series(), 9000000, 30, NOW);
+  assert.ok(!f.finishes_early);
+  assert.equal(f.end_hours, 30);
+  assert.equal(countdown(f, 30, NOW)[0], "ends in 1d 6h");
+  const flat = finishEstimate(series().map((p) => ({ ...p, total: 3000000 })), 4000000, 30, NOW);
+  assert.deepEqual([flat.rate, flat.hours_to_target, flat.end_hours], [0, null, 30]);
+});
+
+test("finish: too little data, and a target already reached", () => {
+  assert.equal(finishEstimate(series(0.5, 0.5), 4000000, 100, NOW), null);
+  assert.equal(finishEstimate([], 4000000, 100, NOW), null);
+  const r = finishEstimate(series(), 2500000, 100, NOW);
+  assert.ok(r.reached && r.end_hours === 0);
+  assert.match(countdown(r, 100, NOW)[0], /reached/);
+});
+
+test("finish: a short history uses everything, a long one only the last day", () => {
+  const long = [{ t: NOW - 100 * HR, total: 0 }, ...series(24, 4)];
+  assert.equal(Math.round(finishEstimate(long, 4000000, 200, NOW).rate), 20000);
+  assert.equal(Math.round(finishEstimate(series(3), 4000000, 200, NOW).rate), 20000);
+});
+
+test("totalPoints merges journal samples of one goal with feed snapshots", () => {
+  const p = totalPoints([smp(1, 50, { ts: "2026-10-10T10:00:00Z" }), smp(1, 50, { cgid: 9, ts: "2026-10-10T09:00:00Z" })], 727, [[NOW, 1100000]]);
+  assert.deepEqual(p.map((x) => x.total), [1000000, 1100000]);
+  assert.equal(p[1].contributors, null);
+});
+
+// band 50 crossed at 10,880 t when the mean was 200 t (k = 54.4); now a 250 t mean heading for ~308 t
+const crossing = { t: NOW - 48 * HR, total: 2000000, contributors: 10000, contribution: 10880, band: 50 };
+const outPts = [crossing, ...series().slice(1)];
+const stOf = (contribution, kw = {}) => ({ band: 50, next_band: 25, contribution, contributors: 12000, target: 4000000,
+  brackets: { 50: [10000, 10880] }, top_rank_size: null, ...kw });
+const fin = () => finishEstimate(outPts, 4000000, 105, NOW);
+const run = { hold: 1088, mins: 18 };
+
+test("outlook: safe, tight and keep hauling around the projected cut-off", () => {
+  const safe = bandOutlook(stOf(20000), outPts, fin(), run, NOW);
+  assert.equal(safe.kind, "safe");
+  assert.match(safe.text, /^SAFE TO STOP \(~[\d,]+ t over projected top-50% cut-off\)$/);
+  assert.match(safe.tip, /k = 54\.\d\d/);
+  const cut = safe.cutoff;
+  assert.ok(cut > 15000 && cut < 16000, `cutoff ${cut}`);
+  const tight = bandOutlook(stOf(Math.round(cut + 400)), outPts, fin(), run, NOW);
+  assert.equal(tight.kind, "tight");
+  assert.match(tight.text, /^TIGHT: ~\d+ t over$/);
+  const haul = bandOutlook(stOf(Math.round(cut - 1300)), outPts, fin(), run, NOW);
+  assert.equal(haul.kind, "haul");
+  assert.match(haul.text, /^KEEP HAULING: ~2,3\d\d t \(3 runs, ~54 min\)$/);
+});
+
+test("outlook: no crossing seen, no growth data, top-N rank", () => {
+  assert.equal(bandOutlook(stOf(20000, { brackets: {} }), outPts, fin(), run, NOW).kind, "unknown");
+  assert.match(bandOutlook(stOf(20000, { brackets: {} }), outPts, fin(), run, NOW).tip, /no crossing/);
+  assert.equal(bandOutlook(stOf(20000), outPts, null, run, NOW).kind, "unknown");
+  const rank = bandOutlook(stOf(20000, { band: 25, next_band: null, top_rank_size: 10 }), outPts, fin(), run, NOW);
+  assert.equal(rank.kind, "rank");
+  assert.match(rank.tip, /no projection/);
+  assert.equal(bandOutlook(null, outPts, fin(), run, NOW), null);
+});
+
+test("the standing line leads with countdown and verdict", () => {
+  const st = standing([smp(20000, 50, { total: 3000000, contributors: 12000, expiry: "2026-10-14 21:00:00" })], null, NOW);
+  const o = bandOutlook(stOf(20000), outPts, fin(), run, NOW);
+  const [text, tip, mark] = standingText(st, run, { finish: fin(), outlook: o, now: NOW });
+  assert.match(text, /^Your contribution 20,000 t · ends in ~2d 2h \(est\., expiry 4d 9h\) · SAFE TO STOP/);
+  assert.equal(mark, o.text);
+  assert.match(tip, /Model: a band's cut-off/);
 });

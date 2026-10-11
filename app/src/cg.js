@@ -158,6 +158,110 @@ export function standing(history, live = null, now = Date.now()) {
   };
 }
 
+// -- finish forecast ------------------------------------------------------------
+// Popular goals end early when the top tier is reached. Both pieces below are
+// extrapolations of the goal's recent growth, labelled as estimates.
+
+const H = 3.6e6;
+
+/** Goal-total points {t, total, contributors, contribution, band}, oldest first: journal samples of `cgid` plus feed snapshots [[ms, qty], ...]. */
+export function totalPoints(history, cgid, snaps = []) {
+  const j = (history || []).filter((h) => String(h.cgid) === String(cgid) && h.total && Date.parse(h.ts))
+    .map((h) => ({ t: Date.parse(h.ts), total: h.total, contributors: h.contributors, contribution: h.contribution, band: h.band }));
+  const f = (snaps || []).map(([t, total]) => ({ t, total, contributors: null }));
+  return [...j, ...f].sort((a, b) => a.t - b.t);
+}
+
+/** Least-squares slope of y(x) in units per hour over the points the fit uses, or null. */
+function slope(pts, key) {
+  const p = pts.filter((q) => q[key] != null);
+  if (p.length < 2) return null;
+  const mx = p.reduce((a, q) => a + q.t, 0) / p.length, my = p.reduce((a, q) => a + q[key], 0) / p.length;
+  const sxx = p.reduce((a, q) => a + (q.t - mx) ** 2, 0);
+  return sxx ? p.reduce((a, q) => a + (q.t - mx) * (q[key] - my), 0) / sxx * H : null;
+}
+
+/** Last 24 h of points when they span >= 6 h, else all of them; [] when under 1 h of data. */
+function fitWindow(points) {
+  const span = (p) => (p.at(-1).t - p[0].t) / H;
+  if (!points || points.length < 2 || span(points) < 1) return [];
+  const w = points.filter((q) => q.t >= points.at(-1).t - 24 * H);
+  return span(points) >= 6 && w.length >= 2 && span(w) >= 1 ? w : points;
+}
+
+/**
+ * When the goal will end: {rate t/h, hours_to_target, finishes_early, end_hours, reached, basis}, or null
+ * with too little data. end_hours is whichever of target and expiry comes first.
+ */
+export function finishEstimate(points, target, expiryHours, now = Date.now()) {
+  const w = fitWindow(points);
+  if (!w.length) return null;
+  const last = points.at(-1);
+  const rate = Math.max(0, slope(w, "total") ?? 0);
+  const basis = `${w.length} readings over ${((w.at(-1).t - w[0].t) / H).toFixed(1)} h`;
+  if (target && last.total >= target) {
+    return { rate, hours_to_target: 0, finishes_early: true, end_hours: 0, reached: true, basis };
+  }
+  const toTarget = target && rate > 0 ? Math.max(0, (target - last.total) / rate - (now - last.t) / H) : null;
+  const early = toTarget != null && (expiryHours == null || toTarget < expiryHours);
+  const end = [toTarget, expiryHours].filter((x) => x != null && x >= 0);
+  return { rate, hours_to_target: toTarget, finishes_early: early, reached: false,
+    end_hours: end.length ? Math.min(...end) : null, basis };
+}
+
+/**
+ * Will your band survive to the end? A band's cut-off is modelled as a fixed multiple k of the mean
+ * contribution (total / contributors), k measured where you crossed into the band. Projects that mean to
+ * the end and compares. -> {kind: safe|tight|haul|unknown|rank, margin, cutoff, text, tip}, or null.
+ */
+export function bandOutlook(st, points, finish, run = {}, now = Date.now()) {
+  if (!st || st.band == null) return null;
+  const hold = Math.max(1, run.hold ?? 1);
+  if (st.next_band == null && st.top_rank_size) {
+    return { kind: "rank", text: "", tip: `Top ${st.band}% is the best percentile band; the top-${st.top_rank_size} rank above it is reported only as in or out, so no projection is possible.` };
+  }
+  const cross = st.brackets?.[st.band]?.[1];
+  const at = cross == null ? null : points.filter((p) => p.contributors && p.contribution)
+    .reduce((b, p) => (!b || Math.abs(p.contribution - cross) < Math.abs(b.contribution - cross) ? p : b), null);
+  if (!at || !finish || finish.end_hours == null) {
+    return { kind: "unknown", text: "", tip: !at ? "Can't project whether you keep your band: no crossing into it was seen, so its size relative to the average contributor is unknown." : "Can't project whether you keep your band: too little data on how fast the goal is growing." };
+  }
+  const k = cross / (at.total / at.contributors);
+  const last = points.at(-1), ahead = (now - last.t) / H + finish.end_hours;
+  let total = last.total + finish.rate * ahead;
+  if (st.target) total = Math.min(total, st.target);
+  const cp = points.filter((p) => p.contributors);
+  const w = fitWindow(cp), cs = w.length ? slope(w, "contributors") : null;
+  const cNow = cp.at(-1)?.contributors ?? st.contributors;
+  const contributors = Math.max(cNow, cNow + (cs ?? 0) * ((now - cp.at(-1).t) / H + finish.end_hours));
+  const mean = total / contributors, cutoff = k * mean, margin = st.contribution - cutoff;
+  const kind = margin >= hold ? "safe" : margin >= 0 ? "tight" : "haul";
+  const need = Math.ceil(-margin + hold);
+  const eff = effort(need, hold, run.mins);
+  const text = kind === "safe" ? `SAFE TO STOP (~${n0(margin)} t over projected top-${st.band}% cut-off)`
+    : kind === "tight" ? `TIGHT: ~${n0(margin)} t over`
+    : `KEEP HAULING: ~${n0(need)} t (${eff})`;
+  const tip = `Estimate. Model: a band's cut-off is a fixed multiple of the mean contribution (total / contributors). `
+    + `You crossed into top ${st.band}% at ${n0(cross)} t when the mean was ${n0(at.total / at.contributors)} t, so k = ${k.toFixed(2)}. `
+    + `Projected at the end: goal total ${n0(total)} t, ${n0(contributors)} contributors, mean ${n0(mean)} t, so a top-${st.band}% cut-off near ${n0(cutoff)} t `
+    + `against your ${n0(st.contribution)} t (margin ${n0(margin)} t). `
+    + `Safe needs a full hold (${n0(hold)} t) of cushion; keep-hauling figures include that cushion. Based on ${points.length} goal readings.`;
+  return { kind, margin, cutoff, mean, k, need, text, tip };
+}
+
+/** [countdown text, tooltip] for the goal's end, or null with nothing known. */
+export function countdown(finish, expiryHours, now = Date.now()) {
+  const dh = (h) => h < 1 ? `${Math.max(0, Math.round(h * 60))}m` : `${Math.floor(h / 24)}d ${Math.floor(h % 24)}h`.replace(/^0d /, "");
+  if (finish?.reached) return ["goal target reached - ending", "The goal total has reached its target, so it should close at the next tick."];
+  if (finish?.finishes_early) {
+    const when = new Date(now + finish.end_hours * H).toLocaleString();
+    return [`ends in ~${dh(finish.end_hours)} (est., expiry ${expiryHours != null ? dh(expiryHours) : "unknown"})`,
+      `Estimate: the goal is growing at ${n0(finish.rate)} t/h (${finish.basis}) and should hit its target around ${when}, before its expiry.`];
+  }
+  if (expiryHours > 0) return [`ends in ${dh(expiryHours)}`, finish?.rate ? `At ${n0(finish.rate)} t/h (${finish.basis}) the goal will not reach its target before expiry.` : ""];
+  return null;
+}
+
 const n0 = (n) => Math.round(n).toLocaleString("en-US");
 const tierNo = (t) => String(t ?? "").replace(/\D+/g, "");
 
@@ -201,10 +305,15 @@ export function standingChanges(last, st) {
 }
 
 /** [one line, tooltip] in plain words. `run` = {hold, mins, basis} turns tonnes into runs and time. */
-export function standingText(st, run = {}) {
+export function standingText(st, run = {}, fx = {}) {
   if (!st) return ["", ""];
   const bits = [`Your contribution ${n0(st.contribution ?? 0)} t`];
   const tip = [];
+  const cd = fx.finish || st.hours_left > 0 ? countdown(fx.finish, st.hours_left, fx.now) : null;
+  if (cd) { bits.push(cd[0]); if (cd[1]) tip.push(cd[1]); }
+  const mark = fx.outlook?.text || "";
+  if (mark) bits.push(mark);
+  if (fx.outlook?.tip) tip.push(fx.outlook.tip);
   if (st.band != null) {
     const entered = st.hold_margin != null ? st.contribution - st.hold_margin : null;
     bits.push(`top ${st.band}% band${entered != null ? ` (reached when you passed ~${n0(entered)} t)` : ""}`);
@@ -245,7 +354,7 @@ export function standingText(st, run = {}) {
     const gap = st.to_next ?? Math.max(0, st.est_next - st.contribution);
     tip.push(`About ${(gap / st.rate_per_hour).toFixed(1)} h of flying at your recent ${n0(st.rate_per_hour)} t/h.`);
   }
-  if (st.hours_left > 0) bits.push(`${Math.floor(st.hours_left / 24)}d ${Math.floor(st.hours_left % 24)}h left`);
+  if (!cd && st.hours_left > 0) bits.push(`${Math.floor(st.hours_left / 24)}d ${Math.floor(st.hours_left % 24)}h left`);
   tip.push("Frontier publishes no band thresholds: the ones quoted are measured from your own crossings and only ever floors.");
-  return [bits.join(" · "), tip.join("\n\n")];
+  return [bits.join(" · "), tip.join("\n\n"), mark, fx.outlook?.kind];
 }
