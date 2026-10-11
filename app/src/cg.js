@@ -247,18 +247,67 @@ export function bandOutlook(st, points, finish, run = {}, now = Date.now()) {
   const cNow = cp.at(-1)?.contributors ?? st.contributors;
   const contributors = Math.max(cNow, cNow + (cs ?? 0) * ((now - cp.at(-1).t) / H + finish.end_hours));
   const mean = total / contributors, cutoff = k * mean, margin = st.contribution - cutoff;
-  const kind = margin >= hold ? "safe" : margin >= 0 ? "tight" : "haul";
+  let kind = margin >= hold ? "safe" : margin >= 0 ? "tight" : "haul";
+  const overtake = overtakeCheck(st, { k, floor }, finish, points, run, now);
   const need = Math.ceil(-margin + hold);
   const eff = effort(need, hold, run.mins);
-  const text = kind === "safe" ? `SAFE TO STOP (~${n0(margin)} t over projected top-${st.band}% cut-off)`
+  let text = kind === "safe" ? `SAFE TO STOP (~${n0(margin)} t over projected top-${st.band}% cut-off)`
     : kind === "tight" ? `TIGHT: ~${n0(margin)} t over`
     : `KEEP HAULING: ~${n0(need)} t (${eff})`;
+  // The margin is a model; the overtake check is a physical limit. Either can overrule the other's comfort.
+  if (overtake && kind === "safe" && overtake.feasible) { kind = "tight"; text = `TIGHT: ~${n0(margin)} t over, overtake possible`; }
+  else if (overtake && kind === "tight" && !overtake.feasible) {
+    kind = "safe"; text = `SAFE TO STOP (overtake impossible: ~${fmtM(overtake.totalNeeded)} t needed, ~${fmtM(overtake.remaining)} t left)`;
+  }
   const tip = `Estimate. Model: a band's cut-off is a fixed multiple of the mean contribution (total / contributors). `
     + `${kWhy} `
     + `Projected at the end: goal total ${n0(total)} t, ${n0(contributors)} contributors, mean ${n0(mean)} t, so a top-${st.band}% cut-off near ${n0(cutoff)} t `
     + `against your ${n0(st.contribution)} t (margin ${n0(margin)} t). `
     + `Safe needs a full hold (${n0(hold)} t) of cushion; keep-hauling figures include that cushion. Based on ${points.length} goal readings.`;
-  return { kind, margin, cutoff, mean, k, need, text, tip };
+  return { kind, margin, cutoff, mean, k, need, text, tip, overtake };
+}
+
+const fmtM = (n) => n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e4 ? `${Math.round(n / 1e3)}k` : n0(n);
+const roundTo = (n, step) => Math.round(n / step) * step;
+
+/**
+ * Could enough commanders below the cut-off climb past you before the goal ends? A physical-limits check
+ * (tonnes remaining, minutes left, hold size), assuming contributors are spread evenly across your band.
+ * `kk` = {k, floor}: the cut-off multiple in use and the popular-goal floor. null when not applicable.
+ */
+export function overtakeCheck(st, kk, finish, points, run = {}, now = Date.now()) {
+  if (!st || st.band == null || st.next_band == null || !finish || finish.end_hours == null || !kk?.k) return null;
+  const last = points.at(-1);
+  const n = last?.contributors || st.contributors, total = last?.total || st.total;
+  if (!n || !total || !st.target) return null;
+  const C = st.contribution, xNow = kk.k * total / n;
+  if (C <= xNow) return null;
+  const mean = total / n;
+  let rough = false, xNb;
+  if (finish.finishes_early && POPULAR_K[st.next_band]) xNb = POPULAR_K[st.next_band] * mean;
+  else if (st.next_known) xNb = C + st.to_next;
+  else if (st.est_next) xNb = st.est_next;
+  else { xNb = 2 * xNow; rough = true; }
+  if (xNb <= C) xNb = C + 1;
+  const frac = (st.band - st.next_band) / 100;
+  const crowd = n * frac * Math.min(1, (C - xNow) / (xNb - xNow));
+  const perCmdr = C - xNow, totalNeeded = crowd * perCmdr;
+  const remaining = finish.finishes_early ? Math.max(0, st.target - total) : finish.rate * finish.end_hours;
+  const hold = Math.max(run.hold ?? 1, 1), mins = run.mins_best ?? run.mins ?? null;
+  const runsEach = Math.ceil(perCmdr / hold), minutesEach = mins ? runsEach * mins : null;
+  const minutesLeft = finish.end_hours * 60;
+  // ponytail: at most half the remaining tonnage / time can plausibly go to this one crowd; everyone else keeps hauling too
+  const feasible = totalNeeded <= remaining / 2 && (minutesEach == null || minutesEach <= minutesLeft / 2);
+  const mm = (m) => m < 90 ? `${Math.round(m)} min` : `${(m / 60).toFixed(1)} h`;
+  const lines = [
+    `To push the top-${st.band}% cut-off above your ${n0(C)} t, enough commanders below it would have to climb past you.`,
+    `About ${n0(crowd >= 1000 ? roundTo(crowd, 100) : roundTo(crowd, 10))} commanders sit between the cut-off (~${n0(xNow)} t) and you (assuming they are spread evenly through the band${rough ? ", roughly" : ""}).`,
+    `Each needs at least ${n0(roundTo(perCmdr, 10))} t more${minutesEach ? `: about ${(perCmdr / hold).toFixed(1)} full holds, ~${mm(minutesEach)} of perfect runs at the fastest route` : ""}.`,
+    `That is ~${fmtM(totalNeeded)} t in all, and only ~${fmtM(remaining)} t remains before the goal ends, in ~${mm(minutesLeft)} (and not all of it can come from this crowd).`,
+    feasible ? "Possible if the push concentrates near your level - keep a cushion." : "Not possible before the goal ends.",
+  ];
+  const why = totalNeeded > remaining / 2 ? "not enough tonnage left" : minutesEach != null && minutesEach > minutesLeft / 2 ? "not enough time left" : "tonnage and time allow it";
+  return { feasible, crowd, perCmdr, totalNeeded, remaining, runsEach, minutesEach, minutesLeft, lines, why };
 }
 
 /** [countdown text, tooltip] for the goal's end, or null with nothing known. */
@@ -325,6 +374,7 @@ export function standingText(st, run = {}, fx = {}) {
   if (cd) { bits.push(cd[0]); if (cd[1]) tip.push(cd[1]); }
   const mark = fx.outlook?.text || "";
   if (mark) bits.push(mark);
+  if (fx.outlook?.overtake) tip.push(fx.outlook.overtake.lines.join(" "));
   if (fx.outlook?.tip) tip.push(fx.outlook.tip);
   if (st.band != null) {
     const entered = st.hold_margin != null ? st.contribution - st.hold_margin : null;

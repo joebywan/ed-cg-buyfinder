@@ -2,7 +2,7 @@
 // suggest_destination.
 import test from "node:test";
 import assert from "node:assert/strict";
-import { POPULAR_K, bandBrackets, bandOutlook, countdown, finishEstimate, totalPoints, effort, standingChanges, hoursLeft, historyFromLines, joinedGoal, parseLive, ratePerHour, standing, standingText,
+import { POPULAR_K, overtakeCheck, bandBrackets, bandOutlook, countdown, finishEstimate, totalPoints, effort, standingChanges, hoursLeft, historyFromLines, joinedGoal, parseLive, ratePerHour, standing, standingText,
   suggestDestination, timesAverage } from "../src/cg.js";
 
 const FEED = {
@@ -253,8 +253,9 @@ test("outlook: safe, tight and keep hauling around the projected cut-off", () =>
   const cut = safe.cutoff;
   assert.ok(cut > 15000 && cut < 16000, `cutoff ${cut}`);
   const tight = bandOutlook(stOf(Math.round(cut + 400)), outPts, fin(), run, NOW);
-  assert.equal(tight.kind, "tight");
-  assert.match(tight.text, /^TIGHT: ~\d+ t over$/);
+  // margin says tight, but the overtake needs far more tonnage than remains: SAFE (test e)
+  assert.equal(tight.kind, "safe");
+  assert.match(tight.text, /^SAFE TO STOP \(overtake impossible: ~[\d.]+M? t needed, ~[\d.]+M? t left\)$/);
   const haul = bandOutlook(stOf(Math.round(cut - 1300)), outPts, fin(), run, NOW);
   assert.equal(haul.kind, "haul");
   assert.match(haul.text, /^KEEP HAULING: ~2,3\d\d t \(3 runs, ~54 min\)$/);
@@ -288,11 +289,12 @@ test("outlook: popular-goal k floor for early finishers only", () => {
   assert.equal(fl.k, POPULAR_K[50]);
   assert.match(fl.tip, /popular-goal floor/);
   const cut = fl.cutoff;
-  assert.equal(bandOutlook(st(Math.round(cut + 1400)), pts, f, run, NOW).kind, "safe");
+  const sf = bandOutlook(st(Math.round(cut + 1400)), pts, f, run, NOW);
+  assert.equal(sf.kind, sf.overtake.feasible ? "tight" : "safe"); // margin is safe; the overtake check may downgrade
   assert.equal(bandOutlook(st(Math.round(cut - 400)), pts, f, run, NOW).kind, "haul");
   const late = bandOutlook(st(Math.round(cut - 400)), pts, { ...f, finishes_early: false }, run, NOW);
   assert.ok(Math.abs(late.k - 0.72) < 1e-9);
-  assert.equal(late.kind, "safe"); // same contribution flips SAFE -> HAULING once the floor applies
+  assert.equal(late.kind, late.overtake.feasible ? "tight" : "safe"); // same contribution flips SAFE -> HAULING once the floor applies
   assert.match(late.tip, /measured/);
   const nc = bandOutlook(st(Math.round(cut + 1400), { brackets: {} }), pts, f, run, NOW);
   assert.equal(nc.k, POPULAR_K[50]);
@@ -306,4 +308,36 @@ test("the standing line leads with countdown and verdict", () => {
   assert.match(text, /^Your contribution 20,000 t · ends in ~2d 2h \(est\., expiry 4d 9h\) · SAFE TO STOP/);
   assert.equal(mark, o.text);
   assert.match(tip, /Model: a band's cut-off/);
+});
+
+// the real goal: ~11,500 contributors, mean ~16,200 t, 200M target, ~189.7M in, 90 min to target
+const goalPts = [{ t: NOW - 3 * HR, total: 170000000, contributors: 11400 }, { t: NOW, total: 189700000, contributors: 11500 }];
+const goalSt = (c, kw = {}) => ({ band: 50, next_band: 25, contribution: c, contributors: 11500, total: 189700000, target: 200000000,
+  brackets: {}, top_rank_size: null, ...kw });
+const goalFin = (kw = {}) => ({ rate: 6.9e6, finishes_early: true, end_hours: 1.5, reached: false, ...kw });
+const goalRun = { hold: 1088, mins: 18 };
+
+test("overtake: the real goal cannot be overtaken in time, so SAFE", () => {
+  const o = bandOutlook(goalSt(20672), goalPts, goalFin(), goalRun, NOW);
+  assert.equal(o.overtake.feasible, false);
+  assert.ok(o.overtake.crowd > 1000 && o.overtake.crowd < 2500, `crowd ${o.overtake.crowd}`);
+  assert.ok(o.overtake.remaining / 2 < o.overtake.totalNeeded);
+  assert.equal(o.overtake.lines.length, 5);
+  assert.match(o.overtake.lines.at(-1), /^Not possible/);
+  assert.equal(o.kind, "safe");
+});
+
+test("overtake: with 6 h left and plenty remaining it is feasible, so TIGHT", () => {
+  const f = goalFin({ rate: 3e6, end_hours: 6 });
+  const o = bandOutlook(goalSt(20672, { target: 400000000 }), goalPts, f, goalRun, NOW);
+  assert.equal(o.overtake.feasible, true);
+  assert.equal(o.kind, "tight");
+  assert.match(o.text, /^TIGHT: ~[\d,]+ t over, overtake possible$/);
+  assert.match(o.overtake.lines.at(-1), /^Possible/);
+});
+
+test("overtake: null when below the cut-off or in the top-N case", () => {
+  assert.equal(overtakeCheck(goalSt(14000), { k: 1 }, goalFin(), goalPts, goalRun, NOW), null);
+  assert.equal(overtakeCheck(goalSt(20672, { band: 25, next_band: null, top_rank_size: 10 }), { k: 1 }, goalFin(), goalPts, goalRun, NOW), null);
+  assert.equal(overtakeCheck(goalSt(20672), { k: 1 }, null, goalPts, goalRun, NOW), null);
 });
