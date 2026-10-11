@@ -2,7 +2,7 @@
 // TestShipIdentity, TestLadenJumpRange.
 import test from "node:test";
 import assert from "node:assert/strict";
-import { Calibration, JournalState, estScMinutes, ladenJumpRange, parseTs, runMinutes }
+import { Calibration, JournalState, estScMinutes, ladenJumpRange, parseTs, runMinutes, timingReport }
   from "../src/journal.js";
 
 const near = (a, b, eps = 1e-9) =>
@@ -266,4 +266,30 @@ test("runMinutes: median flying time per round trip plus turnaround, repairs and
   // undock/dock at the same pad is a repair, not a run
   const rep = [["dock", "Home", 0], ["undock", "Home", 10], ["dock", "Home", 700], ["undock", "Home", 710], ["dock", "Home", 900]];
   assert.deepEqual(runMinutes(rep, "Home", 1), [null, 0]);
+});
+
+// -- timingReport -----------------------------------------------------------
+
+test("timingReport: not enough data", () => {
+  const rows = timingReport(new Calibration({ jump_secs: [30, 40] }));
+  assert.equal(rows[0].label, "Per jump");
+  assert.equal(rows[0].value, "not enough data yet (n=2)");
+  assert.match(rows.at(-1).detail, /varied distance/);
+});
+
+test("timingReport: medians, ranges and the per-1000-Ls arrival figure", () => {
+  const cal = new Calibration({
+    jump_secs: [30, 40, 50, 60, 70], depart_secs: [100, 110, 120], dock_secs: [90, 100, 130],
+    approach_samples: [[100, 60], [100, 62], [1000, 90], [1000, 94], [10000, 140], [10000, 146]],
+  });
+  const rows = Object.fromEntries(timingReport(cal).map((r) => [r.label, r]));
+  assert.equal(rows["Per jump"].value, "50 s per jump");
+  assert.match(rows["Per jump"].detail, /typically 40 s to 60 s, n=5, 2% faster/);
+  assert.equal(rows["Getting out of the station"].value, "110 s");
+  assert.match(rows["Time docked"].detail, /fixed 2 min/);
+  const [a] = cal.arrivalFit;
+  assert.ok(a > 0);
+  assert.match(rows["Arrival: travel"].value, /^~\d+ s per 1,000 Ls$/);
+  assert.match(rows["Arrival examples"].value, /100 Ls: .*1,000 Ls: .*10,000 Ls: /);
+  assert.ok(!rows["Arrival examples"].value.includes("extrapolated"));
 });

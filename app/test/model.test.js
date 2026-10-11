@@ -98,6 +98,7 @@ test("greedy packing fills the hold best first", () => {
   assert.equal(p.short, 0);
   assert.equal(p.total, 40 * 1000 + 60 * 500);
   assert.equal(p.cr_per_min, Math.round(p.total / 20));
+  assert.equal(p.t_per_min, 5);   // 100 t over a 20 minute trip
 });
 
 test("input order does not matter", () => {
@@ -262,4 +263,12 @@ test("a mixed plan inherits the station's body from its rows", () => {
   assert.equal(plan.planetary, true);
   assert.equal(plan.body, "Mercury");
   assert.equal(m.whereItIs(plan), "Planetary Outpost — on Mercury");
+});
+
+test("tripParts sums to tripMinutes", () => {
+  const cal = new Calibration({ jump_secs: [30, 40, 50], depart_secs: [100, 110, 120] });
+  const args = [60, 1000, 500, 30, 25];
+  const t = m.tripParts(...args, cal);
+  assert.equal(m.tripMinutes(...args, cal), t.jumps + t.arrive + (t.dock + t.depart));
+  near(t.dock, 4);
 });

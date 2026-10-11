@@ -192,6 +192,10 @@ last copied. On `AGE`, a green ✓ means EDSM confirmed the reading and a dim ?
 means Spansh data still waiting for its EDSM check. Hover a row for the same
 explanation; the footer legend lists whichever markers are on screen, and the
 **INFO** tab explains all of them, with the credits, the version and the update status.
+It also shows **YOUR FLYING**, the jump, docking and arrival times measured from your journal that the
+trip estimates use:
+
+![Info](screenshots/04-info.png)
 
 Once results are up, the search controls and DESTINATION fold into one summary line
 (with SEARCH still on it); ✎ EDIT unfolds them until the next search. Alerts: a banner

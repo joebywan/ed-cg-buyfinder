@@ -5,7 +5,7 @@ import { loadPrefs } from "../src/prefs.js";
 import { buildMixed } from "../src/model.js";
 
 test("defaults are today's columns and all registered", () => {
-  assert.equal(DEFAULT_MIXED.length, 10);
+  assert.equal(DEFAULT_MIXED.length, 11);
   assert.deepEqual(loadPrefs(null).cols_mixed, DEFAULT_MIXED);
   for (const id of DEFAULT_MIXED) assert.ok(MIXED_COLS.some((c) => c.id === id));
   for (const c of MIXED_COLS) assert.ok(c.title && c.label);

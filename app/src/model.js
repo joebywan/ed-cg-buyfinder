@@ -93,8 +93,8 @@ export function padFits(maxPadSize, pad) {
   return typeof maxPadSize === "number" && maxPadSize >= PAD_SIZE[pad];
 }
 
-/** Round trip in minutes: destination -> source empty, back laden. */
-export function tripMinutes(distLy, srcLs, cgLs, jumpEmpty, jumpLaden, cal = null) {
+/** Where a round trip's minutes go: {jumps, depart, arrive, dock}; tripMinutes sums them. */
+export function tripParts(distLy, srcLs, cgLs, jumpEmpty, jumpLaden, cal = null) {
   const jumpMin = cal?.jumpMinutes || EST_JUMP_MIN;
   const departMin = cal?.departMinutes || EST_DEPART_MIN;
   const scScale = cal?.scScale || EST_SC_SCALE;
@@ -105,9 +105,14 @@ export function tripMinutes(distLy, srcLs, cgLs, jumpEmpty, jumpLaden, cal = nul
   const outJ = distLy > 0 ? Math.ceil(distLy / jumpEmpty) : 0;
   const backJ = distLy > 0 ? Math.ceil(distLy / jumpLaden) : 0;
   // The first jump of each leg is already inside departure and the arrival leg.
-  const jumps = (Math.max(outJ - 1, 0) + Math.max(backJ - 1, 0)) * jumpMin;
-  const legs = arrival(srcLs) + arrival(cgLs);
-  return Math.max(jumps + legs + (EST_DOCK_MIN + departMin) * 2, 0.5);
+  return { jumps: (Math.max(outJ - 1, 0) + Math.max(backJ - 1, 0)) * jumpMin,
+    depart: departMin * 2, arrive: arrival(srcLs) + arrival(cgLs), dock: EST_DOCK_MIN * 2 };
+}
+
+/** Round trip in minutes: destination -> source empty, back laden. */
+export function tripMinutes(distLy, srcLs, cgLs, jumpEmpty, jumpLaden, cal = null) {
+  const t = tripParts(distLy, srcLs, cgLs, jumpEmpty, jumpLaden, cal);
+  return Math.max(t.jumps + t.arrive + (t.dock + t.depart), 0.5);
 }
 
 /** The view filters and the surface penalty, applied to cached rows.
@@ -170,6 +175,7 @@ export function buildMixed(rows, hold) {
       src: top.src, edsm: items.some((i) => i.edsm),   // which reading it is, for the watcher's "why"
       supply: mix.reduce((n, m) => n + m.supply, 0),   // stock of the commodities in the load, summed
       trip_minutes: top.trip_minutes, total, cr_per_min: Math.round(total / top.trip_minutes), mix,
+      t_per_min: Math.round((hold - remaining) / top.trip_minutes * 10) / 10,
     });
   }
   plans.sort((a, b) => b.cr_per_min - a.cr_per_min);

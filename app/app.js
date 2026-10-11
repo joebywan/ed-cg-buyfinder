@@ -9,7 +9,7 @@ import { initSettings } from "./src/settings.js";
 import { VIEWS, colWidths, fitWidth, moveCol, placeCol, toggleCol } from "./src/columns.js";
 import { wireHeaders } from "./src/headers.js";
 import { Sender } from "./src/eddn.js";
-import { JournalState, runMinutes } from "./src/journal.js";
+import { JournalState, runMinutes, timingReport } from "./src/journal.js";
 import { clearLog, formatLog, getLog, formatLine, log, onLog } from "./src/log.js";
 import { SOURCES, searchSources } from "./src/merge.js";
 import { Progress } from "./src/progress.js";
@@ -20,7 +20,7 @@ import { edsmGate } from "./src/edsm.js";
 import { WANT, widen } from "./src/widen.js";
 import { VERSION } from "./src/version.js";
 import { checkForUpdate } from "./src/update.js";
-import { MAX_AGE_DEFAULT, ageTag, ageText, buildMixed, compareValues, hiddenBy, mixedSortValue, padForShip,
+import { MAX_AGE_DEFAULT, tripParts, ageTag, ageText, buildMixed, compareValues, hiddenBy, mixedSortValue, padForShip,
   viewRows, whereItIs } from "./src/model.js";
 
 const $ = (id) => document.getElementById(id);
@@ -237,6 +237,39 @@ function runFigures() {
   if (real) return { hold, mins: real, basis: `the median of your last ${n}, flying time plus a two-minute turnaround at each end` };
   const top = plansNow()[0];
   return { hold, mins: top?.trip_minutes ?? null, basis: "the route plus a two-minute turnaround at each end" };
+}
+
+/** INFO tab, YOUR FLYING: measured timings in plain words plus the current plan's breakdown. */
+function renderInfo() {
+  const box = $("info-flying");
+  const j = S.journal;
+  if (!j) { box.innerHTML = '<dd class="dim">Needs a journal: pick your journal folder (desktop app) to measure your own timings.</dd>'; return; }
+  const rows = timingReport(j.cal);
+  const top = plansNow()[0], r = S.result;
+  if (top && r) {
+    const f = shipFigures() ?? r.p;
+    const t = tripParts(top.ly, top.ls, r.cgLs ?? 0, f.jump_empty, f.jump_laden, j.cal);
+    const sum = Object.values(t).reduce((a, b) => a + b, 0);
+    const pct = (m) => `${m.toFixed(1)} min (${Math.round(m / sum * 100)}%)`;
+    rows.push({ label: "Where a round trip goes", value: `${sum.toFixed(1)} min to ${top.station}`,
+      detail: `jumps ${pct(t.jumps)}, departures ${pct(t.depart)}, arrival legs ${pct(t.arrive)}, docking ${pct(t.dock)}`
+        + (top.penalty ? `; ranked with +${top.penalty} min surface penalty` : "") });
+  }
+  const run = runFigures();
+  if (run.mins && run.basis.startsWith("the median")) {
+    rows.push({ label: "Measured round trip", value: `${run.mins.toFixed(1)} min`, detail: run.basis });
+  }
+  const sf = shipFigures();
+  if (sf?.jump_empty) {
+    rows.push({ label: "Jump range", value: `${sf.jump_empty} ly empty${sf.jump_laden ? `, ${sf.jump_laden} ly laden` : ""}`, detail: "" });
+  }
+  box.replaceChildren(...rows.flatMap((x) => {
+    const dt = document.createElement("dt"), dd = document.createElement("dd");
+    dt.textContent = x.label;
+    dd.textContent = x.value;
+    if (x.detail) { const d = document.createElement("span"); d.className = "dim small"; d.textContent = x.detail; dd.append(d); }
+    return [dt, dd];
+  }));
 }
 
 /** Where you stand in the goal you joined; updates on journal events and Frontier feed refreshes. */
@@ -830,6 +863,7 @@ function render() {
   renderCols();
   $("legend").hidden = true;                 // renderMixed brings it back
   if (S.view === "settings") ui.refresh();
+  if (S.view === "info") renderInfo();
   renderDest();
   const r = S.result;
   const stale = r && S.dest && !sameDest(r.p.dest, S.dest);
@@ -1002,6 +1036,7 @@ function adoptJournal({ state, lines }) {
   };
   // The game writes Market.json and then logs this, so the file is there by
   // the time we are told about it.
+  state.onCalibration = () => { if (S.view === "info") renderInfo(); };
   state.onEvent = (e) => {
     if (EDDN_KINDS.includes(e.event)) shareStation(e.event, e.MarketID ?? null);
   };
