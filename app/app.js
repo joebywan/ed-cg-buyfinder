@@ -247,9 +247,9 @@ function resolveDest() {
 function runFigures() {
   const hold = S.result?.p.hold ?? S.journal?.cargoCapacity ?? 1;
   const [real, n] = S.journal && S.dest ? runMinutes(S.journal.dockLog, S.dest.station) : [null, 0];
-  if (real) return { hold, mins: real, basis: `the median of your last ${n}, flying time plus a two-minute turnaround at each end` };
+  if (real) return { hold, mins: real, mins_best: plansNow()[0]?.trip_minutes ?? real, basis: `the median of your last ${n}, flying time plus a two-minute turnaround at each end` };
   const top = plansNow()[0];
-  return { hold, mins: top?.trip_minutes ?? null, basis: "the route plus a two-minute turnaround at each end" };
+  return { hold, mins: top?.trip_minutes ?? null, mins_best: top?.trip_minutes ?? null, basis: "the route plus a two-minute turnaround at each end" };
 }
 
 /** INFO tab, YOUR FLYING: measured timings in plain words plus the current plan's breakdown. */
@@ -305,12 +305,25 @@ function renderStanding() {
     ? [text.slice(0, text.indexOf(mark)), h("span", { class: { safe: "ok", tight: "warn", haul: "bad" }[kind] }, mark), text.slice(text.indexOf(mark) + mark.length)]
     : [text || ""]));
   line.title = text ? `${text}\n\n${tip}` : "";
+  const vs = line.querySelector("span");
+  if (vs && fx.outlook) {
+    vs.classList.add("why"); vs.title = "Why?";
+    vs.onclick = () => showWhy(fx.outlook);
+  }
   if (!st) return;
   const { next, notes } = standingChanges(S.lastStanding, st);
   S.lastStanding = next;
   if (!notes.length) return;
   const text2 = notes.map((n) => `${n.title}. ${n.text}`).join(" ");
   showAlert({ kind: "standing", title: notes[0].title, text: text2, keys: new Set(), copy: null, ok: "OK", beep: true });
+}
+
+/** The verdict's reasoning in a dialog: the overtake argument, then the model's tip. */
+function showWhy(o) {
+  const d = $("why-dialog");
+  $("why-title").textContent = { safe: "Why it's safe to stop", tight: "Why it's tight", haul: "Why keep hauling" }[o.kind] ?? "Why";
+  $("why-body").replaceChildren(...(o.overtake?.lines ?? []).map((l) => h("p", {}, l)), h("p", { class: "dim" }, o.tip));
+  d.showModal();
 }
 
 function renderDest() {
