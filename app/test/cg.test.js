@@ -2,7 +2,7 @@
 // suggest_destination.
 import test from "node:test";
 import assert from "node:assert/strict";
-import { bandBrackets, bandOutlook, countdown, finishEstimate, totalPoints, effort, standingChanges, hoursLeft, historyFromLines, joinedGoal, parseLive, ratePerHour, standing, standingText,
+import { POPULAR_K, bandBrackets, bandOutlook, countdown, finishEstimate, totalPoints, effort, standingChanges, hoursLeft, historyFromLines, joinedGoal, parseLive, ratePerHour, standing, standingText,
   suggestDestination, timesAverage } from "../src/cg.js";
 
 const FEED = {
@@ -261,13 +261,42 @@ test("outlook: safe, tight and keep hauling around the projected cut-off", () =>
 });
 
 test("outlook: no crossing seen, no growth data, top-N rank", () => {
-  assert.equal(bandOutlook(stOf(20000, { brackets: {} }), outPts, fin(), run, NOW).kind, "unknown");
-  assert.match(bandOutlook(stOf(20000, { brackets: {} }), outPts, fin(), run, NOW).tip, /no crossing/);
+  const slow = finishEstimate(outPts, 9000000, 30, NOW);
+  assert.equal(bandOutlook(stOf(20000, { brackets: {} }), outPts, slow, run, NOW).kind, "unknown");
+  assert.match(bandOutlook(stOf(20000, { brackets: {} }), outPts, slow, run, NOW).tip, /no crossing/);
   assert.equal(bandOutlook(stOf(20000), outPts, null, run, NOW).kind, "unknown");
   const rank = bandOutlook(stOf(20000, { band: 25, next_band: null, top_rank_size: 10 }), outPts, fin(), run, NOW);
   assert.equal(rank.kind, "rank");
   assert.match(rank.tip, /no projection/);
   assert.equal(bandOutlook(null, outPts, fin(), run, NOW), null);
+});
+
+test("finish: last 3 h rate wins when accelerating, 24 h when steady", () => {
+  const acc = series(24).map((p) => ({ ...p, total: p.total + (p.t > NOW - 3 * HR ? (p.t - (NOW - 3 * HR)) / HR * 60000 : 0) }));
+  const f = finishEstimate(acc, 9000000, 500, NOW);
+  assert.ok(f.rate > 50000 && /^last 3 h, \d+ readings \(faster than the 24 h pace\)$/.test(f.basis), f.basis);
+  assert.match(finishEstimate(series(24), 9000000, 500, NOW).basis, /^25 readings over 24\.0 h$/);
+});
+
+test("outlook: popular-goal k floor for early finishers only", () => {
+  // measured k = 0.72 (crossing at 0.72x the mean); the floor lifts it to 1.0
+  const pts = [{ t: NOW - 48 * HR, total: 2000000, contributors: 200, contribution: 7200, band: 50 },
+    ...series().slice(1).map((p) => ({ ...p, contributors: 230 }))]; // mean at the end ~17,400 t
+  const f = { rate: 20000, finishes_early: true, end_hours: 50, reached: false };
+  const st = (c, kw) => stOf(c, { brackets: { 50: [200, 7200] }, target: 4000000, ...kw });
+  const fl = bandOutlook(st(18496), pts, f, run, NOW);
+  assert.equal(fl.k, POPULAR_K[50]);
+  assert.match(fl.tip, /popular-goal floor/);
+  const cut = fl.cutoff;
+  assert.equal(bandOutlook(st(Math.round(cut + 1400)), pts, f, run, NOW).kind, "safe");
+  assert.equal(bandOutlook(st(Math.round(cut - 400)), pts, f, run, NOW).kind, "haul");
+  const late = bandOutlook(st(Math.round(cut - 400)), pts, { ...f, finishes_early: false }, run, NOW);
+  assert.ok(Math.abs(late.k - 0.72) < 1e-9);
+  assert.equal(late.kind, "safe"); // same contribution flips SAFE -> HAULING once the floor applies
+  assert.match(late.tip, /measured/);
+  const nc = bandOutlook(st(Math.round(cut + 1400), { brackets: {} }), pts, f, run, NOW);
+  assert.equal(nc.k, POPULAR_K[50]);
+  assert.match(nc.tip, /No crossing/);
 });
 
 test("the standing line leads with countdown and verdict", () => {

@@ -197,8 +197,12 @@ export function finishEstimate(points, target, expiryHours, now = Date.now()) {
   const w = fitWindow(points);
   if (!w.length) return null;
   const last = points.at(-1);
-  const rate = Math.max(0, slope(w, "total") ?? 0);
-  const basis = `${w.length} readings over ${((w.at(-1).t - w[0].t) / H).toFixed(1)} h`;
+  let rate = Math.max(0, slope(w, "total") ?? 0);
+  let basis = `${w.length} readings over ${((w.at(-1).t - w[0].t) / H).toFixed(1)} h`;
+  // trade goals surge at the end: a faster last-3 h pace wins (ends sooner = conservative)
+  const r = points.filter((q) => q.t >= points.at(-1).t - 3 * H);
+  const r3 = r.length >= 2 && (r.at(-1).t - r[0].t) >= H ? Math.max(0, slope(r, "total") ?? 0) : 0;
+  if (r3 > rate) { rate = r3; basis = `last 3 h, ${r.length} readings (faster than the 24 h pace)`; }
   if (target && last.total >= target) {
     return { rate, hours_to_target: 0, finishes_early: true, end_hours: 0, reached: true, basis };
   }
@@ -208,6 +212,9 @@ export function finishEstimate(points, target, expiryHours, now = Date.now()) {
   return { rate, hours_to_target: toTarget, finishes_early: early, reached: false,
     end_hours: end.length ? Math.min(...end) : null, basis };
 }
+
+/** Cut-off / mean contribution seen near the end of popular trade goals on Inara; err toward "keep hauling". */
+export const POPULAR_K = { 25: 1.45, 50: 1.0, 75: 0.4 };
 
 /**
  * Will your band survive to the end? A band's cut-off is modelled as a fixed multiple k of the mean
@@ -223,10 +230,15 @@ export function bandOutlook(st, points, finish, run = {}, now = Date.now()) {
   const cross = st.brackets?.[st.band]?.[1];
   const at = cross == null ? null : points.filter((p) => p.contributors && p.contribution)
     .reduce((b, p) => (!b || Math.abs(p.contribution - cross) < Math.abs(b.contribution - cross) ? p : b), null);
-  if (!at || !finish || finish.end_hours == null) {
+  const floor = finish?.finishes_early ? POPULAR_K[st.band] : undefined;
+  if ((!at && floor == null) || !finish || finish.end_hours == null) {
     return { kind: "unknown", text: "", tip: !at ? "Can't project whether you keep your band: no crossing into it was seen, so its size relative to the average contributor is unknown." : "Can't project whether you keep your band: too little data on how fast the goal is growing." };
   }
-  const k = cross / (at.total / at.contributors);
+  const measured = at ? cross / (at.total / at.contributors) : null;
+  const k = Math.max(measured ?? 0, floor ?? 0), floored = floor != null && k > (measured ?? 0);
+  const kWhy = !at ? `No crossing into top ${st.band}% was seen, but this goal should finish early, so k = ${k.toFixed(2)} is the popular-goal floor (cut-offs near the end of popular trade goals on Inara).`
+    : floored ? `You crossed into top ${st.band}% at ${n0(cross)} t when the mean was ${n0(at.total / at.contributors)} t (measured k = ${measured.toFixed(2)}), but this goal should finish early and cut-offs rise on popular goals, so the popular-goal floor k = ${k.toFixed(2)} is used.`
+    : `You crossed into top ${st.band}% at ${n0(cross)} t when the mean was ${n0(at.total / at.contributors)} t, so k = ${k.toFixed(2)} (measured${floor != null ? "; above the popular-goal floor" : ""}).`;
   const last = points.at(-1), ahead = (now - last.t) / H + finish.end_hours;
   let total = last.total + finish.rate * ahead;
   if (st.target) total = Math.min(total, st.target);
@@ -242,7 +254,7 @@ export function bandOutlook(st, points, finish, run = {}, now = Date.now()) {
     : kind === "tight" ? `TIGHT: ~${n0(margin)} t over`
     : `KEEP HAULING: ~${n0(need)} t (${eff})`;
   const tip = `Estimate. Model: a band's cut-off is a fixed multiple of the mean contribution (total / contributors). `
-    + `You crossed into top ${st.band}% at ${n0(cross)} t when the mean was ${n0(at.total / at.contributors)} t, so k = ${k.toFixed(2)}. `
+    + `${kWhy} `
     + `Projected at the end: goal total ${n0(total)} t, ${n0(contributors)} contributors, mean ${n0(mean)} t, so a top-${st.band}% cut-off near ${n0(cutoff)} t `
     + `against your ${n0(st.contribution)} t (margin ${n0(margin)} t). `
     + `Safe needs a full hold (${n0(hold)} t) of cushion; keep-hauling figures include that cushion. Based on ${points.length} goal readings.`;
