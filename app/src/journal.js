@@ -20,6 +20,13 @@ function median(xs) {
   return s.length % 2 ? s[h] : (s[h - 1] + s[h]) / 2;
 }
 
+/** q-th quantile (0..1), linear between ranks. */
+function quantile(xs, q) {
+  const s = [...xs].sort((a, b) => a - b);
+  const i = (s.length - 1) * q, f = Math.floor(i);
+  return s[f] + (s[Math.min(f + 1, s.length - 1)] - s[f]) * (i - f);
+}
+
 const MIN_SAMPLES = 3;        // below this, one weird run would skew everything
 const MAX_SAMPLES = 200;
 const ARRIVAL_MIN_SPREAD = 3; // furthest/nearest sampled Ls, to fit at all
@@ -280,6 +287,43 @@ export class JournalState {
     if (learned && this.onCalibration) this.onCalibration(cal);
     return learned;
   }
+}
+
+const fmtSecs = (s) => (s < 120 ? `${Math.round(s)} s` : `${(s / 60).toFixed(1)} min`);
+const vs = (secs, defMin) => {
+  const pct = Math.round(Math.abs(secs / (defMin * 60) - 1) * 100);
+  return pct < 1 ? "same as the default estimate" : `${pct}% ${secs < defMin * 60 ? "faster" : "slower"} than the default estimate`;
+};
+
+/** The measured timings in plain words: [{label, value, detail}] for the INFO tab. */
+export function timingReport(cal) {
+  const rows = [];
+  const timing = (label, xs, defMin, suffix, note) => {
+    if (xs.length < MIN_SAMPLES) return rows.push({ label, value: `not enough data yet (n=${xs.length})`, detail: "" });
+    const m = median(xs);
+    const range = `typically ${fmtSecs(quantile(xs, 0.25))} to ${fmtSecs(quantile(xs, 0.75))}`;
+    rows.push({ label, value: fmtSecs(m) + suffix,
+      detail: [range, `n=${xs.length}`, defMin ? vs(m, defMin) : note].join(", ") });
+  };
+  timing("Per jump", cal.jump_secs, 0.85, " per jump");
+  timing("Getting out of the station", cal.depart_secs, 1.8, "");
+  timing("Time docked", cal.dock_secs, 0, "", "the trip model uses a fixed 2 min");
+  const pool = cal.approach_samples, fit = cal.arrivalFit;
+  if (!fit) {
+    rows.push({ label: "Arrival", value: `not enough data yet (n=${pool.length})`,
+      detail: "needs arrivals at stations of varied distance (furthest at least 3x the nearest)" });
+  } else {
+    const [a, , lo, hi] = fit;
+    const per = median(pool.filter(([l]) => l > 0).map(([l, s]) => ((s - a) / l) * 1000));
+    rows.push({ label: "Arrival: fixed part", value: fmtSecs(a),
+      detail: `drop out, approach and docking; n=${pool.length}` });
+    rows.push({ label: "Arrival: travel", value: `~${fmtSecs(Math.max(per, 0))} per 1,000 Ls`,
+      detail: "supercruise speeds up, so far stations cost less per Ls" });
+    rows.push({ label: "Arrival examples", detail: `measured over ${Math.round(lo)}-${Math.round(hi)} Ls`,
+      value: [100, 1000, 10000].map((ls) =>
+        `${ls.toLocaleString("en-US")} Ls: ${fmtSecs(cal.arrivalMinutes(ls) * 60)}${ls < lo || ls > hi ? " (extrapolated)" : ""}`).join(", ") });
+  }
+  return rows;
 }
 
 /**

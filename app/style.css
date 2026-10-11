@@ -221,6 +221,10 @@ td.src { width: 3em; text-align: center; color: var(--dim); }
 .settings h2 { margin: 16px 0 4px; color: var(--or); font-size: 13px; letter-spacing: .08em; font-weight: normal; }
 .settings .row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 4px 0; }
 .settings p { margin: 4px 0; }
+#info-flying { display: grid; grid-template-columns: max-content 1fr; gap: 2px 14px; }
+#info-flying dt { color: var(--dim, inherit); }
+#info-flying dd { margin: 0; }
+#info-flying .small { display: block; }
 .settings input[type="number"] { width: 6em; }
 .bad { color: var(--bad); }
 main[data-view="settings"] #empty, main[data-view="settings"] #age-line,

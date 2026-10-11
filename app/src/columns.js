@@ -16,6 +16,7 @@ export const MIXED_COLS = [
     st: (p) => p.updated },
   { id: "cr_per_min", label: "CR/MIN", num: true, key: "cr_per_min", title: "Profit per minute of round trip for the whole mixed load; the ranking figure.",
     st: (p) => p.cr_per_min },
+  { id: "t_per_min", label: "T/MIN", num: true, raw: true, key: "t_per_min", title: "Tonnes of the load moved per minute of round trip; sort by this when the goal rewards tonnage.", st: (p) => p.t_per_min },
   { id: "total", label: "LOAD\nVALUE", num: true, key: "total", title: "Total profit (cr) from selling the whole load. Sub-rows show each commodity's share.",
     st: (p) => p.total, ch: (m) => m.value },
   { id: "tonnes", label: "BUY\nAMOUNT (t)", num: true, key: "tonnes", w: 9, title: "Tonnes to buy to fill your hold: the station total, and per commodity on sub-rows.",
@@ -56,7 +57,7 @@ export const SINGLE_COLS = [
 
 export const DEFAULT_SINGLE = SINGLE_COLS.map((c) => c.id).filter((id) => id !== "body" && id !== "pad");
 
-export const DEFAULT_MIXED = ["system", "ly", "station", "ls", "updated", "cr_per_min", "total", "tonnes", "buy", "profit_per_t"];
+export const DEFAULT_MIXED = ["system", "ly", "station", "ls", "updated", "cr_per_min", "t_per_min", "total", "tonnes", "buy", "profit_per_t"];
 
 /** The two column sets: ids, defaults and the registry behind each tab. */
 export const VIEWS = {
