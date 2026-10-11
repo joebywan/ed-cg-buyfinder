@@ -7,7 +7,7 @@
   --or: #ff7100;
   --or-dim: #b35400;
   --txt: #e8c9a6;
-  --dim: #8a6a49;
+  --dim: #b08a63;   /* 6.3:1 on --bg; the old #8a6a49 was 4:1, hard to read at 12px */
   --line: #3a2c1d;
   --good: #5ec27a;
   --warn: #e0a33a;
