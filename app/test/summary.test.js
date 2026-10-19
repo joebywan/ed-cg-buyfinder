@@ -33,3 +33,7 @@ test("ALL SOURCES rows of one station merge: commodities joined, best cr/min, ol
 test("fresh data reads <1d", () => {
   assert.match(copySummary({ ...base, lines: [line("X", { updated: "2026-10-19" })] }), /data <1d old/);
 });
+
+test("a million cr/min or more reads in M", () => {
+  assert.match(copySummary({ ...base, lines: [line("X", { cr_per_min: 3516100 })] }), /3\.52M cr\/min$/);
+});
