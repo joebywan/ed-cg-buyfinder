@@ -272,3 +272,37 @@ test("tripParts sums to tripMinutes", () => {
   assert.equal(m.tripMinutes(...args, cal), t.jumps + t.arrive + (t.dock + t.depart));
   near(t.dock, 4);
 });
+
+test("applyOwn: own Market.json replaces that station's rows, buys come off the stock", () => {
+  const r = (o) => ({ commodity: "Gold", station: "X", system: "Y", supply: 500, buy: 100, sell: 300, profit_per_t: 200,
+    trip_minutes: 10, updated: "2026-10-01", src: "S", edsm: true, ...o });
+  const rows = [r(), r({ commodity: "Silver" }), r({ station: "Z" })];
+  const market = { StarSystem: "Y", StationName: "X", timestamp: "2026-10-02T01:00:00Z",
+    Items: [{ Name: "$gold_name;", Stock: 40, BuyPrice: 150 }, { Name: "$silver_name;", Stock: 0, BuyPrice: 90 }] };
+  assert.equal(m.applyOwn(rows, null, 100), rows);
+  const out = m.applyOwn(rows, { market, buys: [{ system: "Y", station: "X", symbol: "gold", count: 15 }] }, 100);
+  assert.equal(out.length, 2);                                   // silver is gone
+  assert.deepEqual([out[0].supply, out[0].buy, out[0].profit_per_t, out[0].load, out[0].src, out[0].own, out[0].edsm],
+    [25, 150, 150, 25, "M", true, undefined]);
+  assert.equal(out[0].cr_per_min, 375);
+  assert.equal(out[1].station, "Z");                             // untouched
+  // a file older than the rows is ignored
+  assert.equal(m.applyOwn(rows, { market: { ...market, timestamp: "2026-09-01T00:00:00Z" }, buys: [] }, 100)[0].supply, 500);
+  // buys alone still subtract, and can sell a commodity out
+  const buy = (count) => ({ market: null, buys: [{ system: "Y", station: "X", symbol: "gold", count }] });
+  assert.equal(m.applyOwn(rows, buy(100), 100)[0].supply, 400);
+  assert.deepEqual(m.applyOwn(rows, buy(500), 100).map((x) => `${x.station}/${x.commodity}`), ["X/Silver", "Z/Gold"]);
+  // a reading taken after the buy already has it in
+  const later = { market: null, buys: [{ system: "Y", station: "X", symbol: "gold", count: 100, at: "2026-10-01T10:00:00Z" }] };
+  assert.equal(m.applyOwn([r({ at: "2026-10-01T11:00:00Z" })], later, 100)[0].supply, 500);
+  assert.equal(m.applyOwn([r({ at: "2026-10-01T09:00:00Z" })], later, 100)[0].supply, 400);
+});
+
+test("hidden stations are a view filter, keyed by station and system", () => {
+  const row = (station, system) => ({ station, system, commodity: "X", pad: "L", load: 10, profit_per_t: 5, trip_minutes: 10, cr_per_min: 5, t_per_min: 1 });
+  const rows = [row("A", "S1"), row("A", "S2"), row("B", "S1")];
+  const hide = [m.stationKey(rows[0])];
+  assert.equal(m.hiddenBy(rows[0], { hide }), "hidden");
+  assert.deepEqual(m.viewRows(rows, { hide }).map(m.stationKey), [m.stationKey(rows[1]), m.stationKey(rows[2])]);
+  assert.equal(m.viewRows(rows).length, 3);               // un-hiding needs no new rows
+});

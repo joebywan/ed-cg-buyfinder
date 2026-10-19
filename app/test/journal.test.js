@@ -293,3 +293,13 @@ test("timingReport: medians, ranges and the per-1000-Ls arrival figure", () => {
   assert.match(rows["Arrival examples"].value, /100 Ls: .*1,000 Ls: .*10,000 Ls: /);
   assert.ok(!rows["Arrival examples"].value.includes("extrapolated"));
 });
+
+test("StarPos from FSDJump and Location is tracked", () => {
+  const j = new JournalState();
+  j.handle(JSON.stringify({ event: "Location", StarSystem: "A", StarPos: [1, 2, 3] }), false);
+  assert.deepEqual(j.pos, [1, 2, 3]);
+  j.handle(JSON.stringify({ event: "FSDJump", StarSystem: "B", StarPos: [4, 5, 6] }), false);
+  assert.deepEqual(j.pos, [4, 5, 6]);
+  j.handle(JSON.stringify({ event: "FSDJump", StarSystem: "C" }), false);
+  assert.deepEqual(j.pos, [4, 5, 6]);
+});

@@ -150,7 +150,7 @@ test("rows have the ardent shape; destination price and arrival come from EDSM",
   assert.deepEqual(errors, []);
   assert.deepEqual(Object.keys(rows[0]), ["commodity", "station", "system", "carrier", "planetary",
     "stype", "body", "pad", "ly", "ls", "supply", "buy", "sell", "profit_per_t", "load", "loads_available",
-    "trip_minutes", "trip_profit", "cr_per_min", "t_per_min", "updated"]);
+    "trip_minutes", "trip_profit", "cr_per_min", "t_per_min", "updated", "at"]);
   assert.equal(rows[0].profit_per_t, 149000);
   assert.equal(rows[0].load, 720);
   assert.equal(rows[0].updated, "2026-09-14");

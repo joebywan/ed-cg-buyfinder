@@ -1,14 +1,16 @@
 // The page: wires the pure modules in src/ to the DOM, localStorage and the
 // journal folder. Everything worth testing lives in src/.
-import { buildRows, defaultFetchJson } from "./src/ardent.js";
+import { buildRows, corridorRows, defaultFetchJson } from "./src/ardent.js";
+import { dist3, onTheWay, wantsPanel } from "./src/corridor.js";
 import { BodyLookup } from "./src/bodies.js";
 import { folderTooltip } from "./src/browser.js";
 import { FRONTIER_URL, bandOutlook, finishEstimate, hoursLeft, totalPoints, historyFromLines, parseLive, standing, standingChanges, standingText, suggestDestination } from "./src/cg.js";
-import { DESKTOP, DesktopDir, desktopStore, journalDir, tauriFetchJson } from "./src/desktop.js";
+import { DESKTOP, DesktopDir, desktopStore, journalDir, setMiniWindow, tauriFetchJson } from "./src/desktop.js";
+import { miniCard } from "./src/mini.js";
 import { initSettings } from "./src/settings.js";
 import { VIEWS, colWidths, fitWidth, moveCol, placeCol, toggleCol } from "./src/columns.js";
 import { wireHeaders } from "./src/headers.js";
-import { Sender } from "./src/eddn.js";
+import { Sender, normName } from "./src/eddn.js";
 import { JournalState, runMinutes, timingReport } from "./src/journal.js";
 import { clearLog, formatLog, getLog, formatLine, log, onLog } from "./src/log.js";
 import { SOURCES, searchSources } from "./src/merge.js";
@@ -18,9 +20,11 @@ import { JournalTail, readJournalFiles, readStationFile } from "./src/tail.js";
 import { Watcher, keyOf, stallAlert } from "./src/watch.js";
 import { edsmGate } from "./src/edsm.js";
 import { WANT, widen } from "./src/widen.js";
+import { copySummary } from "./src/summary.js";
 import { VERSION } from "./src/version.js";
+import { drain, drainText, record, trendKey } from "./src/trend.js";
 import { checkForUpdate } from "./src/update.js";
-import { MAX_AGE_DEFAULT, tripParts, ageTag, ageText, buildMixed, compareValues, hiddenBy, mixedSortValue, padForShip,
+import { MAX_AGE_DEFAULT, tripParts, applyOwn, ageTag, ageText, buildMixed, compareValues, hiddenBy, mixedSortValue, padForShip, stationKey,
   viewRows, whereItIs } from "./src/model.js";
 
 const $ = (id) => document.getElementById(id);
@@ -54,7 +58,10 @@ const S = {
   settings: { ...DEFAULTS, ...store.get("cgbuy.settings", {}) },
   manualDest: store.get("cgbuy.dest", null),
   live: [],
+  lines: {},                                   // per table: row key -> its summary line
+  sel: new Set(),                              // selected row keys
   snaps: store.get("cgbuy.cgSnaps", {}),      // {goal id: [[ms, qty], ...]} feed snapshots
+  trends: store.get("cgbuy.supplyTrend", {}),   // {system\0station\0commodity: [[market ms, supply], ...]}
   cgLines: [],
   dest: null,
   journal: null,
@@ -67,6 +74,9 @@ const S = {
   watch: new Watcher({ shown: TOP_STATIONS }),
   watchGen: 0,      // the search whose first results are the baseline
   alert: null,
+  mini: null,       // "window" while the desktop window is the card
+  pip: null,        // the website's Picture-in-Picture window, while open
+  standingText: "",
   gen: 0,           // bumped per search; older ones' background EDSM work goes quiet
   searching: false,
   noticeDismissed: false,
@@ -146,9 +156,11 @@ function params() {
  *  station; these only decide what is shown, so changing them needs no network. */
 function viewOpts() {
   const { carriers, odyssey, pad } = S.settings;
-  return { carriers, odyssey, pad: shipFigures()?.pad ?? pad, penalty: ui.prefs.surface_penalty };
+  return { carriers, odyssey, pad: shipFigures()?.pad ?? pad, penalty: ui.prefs.surface_penalty,
+           hide: ui.prefs.hidden_stations };
 }
-const viewed = (r = S.result) => (r ? viewRows(r.rows, viewOpts()) : []);
+// The commander's own Market.json and purchases overlay the results, never replace them.
+const viewed = (r = S.result) => (r ? viewRows(applyOwn(r.rows, S.own, r.p.hold), viewOpts()) : []);
 const rankRow = (r) => viewRows([r], viewOpts())[0]?.cr_per_min ?? null;
 
 function renderControls() {
@@ -223,6 +235,21 @@ function snapshotFeed() {
   S.snaps = next;
   store.set("cgbuy.cgSnaps", next);
 }
+
+/** Remember the supply of every row a search produced (see src/trend.js). */
+function recordTrend(rows) {
+  S.trends = record(S.trends, rows);
+  store.set("cgbuy.supplyTrend", S.trends);
+}
+
+/** Is this commodity at this station draining? {text, empty} or null. Display only. */
+function drainOf(x, commodity = x.commodity) {
+  const d = drain(S.trends[trendKey({ ...x, commodity })]);
+  if (!d) return null;
+  const { hold, min_supply } = S.result.p;
+  return { text: drainText(d, fmt), empty: d.left < Math.max(hold, min_supply) };
+}
+const drainMark = (t) => t && h("span", { class: t.empty ? "drain empty" : "drain" }, " ↓");
 
 /** Work out where we're selling. Returns true when it changed. */
 function resolveDest() {
@@ -301,6 +328,8 @@ function renderStanding() {
     fx = { finish, now, outlook: bandOutlook(st, pts, finish, run, now) };
   }
   const [text, tip, mark, kind] = standingText(st, run, fx);
+  S.standingText = text;
+  renderMini();
   line.replaceChildren(...(mark
     ? [text.slice(0, text.indexOf(mark)), h("span", { class: { safe: "ok", tight: "warn", haul: "bad" }[kind] }, mark), text.slice(text.indexOf(mark) + mark.length)]
     : [text || ""]));
@@ -397,6 +426,7 @@ const plansNow = () => (S.result ? buildMixed(viewed(), S.result.p.hold) : []);
 /** Show (or clear) the one banner; sound and notify only when the watcher says so. */
 function showAlert(a) {
   S.alert = a;
+  renderMini();
   $("alert").hidden = !a;
   if (!a) return;
   $("alert-text").textContent = a.text;
@@ -442,7 +472,7 @@ const sameDest = (a, b) => !!a && !!b && a.system === b.system && a.station === 
 
 // -- view filters ------------------------------------------------------------------
 
-const FILTER_NAME = { odyssey: "ODYSSEY filter (surface station)", carriers: "CARRIERS filter (fleet carrier)" };
+const FILTER_NAME = { hidden: "list of hidden stations (SETTINGS)", odyssey: "ODYSSEY filter (surface station)", carriers: "CARRIERS filter (fleet carrier)" };
 
 /** ODYSSEY, CARRIERS, PAD or the surface penalty changed: re-show the cached rows.
  *
@@ -581,6 +611,7 @@ async function search({ more = false } = {}) {
         if (stale()) return;
         S.held = r.held;
         S.result = { ...r, p, at: Date.now(), eff: range };      // the table grows with each step
+        recordTrend(r.rows);
         renderCredit();
         render();
       },
@@ -588,6 +619,7 @@ async function search({ more = false } = {}) {
     const res = out.res ?? last;
     if (!res || stale()) return;
     S.result = { ...res, p, at: Date.now(), eff: out.range, note: out.note };
+    recordTrend(res.rows);
     if (res.startVerify) res.verifying = res.startVerify();
     S.verifyMore = res.verifyMore;
     renderCredit();
@@ -696,10 +728,73 @@ function putTable(view, cols, head, body) {
 function copySystem(ev) {
   const tr = ev.target.closest("tr[data-system]");
   if (!tr || ev.target.closest("button")) return;
+  if (ev.ctrlKey || ev.metaKey || ev.shiftKey) return select(tr.dataset.key, ev.shiftKey && !ev.ctrlKey && !ev.metaKey);
+  if (S.sel.size) { S.sel.clear(); paintSel(); }
   const station = tr.querySelector("td.station[data-station]")?.dataset.station;
   navigator.clipboard?.writeText(tr.dataset.system).then(
     () => { toast(`Copied ${tr.dataset.system}`, ev); if (station) setTarget(station, tr.dataset.system); },
     () => toast("Clipboard blocked", ev));
+}
+
+// -- selecting rows and copying them as a summary -------------------------------------
+// S.lines[view] holds what is on screen, in order: row key -> the line it adds to the
+// summary. Expanded child rows carry their parent's key, so they select the station.
+
+/** Ctrl-click toggles one row; Shift-click selects from the last one clicked. */
+function select(key, range) {
+  const keys = [...S.lines[S.view].keys()];
+  if (range && keys.includes(S.anchor)) {
+    const [a, b] = [keys.indexOf(S.anchor), keys.indexOf(key)].sort((x, y) => x - y);
+    keys.slice(a, b + 1).forEach((k) => S.sel.add(k));
+  } else {
+    S.sel.has(key) ? S.sel.delete(key) : S.sel.add(key);
+    S.anchor = key;
+  }
+  paintSel();
+}
+
+function paintSel() {
+  for (const tr of document.querySelectorAll("tbody tr[data-key]")) tr.classList.toggle("sel", S.sel.has(tr.dataset.key));
+}
+
+function copySelected(ev) {
+  const lines = [...S.lines[S.view].values()].filter((l) => S.sel.has(l.key));
+  const text = copySummary({ dest: S.result.p.dest.station, hold: S.result.p.hold, lines });
+  const n = text.split("\n").length - 1;
+  navigator.clipboard?.writeText(text).then(
+    () => toast(`copied ${n} station${n === 1 ? "" : "s"}`, ev), () => toast("Clipboard blocked", ev));
+}
+
+// The row menu is a list of { label, run(ev) }; add an item here to add a command.
+// `keys` are the selected stations' stationKeys.
+const plural = (n) => `${n} station${n === 1 ? "" : "s"}`;
+const rowMenuItems = (keys) => [
+  { label: `Copy ${plural(keys.length)}`, run: copySelected },
+  { label: keys.length === 1 ? "Hide this station" : `Hide ${plural(keys.length)}`, run: () => {
+    ui.prefs.hidden_stations = [...new Set([...ui.prefs.hidden_stations, ...keys])];
+    ui.save();
+    S.sel.clear();
+    viewChanged();
+  } },
+];
+
+document.addEventListener("click", () => closeMenu());
+function closeMenu() { $("row-menu")?.remove(); }
+
+function rowMenu(ev) {
+  const tr = ev.target.closest("tr[data-key]");
+  if (!tr || !S.result) return;
+  ev.preventDefault();
+  closeMenu();
+  if (!S.sel.has(tr.dataset.key)) { S.sel = new Set([tr.dataset.key]); S.anchor = tr.dataset.key; paintSel(); }
+  const stations = new Set([...S.lines[S.view].values()].filter((l) => S.sel.has(l.key)).map(stationKey));
+  const menu = h("div", { id: "row-menu", class: "menu" },
+    ...rowMenuItems([...stations]).map((it) => h("button", { type: "button", onclick: () => { closeMenu(); it.run(ev); } }, it.label)));
+  // The page is zoomed for font scaling; the pointer's coordinates are not.
+  const z = Number(document.documentElement.style.zoom) || 1;
+  menu.style.left = `${Math.min(ev.clientX, window.innerWidth - 180) / z}px`;
+  menu.style.top = `${ev.clientY / z}px`;
+  document.body.append(menu);
 }
 
 // The browser already knows how to show a tooltip: it waits for the pointer
@@ -758,14 +853,16 @@ function dropBody(ev) {
   const row = ev.target.closest?.("tr[data-system]");
   if (row && !row.contains(ev.relatedTarget)) bodies.unwant(row.dataset.system);
 }
-const SRC_NAME = { A: "Ardent", S: "Spansh" };
-const srcCell = (x) => h("td", { class: "src", title: x.other
+const SRC_NAME = { A: "Ardent", S: "Spansh", M: "Your game" };
+const srcCell = (x) => h("td", { class: "src", title: x.own ? "your own Market.json, read when you opened this market"
+  : x.other
   ? `${SRC_NAME[x.other.src === "A" ? "S" : "A"]} read ${ageText(x.updated)}; ${SRC_NAME[x.other.src]} read ${ageText(x.other.updated)}` : null }, x.src || "");
 // A small mark after the age: confirmed by EDSM, or Spansh data still waiting for its check.
 const ageCell = (x) => h("td", { class: `num ${ageTag(x.updated)}`,
   title: x.edsm ? `confirmed by EDSM, market read ${ageText(x.updated)}`
-    : x.pending ? "unconfirmed - Spansh data, EDSM check pending" : null },
-  ageText(x.updated), x.edsm ? h("span", { class: "ok" }, " ✓") : x.pending ? h("span", { class: "dim" }, " ?") : null);
+    : x.pending ? "unconfirmed - Spansh data, EDSM check pending"
+    : x.own ? `your own reading of this market (Market.json), ${ageText(x.updated)}` : null },
+  ageText(x.updated), x.own ? h("span", { class: "ok" }, " ◆") : x.edsm ? h("span", { class: "ok" }, " ✓") : x.pending ? h("span", { class: "dim" }, " ?") : null);
 
 const penaltyTip = (c, x, m) => (c.id === "trip_minutes" && !m && x.penalty ? `+${x.penalty} min surface penalty` : null);
 
@@ -782,8 +879,12 @@ function mixedCell(c, plan, m, open, k) {
   const v = m ? c.ch?.(m, plan) : c.st ? c.st(plan) : one && c.ch?.(one, plan);
   const text = typeof v === "number" && !c.raw ? fmt(v) : v;
   const short = c.id === "tonnes" && !m && plan.short > 0;
+  // The station row shows the worst drain among the commodities in its load.
+  const dr = c.id === "tonnes" && (m ? drainOf(plan, m.commodity)
+    : plan.mix.map((i) => drainOf(plan, i.commodity)).filter(Boolean).sort((a, b) => b.empty - a.empty)[0]);
   return h("td", { class: c.num ? `num${short ? " short" : ""}` : null,
-    title: short ? `${fmt(plan.short)} t short of your hold` : penaltyTip(c, plan, m) ?? (c.num ? null : text || null) }, text ?? "");
+    title: [short && `${fmt(plan.short)} t short of your hold`, dr && dr.text].filter(Boolean).join(". ")
+      || (penaltyTip(c, plan, m) ?? (c.num ? null : text || null)) }, text ?? "", drainMark(dr));
 }
 
 /** One footer line explaining the row markers, only the ones on screen. */
@@ -794,8 +895,10 @@ function renderLegend(plans, key) {
     plans.some((x) => S.alert?.keys.has(key(x))) && [mark("lg-moved", "▌"), "moved (see alert)"],
     plans.some((x) => key(x) === S.watch.target?.key) && [mark("copied-tag", "◂"), "copied"],
     plans.some((x) => x.confirmed) && [mark("ok", "✓"), "EDSM-confirmed"],
+    plans.some((x) => x.own) && [mark("ok", "◆"), "your own market reading"],
     plans.some((x) => x.pending) && [mark("dim", "?"), "awaiting EDSM"],
     plans.some((x) => x.planetary) && [mark("surface", "⏚"), "surface station"],
+    plans.some((x) => x.mix.some((m) => drainOf(x, m.commodity))) && [mark("drain", "↓"), "supply draining (hover for the estimate; amber: likely gone before you arrive)"],
     plans.some(beyond) && [mark("beyond", "⤢"), "beyond your radius (added to find 5 stations)"],
   ].filter(Boolean);
   $("legend").replaceChildren(...items.flatMap(([m, t], i) => [i ? "   " : "", m, ` ${t}`]));
@@ -805,21 +908,24 @@ function renderLegend(plans, key) {
 function renderMixed(r) {
   const hold = r.p.hold;
   const plans = buildMixed(viewed(r), hold).slice(0, TOP_STATIONS);
+  const lines = S.lines.mixed = new Map();
   const key = (x) => `${x.station}\0${x.system}`;
   const best = plans[0] && key(plans[0]);
   S.expanded ??= new Set();
-  const body = h("tbody", { onclick: copySystem, onmouseover: wantBody, onmouseout: dropBody });
+  const body = h("tbody", { onclick: copySystem, oncontextmenu: rowMenu, onmousedown: (e) => { if (e.shiftKey) e.preventDefault(); }, onmouseover: wantBody, onmouseout: dropBody });
   const cols = colsFor("mixed");
   for (const plan of sorted(plans, S.sort.mixed)) {
     const k = key(plan);
     const open = plan.mix.length > 1 && S.expanded.has(k);
     const moved = S.alert?.keys.has(k);
-    body.append(h("tr", { class: `row head${k === best ? " top" : ""}${moved ? " moved" : ""}`, "data-system": plan.system,
+    lines.set(k, { key: k, station: plan.station, system: plan.system, ls: plan.ls, ly: plan.ly, updated: plan.updated,
+      cr_per_min: plan.cr_per_min, parts: plan.mix.map((m) => ({ commodity: m.commodity, tonnes: m.tonnes })) });
+    body.append(h("tr", { class: `row head${k === best ? " top" : ""}${moved ? " moved" : ""}`, "data-system": plan.system, "data-key": k,
       title: [k === best && "Best credits per minute", moved && "Moved since you last pressed GOT IT - see the banner above"].filter(Boolean).join(". ") || null },
       ...cols.map((c) => mixedCell(c, plan, null, open, k))));
     if (!open) continue;
     for (const m of plan.mix) {
-      body.append(h("tr", { class: "child", "data-system": plan.system },
+      body.append(h("tr", { class: "child", "data-system": plan.system, "data-key": k },
         ...cols.map((c) => mixedCell(c, plan, m))));
     }
   }
@@ -828,19 +934,68 @@ function renderMixed(r) {
   return plans.length;
 }
 
+/** "On the way in": shown when you are outside the radius; loads come from a search around you. */
+function renderWay() {
+  const el = $("way"), r = S.result, you = S.journal?.pos;
+  const dest = r?.origin;
+  el.hidden = S.view !== "mixed" || !wantsPanel(you, dest, r?.p.range);
+  if (el.hidden) return;
+  const direct = dist3(you, dest);
+  const rows = S.way?.dest === r.p.dest.station && S.way.rows;
+  const go = h("button", { type: "button", disabled: S.way?.busy || null, onclick: findWay },
+    rows ? "REFRESH" : "FIND LOADS ON THE WAY");
+  const head = h("div", { class: "dim small" }, go,
+    `ON THE WAY IN: you are ${fmt(Math.round(direct))} ly out. Loading here saves a run, since sign-up and hand-in share the CG dock.`,
+    S.way?.err ? ` ${S.way.err}` : "");
+  if (!rows) return el.replaceChildren(head);
+  const plans = onTheWay(viewRows(rows, viewOpts()), { you, dest, hold: r.p.hold, jumpLaden: r.p.jump_laden });
+  const th = (t, num) => h("th", { class: num ? "num" : null }, t);
+  const body = h("tbody", { onclick: copySystem });
+  for (const x of plans) {
+    body.append(h("tr", { class: "row head", "data-system": x.system },
+      h("td", {}, x.system), stationCell(x),
+      h("td", { class: "num" }, `+${fmt(Math.round(x.detour))}`),
+      h("td", { class: "num" }, fmt(x.tonnes)),
+      h("td", { class: "num" }, fmt(x.total)),
+      h("td", { title: x.mix.map((m) => `${fmt(m.tonnes)} t ${m.commodity}`).join("\n") },
+        x.mix.map((m) => m.commodity).join(", "))));
+  }
+  const table = h("table", { title: HINT }, h("thead", {}, h("tr", {},
+    th("SYSTEM"), th("STATION"), th("DETOUR LY", true), th("TONNES", true), th("VALUE", true), th("LOAD"))), body);
+  el.replaceChildren(head, plans.length ? table : h("div", { class: "dim" }, "No station near your route sells these."));
+}
+
+async function findWay() {
+  const r = S.result, you = S.journal?.pos;
+  S.way = { dest: r.p.dest.station, busy: true };
+  renderWay();
+  try {
+    const rows = await corridorRows(r.p, { system: S.journal.system, pos: you }, r.cg);
+    S.way = { dest: r.p.dest.station, rows };
+  } catch (err) {
+    S.way = { dest: r.p.dest.station, err: err.message };
+  }
+  renderWay();
+}
+
 function singleCell(c, x) {
   if (c.id === "station") return stationCell(x);
   if (c.id === "updated") return ageCell(x);
   if (c.id === "src") return srcCell(x);
   const v = c.st(x);
-  return h("td", { class: c.num ? "num" : null, title: penaltyTip(c, x) ?? (c.num ? null : v || null) }, typeof v === "number" && !c.raw ? fmt(v) : v ?? "");
+  const dr = c.id === "supply" && drainOf(x);
+  return h("td", { class: c.num ? "num" : null, title: dr ? dr.text : penaltyTip(c, x) ?? (c.num ? null : v || null) }, typeof v === "number" && !c.raw ? fmt(v) : v ?? "", drainMark(dr));
 }
 
 function renderSingle(r) {
-  const body = h("tbody", { onclick: copySystem, onmouseover: wantBody, onmouseout: dropBody });
+  const body = h("tbody", { onclick: copySystem, oncontextmenu: rowMenu, onmousedown: (e) => { if (e.shiftKey) e.preventDefault(); }, onmouseover: wantBody, onmouseout: dropBody });
   const cols = colsFor("single");
+  const lines = S.lines.single = new Map();
   for (const x of sorted(viewed(r), S.sort.single)) {
-    body.append(h("tr", { class: "row", "data-system": x.system }, ...cols.map((c) => singleCell(c, x))));
+    const k = `${x.station}\0${x.system}\0${x.commodity}`;
+    lines.set(k, { key: k, station: x.station, system: x.system, ls: x.ls, ly: x.ly, updated: x.updated,
+      cr_per_min: x.cr_per_min, parts: [{ commodity: x.commodity, tonnes: x.load }] });
+    body.append(h("tr", { class: "row", "data-system": x.system, "data-key": k }, ...cols.map((c) => singleCell(c, x))));
   }
   putTable("single", cols, headRow("single", cols), body);
 }
@@ -884,6 +1039,7 @@ function renderCols() {
 }
 
 function render() {
+  renderMini();
   $("wrap-mixed").hidden = S.view !== "mixed";
   $("wrap-single").hidden = S.view !== "single";
   $("wrap-log").hidden = S.view !== "log";
@@ -915,6 +1071,7 @@ function render() {
   const stations = renderMixed(r);
   if (S.view !== "mixed") $("legend").hidden = true;   // the markers are the table's
   renderSingle(r);
+  renderWay();
   const shown = viewed(r).length;
   $("empty").hidden = shown > 0;
   $("empty").textContent = "Nothing within range makes a profit. Try a wider radius, a lower minimum supply, or carriers.";
@@ -923,8 +1080,70 @@ function render() {
     : r.allStale ? `Every source is older than ${maxAge} days — showing them anyway.`
     : r.hiddenStale ? `Hid ${fmt(r.hiddenStale)} of ${fmt(r.hiddenStale + shown)} sources older than ${maxAge} days.`
     : `Nothing hidden: every source is within ${maxAge} days.`;
+  const mine = new Set(r.rows.map(stationKey).filter((k) => ui.prefs.hidden_stations.includes(k))).size;
+  if (mine) $("age-line").textContent += ` ${mine} station${mine === 1 ? "" : "s"} hidden by you (SETTINGS).`;
   const errs = r.errors?.length ? `  ·  failed: ${r.errors.join("; ")}` : "";
   setStatus(`${r.note ? `${r.note}  ·  ` : ""}${stations} stations, ${fmt(shown)} sources for ${r.p.dest.station}${stale ? " (for a previous destination — search again)" : ""}${errs}`, !!errs);
+  paintSel();
+}
+
+// -- mini card ------------------------------------------------------------------
+// The same state as the table, as one small card: in this window (desktop) or in
+// a Picture-in-Picture window (website). Closing the PiP window is "expand".
+
+const MINI_SIZE = [300, 170];     // px at the default font size; scaled with it
+const PIP = !DESKTOP && "documentPictureInPicture" in window;
+
+function renderMini() {
+  const roots = [S.mini === "window" && $("mini"), S.pip?.document.getElementById("mini")].filter(Boolean);
+  if (!roots.length) return;
+  const c = miniCard({ plans: plansNow(), target: S.watch.target, alert: S.alert, standing: S.standingText });
+  const p = c.plan;
+  const copy = (win) => {
+    if (c.alert) return $("alert-copy").onclick();
+    if (!p) return;
+    win.navigator.clipboard?.writeText(p.system).then(() => { toast(`Copied ${p.system}`); setTarget(p.station, p.system); }, () => toast("Clipboard blocked"));
+  };
+  for (const root of roots) {
+    const win = root.ownerDocument.defaultView;
+    const line = (cls, ...kids) => h("div", { class: `m-line ${cls}` }, ...kids);
+    root.replaceChildren(h("div", { class: "mini-card", onclick: () => copy(win), title: "Click to copy the system" },
+      h("div", { class: "m-head" }, h("b", {}, "cgbuy · target"),
+        h("button", { type: "button", title: "Copy the system", onclick: (e) => { e.stopPropagation(); copy(win); } }, "COPY"),
+        h("button", { type: "button", title: "Back to the full window (Ctrl+M)", onclick: (e) => { e.stopPropagation(); toggleMini(); } }, "EXPAND")),
+      c.alert && h("div", { class: "m-alert" }, h("span", { title: c.alert }, c.alert),
+        h("button", { type: "button", onclick: (e) => { e.stopPropagation(); $("alert-ack").onclick(); } }, "GOT IT")),
+      p ? [line("m-station", p.station, h("span", { class: "dim" }, ` · ${p.ls}`), p.copied && h("span", { class: "copied-tag" }, " ◂")),
+           line("", p.system, h("span", { class: "dim" }, ` · ${p.ly}`)),
+           line("m-load", p.load),
+           line("", h("b", {}, p.crpm), "  ", h("span", { class: p.ageClass }, p.age), p.mark && h("span", { class: p.mark === "✓" ? "ok" : "dim" }, ` ${p.mark}`))]
+        : line("dim", "No results yet."),
+      c.standing && line("dim m-standing", c.standing)));
+    if (win !== window) win.document.documentElement.style.zoom = document.documentElement.style.zoom;
+  }
+}
+
+/** MINI / EXPAND: desktop shrinks this window and floats it on top; the website opens a PiP window. */
+async function toggleMini() {
+  if (DESKTOP) {
+    const on = !S.mini;
+    S.mini = on ? "window" : null;
+    document.body.classList.toggle("mini", on);
+    const pos = await setMiniWindow(on, Number(document.documentElement.style.zoom) || 1, MINI_SIZE, store.get("cgbuy.miniPos", null)).catch(() => null);
+    if (pos) store.set("cgbuy.miniPos", pos);
+    return renderMini();
+  }
+  if (S.pip) return S.pip.close();
+  if (!PIP) return;
+  const z = Number(document.documentElement.style.zoom) || 1;
+  const win = await documentPictureInPicture.requestWindow({ width: Math.round(MINI_SIZE[0] * z), height: Math.round(MINI_SIZE[1] * z) });
+  for (const l of document.querySelectorAll("link[rel=stylesheet]")) win.document.head.append(h("link", { rel: "stylesheet", href: l.href }));
+  win.document.body.className = "mini";
+  win.document.body.append(h("div", { id: "mini" }));
+  win.addEventListener("keydown", (e) => { if (e.ctrlKey && e.key === "m") toggleMini(); });
+  win.addEventListener("pagehide", () => { S.pip = null; });
+  S.pip = win;
+  renderMini();
 }
 
 /** "Markets come from" names the source(s) the last search actually used. */
@@ -976,6 +1195,30 @@ function renderJournal() {
 // only one this page reads back; the other two are given.
 const EDDN_KINDS = ["Market", "Outfitting", "Shipyard"];
 
+/** One of the station files the game last wrote, or null. */
+async function readStation(kind) {
+  try {
+    return S.tail ? await S.tail.stationFile(kind)
+      : S.snapshotFiles ? await readStationFile(S.snapshotFiles, kind) : null;
+  } catch { return null; }      // never used that service, or the game is mid-write
+}
+
+/** Take the Market.json the game just wrote as the truth about that station.
+ *
+ *  The file outlives the station it was written at, so it must be the one the
+ *  journal event named (`marketId`), or, for a folder snapshot with no event,
+ *  the station the journal ends docked at. Needs no EDDN and no search. */
+async function takeOwnMarket(marketId = null) {
+  const data = await readStation("Market");
+  const j = S.journal;
+  if (!data || !j) return;
+  if (marketId != null ? data.MarketID !== marketId
+    : !(j.docked && data.StationName === j.station && data.StarSystem === j.system)) return;
+  S.own = { market: data, buys: [] };      // a fresh reading already has every earlier buy in it
+  log("journal", `own market reading: ${data.StationName}`);
+  if (S.result) render();
+}
+
 /** Send one of the station files the game last wrote, if sharing is on.
 
  Everything that could make this a bad idea - a repeat, a stale reading, a
@@ -983,11 +1226,7 @@ const EDDN_KINDS = ["Market", "Outfitting", "Shipyard"];
  refuse rather than this function's to guess at. */
 async function shareStation(kind, marketId = null) {
   if (!S.eddn || !S.journal) return;
-  let data = null;
-  try {
-    data = S.tail ? await S.tail.stationFile(kind)
-      : S.snapshotFiles ? await readStationFile(S.snapshotFiles, kind) : null;
-  } catch { /* never used that service, or the game is mid-write */ }
+  const data = await readStation(kind);
   if (!data) return;
   const j = S.journal;
   const common = {
@@ -1056,6 +1295,7 @@ function adoptOdyssey(state) {
 /** Make a freshly read journal the one the page uses. */
 function adoptJournal({ state, lines }) {
   S.journal = state;
+  S.own = null;
   S.cgLines = lines;
   S.shipKey = shipKey();
   adoptOdyssey(state);
@@ -1076,6 +1316,13 @@ function adoptJournal({ state, lines }) {
   state.onCalibration = () => { if (S.view === "info") renderInfo(); };
   state.onEvent = (e) => {
     if (EDDN_KINDS.includes(e.event)) shareStation(e.event, e.MarketID ?? null);
+    if (e.event === "Market") takeOwnMarket(e.MarketID ?? null);
+    if (e.event === "MarketBuy" && e.Count > 0 && state.station) {
+      (S.own ??= { market: null, buys: [] }).buys.push({ system: state.system, station: state.station,
+        symbol: normName(e.Type), count: e.Count, at: e.timestamp });
+      if (S.result) render();
+    }
+    if (e.event === "FSDJump" || e.event === "Location") renderWay();
   };
   renderControls();
   renderJournal();
@@ -1083,7 +1330,10 @@ function adoptJournal({ state, lines }) {
   // A snapshot has no live events, so the files it holds get their only
   // chance here. The Sender refuses anything too old to be worth sending,
   // which these usually are - hence no market ID to check them against.
-  if (!CAN_TAIL) for (const k of EDDN_KINDS) shareStation(k);
+  if (!CAN_TAIL) {
+    for (const k of EDDN_KINDS) shareStation(k);
+    takeOwnMarket();
+  }
   if (resolveDest() || S.result) search();
 }
 
@@ -1286,8 +1536,11 @@ function bind() {
     search();
   };
   window.addEventListener("keydown", (e) => {
-    if (e.key === "Escape") $("dest-panel").open = false;
+    if (e.key === "Escape") { $("dest-panel").open = false; S.sel.clear(); paintSel(); closeMenu(); }
+    if (e.ctrlKey && e.key === "m" && (DESKTOP || PIP)) { e.preventDefault(); toggleMini(); }
   });
+  $("mini-btn").hidden = !DESKTOP && !PIP;
+  $("mini-btn").onclick = toggleMini;
   setInterval(() => renderDest(), 30000);
   setInterval(checkStall, 5000);
   setInterval(renderStanding, 60000);          // ticks the countdown

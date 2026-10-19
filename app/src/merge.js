@@ -38,6 +38,7 @@ export function mergeResults(ardent, spansh, p, now = new Date()) {
     rows: aged.rows,
     cg: { ...spansh?.cg, ...ardent?.cg },
     cgLs: ardent?.cgLs || spansh?.cgLs || 0,
+    origin: ardent?.origin,
     hiddenStale: Math.max(aged.hidden, ardent?.hiddenStale ?? 0, spansh?.hiddenStale ?? 0),
     allStale: aged.allStale,
     dropped: spansh?.dropped ?? {},

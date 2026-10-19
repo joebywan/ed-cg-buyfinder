@@ -14,6 +14,7 @@
   <h1>cgbuy</h1>
   <div id="dest-line" class="dest-line">Finding the community goal…</div>
   <div class="journal">
+    <button id="mini-btn" type="button" title="A small always-on-top card: where next, and did it change? (Ctrl+M)" hidden>MINI</button>
     <span id="journal-status" class="dim"></span>
     <button id="journal-btn" type="button">Connect journal folder</button>
     <input id="journal-files" type="file" webkitdirectory multiple hidden>
@@ -77,6 +78,7 @@
 <main>
   <div id="cols-panel" class="cols-panel" hidden></div>
   <div id="wrap-mixed" class="table-wrap"><table id="t-mixed"></table></div>
+  <div id="way" class="way" hidden></div>
   <div id="wrap-single" class="table-wrap" hidden><table id="t-single"></table></div>
   <div id="wrap-log" class="log-wrap" hidden>
     <div class="log-bar"><button id="log-copy" type="button">COPY</button> <button id="log-clear" type="button">CLEAR</button></div>
@@ -101,6 +103,9 @@
     <h2>RANKING</h2>
     <label class="row">Surface penalty (min) <input id="s-surface" type="number" min="0" step="1"></label>
     <p class="dim small">Extra minutes a planetary landing costs you - glide, risk, hassle - so surface markets only rank high when they're clearly worth it. Added to the round trip of surface stations before credits per minute is worked out; 0 treats them like any other. Changes re-rank straight away.</p>
+    <h2>HIDDEN STATIONS</h2>
+    <p class="dim small">Right-click a station in either table to hide it. It is only hidden from view: un-hiding brings it back at once, with no new search.</p>
+    <ul id="s-hidden" class="hidden-list"></ul>
     <div class="desktop-only">
       <h2>ELITE DANGEROUS</h2>
       <div class="row">Journal folder <input id="s-dir" size="50" placeholder="auto-detect" autocomplete="off">
@@ -128,7 +133,8 @@
     <p>Click a row to copy its system.</p>
     <h2>ROW MARKERS</h2>
     <p><span class="lg-top">▌</span> best cr/min &nbsp; <span class="lg-moved">▌</span> your copied station moved (see the alert) &nbsp; <span class="copied-tag">◂</span> the station you last copied</p>
-    <p><span class="ok">✓</span> confirmed by EDSM &nbsp; <span class="dim">?</span> Spansh data still awaiting EDSM &nbsp; <span class="surface">⏚</span> surface station &nbsp; <span class="fc">FC</span> fleet carrier</p>
+    <p><span class="ok">✓</span> confirmed by EDSM &nbsp; <span class="dim">?</span> Spansh data still awaiting EDSM &nbsp; <span class="ok">◆</span> your own Market.json &nbsp; <span class="surface">⏚</span> surface station &nbsp; <span class="fc">FC</span> fleet carrier</p>
+    <p><span class="drain">↓</span> supply is draining (hover for the rate and an estimate of what is left now) &nbsp; <span class="drain empty">↓</span> likely below your hold or the minimum supply by now</p>
     <p class="dim small">The footer lists whichever of these are on screen.</p>
     <h2>VERSION</h2>
     <p>cgbuy <span id="info-version"></span> <span id="update-status" class="dim"></span>
@@ -152,6 +158,8 @@
   <div id="why-body"></div>
   <form method="dialog"><button>CLOSE</button></form>
 </dialog>
+
+<div id="mini"></div>
 
 <div id="toast" class="toast" hidden></div>
 </body>

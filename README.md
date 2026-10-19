@@ -97,6 +97,21 @@ Click any row to copy its system to the clipboard. A note saying so appears
 next to the pointer and clears itself after a second and a half — nothing to
 dismiss, since you do this every run.
 
+To share a few stations, **Ctrl-click** rows to pick them (or **Shift-click** to
+pick a run of them; a station's expanded commodity lines pick the station),
+then right-click and choose **Copy N stations**. You get one line per station,
+in the order on screen, under a header naming the destination, your hold and
+how old the oldest of those markets is, in plain text that reads fine in
+Discord:
+
+```
+cgbuy · Jameson Memorial · 790t hold · data 2d old
+Ackerman Market (1,240 ls) · Eravate (14.2 ly) · Gold 600t + Silver 190t · 41.2k cr/min
+```
+
+In **ALL SOURCES**, selected rows from the same station become one line. A plain
+click or **Esc** clears the selection.
+
 
 ## Destination
 
@@ -185,11 +200,23 @@ The **COLUMNS** button on each table tab chooses which columns show and in what
 order; you can also drag a header to move it and its right edge to resize.
 Settings → *RESET COLUMNS* undoes it.
 
+*Your own market data.* With a journal folder connected, opening the market at a
+station that is in the results (even with EDDN sharing off) reads the game's
+`Market.json` and uses it in place of the web's figures for that station: its
+stock and price, aged from the file, marked `◆` on `AGE` and `Your game` on
+`SRC`, with anything it no longer sells dropped. What you then buy
+(`MarketBuy`) is taken off that stock, and the list re-ranks without a search.
+The reading lasts until you reload or connect another folder. Only commodities
+the search already found are touched, and a file older than the page's own data
+for that station is ignored. Firefox can't follow the journal, so there it only
+applies the file from the folder snapshot, if you ended docked at a listed station.
+
 *Reading the table.* An orange bar on a row's left edge marks the best cr/min
 station. An amber bar with an underline marks your copied station when the
 target alert says it moved, until you press GOT IT. `◂ copied` tags the station you
 last copied. On `AGE`, a green ✓ means EDSM confirmed the reading and a dim ?
-means Spansh data still waiting for its EDSM check. Hover a row for the same
+means Spansh data still waiting for its EDSM check. A green ◆ means the
+row is your own reading: see *Your own market data* below. Hover a row for the same
 explanation; the footer legend lists whichever markers are on screen, and the
 **INFO** tab explains all of them, with the credits, the version and the update status.
 It also shows **YOUR FLYING**, the jump, docking and arrival times measured from your journal that the
@@ -219,6 +246,17 @@ adds a chime to those.
 | `T/MIN` | tonnes per minute — use this if you care about CG rank rather than credits |
 | `AGE` | how long ago a commander last reported this market; green ≤2 days, amber ≤7, red beyond — a CG drains supply fast |
 
+A small **↓** beside `SUPPLY` (and `BUY AMOUNT` in the mixed loads) means that
+station's stock has been falling between your searches. The app keeps the last
+six supply readings of each station and commodity, keyed by when the market
+itself was last updated, so searching twice on an unchanged market counts
+once; readings older than two weeks are forgotten. Hover the row for the
+numbers: how far it fell, over how many hours, and about how much is left now
+at that rate. Amber means that is less than your hold or the minimum supply,
+so the load may be gone before you arrive. It is a hint only and never
+changes the ranking, and it needs two different readings before it says
+anything.
+
 Hover the destination at the top to see what the CG pays per tonne for each
 commodity (the CG multiplier is already baked into the EDSM price — the tool
 does not apply it). It is a hover rather than a row of its own because every
@@ -238,11 +276,37 @@ body a starport orbits is asked of EDSM, once per system, only for a row you
 actually pointed at, and it fills itself in a moment later. A system the search
 already re-checked against EDSM costs nothing, because it is the same response.
 
+## On the way in
+
+If you are further from the goal station than your search radius (you have just heard about the CG and have a
+trip ahead of you), an **ON THE WAY IN** panel appears under the mixed table. Sign-up and hand-in happen at the
+same dock, so arriving with a full hold means the first run is already done. It goes away once you are inside
+the radius.
+
+Press **FIND LOADS ON THE WAY** and cgbuy asks Ardent for the goal's commodities within 200 ly of where you are
+(your position comes from the journal's last jump), then lists the five best holds that cost little extra
+flying. A station qualifies when going via it adds no more than 15% of the direct trip, or two laden jumps,
+whichever is larger; `DETOUR LY` is that extra distance. They are ranked by what a full hold earns
+(`VALUE`, tonnes × profit/t), and clicking a row copies its system as usual. Nothing is fetched until you press the
+button, and it is not repeated as you jump; press **REFRESH** after you have moved a long way.
+
+It needs Ardent: the panel only appears when the main search used it (the default), because Spansh does not
+give the goal's coordinates. Since Ardent searches around a system, the 200 ly circle is centred on you, not on
+the middle of the route, so on a very long trip it finds loads near the start rather than along the whole way.
+
 ## Interface
 
 Inputs across the top: hold size, radius (120 ly), jump range empty and laden,
 minimum supply (200), landing pad, how old a source may be, the SOURCE, and
 toggles for fleet carriers and Odyssey. Enter or SEARCH runs it.
+
+Right-click a station in either table and choose **Hide this station** when
+you can't or won't use it - wanted there, a hostile faction, an awful approach.
+Like CARRIERS and ODYSSEY it only decides what is shown, so nothing is
+searched again, and it counts against the 5-station minimum the same way. The
+SETTINGS tab lists hidden stations with an **UN-HIDE** button each, and the line
+under the table says how many are hidden. If you hide the station you last
+copied, the banner says so.
 
 If fewer than 5 stations are in range, the app keeps going: every selected source
 is asked again 1.5x further out (180, 270, ... up to 500 ly), the results merged,
@@ -510,6 +574,25 @@ changes* is separate and adds a chime to the in-app alerts.
 The status bar also shows how long ago the shown data was fetched, ticking
 live and turning amber once it passes the auto-refresh threshold — so you can
 tell at a glance whether docking at the destination actually refreshed it.
+
+## Mini mode
+
+In game you mostly need "where next, and did it change?", not the whole table.
+**MINI** (or Ctrl+M) shrinks cgbuy to a small card: the station you last copied,
+or the best cr/min one if you have not copied any, with its system, load,
+cr/min and data age, plus a short line of where you stand in the goal. If the
+station you copied moves or drains, the card turns amber and says so; **GOT
+IT** accepts it and shows the new best station. Click the card to copy its
+system. It only ever opens when you press the button.
+
+- **Desktop app:** the window becomes the card and stays on top of other
+  windows. **EXPAND** puts it back where it was, and the card remembers where
+  you left it.
+- **Website:** the card opens in a small floating window (Chrome or Edge 116+;
+  other browsers do not show the button). Closing it is expanding.
+
+It cannot draw over a game running in exclusive fullscreen, or in VR. Use
+borderless or windowed mode, or put the card on a second monitor.
 
 ## Ship detection
 

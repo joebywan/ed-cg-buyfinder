@@ -224,6 +224,7 @@ export async function refresh(rows, edsm, { top = VERIFY_TOP_DEFAULT, budget = E
         if (!m) continue;
         r.edsm = true;
         r.updated = edsmTime.slice(0, 10);
+        r.at = edsmTime;
         if (!r.body && bodies[sys]?.[stn]) r.body = bodies[sys][stn];
         if (m.supply !== r.supply || m.buy !== r.buy) corrected++;
         r.supply = m.supply;
@@ -353,7 +354,7 @@ export async function buildRows(p, { fetchJson = defaultFetchJson, cal = null, n
           profit_per_t: profit, load, loads_available: round1(e.supply / p.hold),
           trip_minutes: round1(mins), trip_profit: load * profit,
           cr_per_min: Math.round(load * profit / mins), t_per_min: round1(load / mins),
-          updated: String(st.market_updated_at || "").slice(0, 10),
+          updated: String(st.market_updated_at || "").slice(0, 10), at: st.market_updated_at || "",
         });
       }
     }
