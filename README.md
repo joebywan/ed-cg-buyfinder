@@ -185,11 +185,23 @@ The **COLUMNS** button on each table tab chooses which columns show and in what
 order; you can also drag a header to move it and its right edge to resize.
 Settings → *RESET COLUMNS* undoes it.
 
+*Your own market data.* With a journal folder connected, opening the market at a
+station that is in the results (even with EDDN sharing off) reads the game's
+`Market.json` and uses it in place of the web's figures for that station: its
+stock and price, aged from the file, marked `◆` on `AGE` and `Your game` on
+`SRC`, with anything it no longer sells dropped. What you then buy
+(`MarketBuy`) is taken off that stock, and the list re-ranks without a search.
+The reading lasts until you reload or connect another folder. Only commodities
+the search already found are touched, and a file older than the page's own data
+for that station is ignored. Firefox can't follow the journal, so there it only
+applies the file from the folder snapshot, if you ended docked at a listed station.
+
 *Reading the table.* An orange bar on a row's left edge marks the best cr/min
 station. An amber bar with an underline marks your copied station when the
 target alert says it moved, until you press GOT IT. `◂ copied` tags the station you
 last copied. On `AGE`, a green ✓ means EDSM confirmed the reading and a dim ?
-means Spansh data still waiting for its EDSM check. Hover a row for the same
+means Spansh data still waiting for its EDSM check. A green ◆ means the
+row is your own reading: see *Your own market data* below. Hover a row for the same
 explanation; the footer legend lists whichever markers are on screen, and the
 **INFO** tab explains all of them, with the credits, the version and the update status.
 It also shows **YOUR FLYING**, the jump, docking and arrival times measured from your journal that the

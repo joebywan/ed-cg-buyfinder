@@ -1,6 +1,8 @@
 // Scoring: trip time, mixed loads, pads and ages. A port of the pure parts
 // of cgbuy - see that file for the reasoning behind each constant.
 import { estScMinutes } from "./journal.js";
+import { symbolFor } from "./commodities.js";
+import { normName } from "./eddn.js";
 
 export const EST_JUMP_MIN = 0.85;     // align + charge + jump + scoop
 export const EST_DOCK_MIN = 2.0;      // fixed: Docked -> Undocked can't tell trading from tea
@@ -172,7 +174,7 @@ export function buildMixed(rows, hold) {
       // DATA AGE mark (`edsm` below is the watcher's "any"): confirmed only if every row in the load is.
       confirmed: used.every((r) => r.edsm), pending: used.some((r) => r.pending),
       updated: top.updated, tonnes: hold - remaining, short: remaining,
-      src: top.src, edsm: items.some((i) => i.edsm),   // which reading it is, for the watcher's "why"
+      src: top.src, own: top.own, edsm: items.some((i) => i.edsm),   // which reading it is, for the watcher's "why"
       supply: mix.reduce((n, m) => n + m.supply, 0),   // stock of the commodities in the load, summed
       trip_minutes: top.trip_minutes, total, cr_per_min: Math.round(total / top.trip_minutes), mix,
       t_per_min: Math.round((hold - remaining) / top.trip_minutes * 10) / 10,
@@ -214,4 +216,43 @@ export function ageText(dateStr, now = new Date()) {
   const n = daysOld(dateStr, now);
   if (n === null) return "?";
   return n < 1 ? "today" : `${n}d ago`;
+}
+
+/** Lay the commander's own station data over cached rows.
+ *
+ *  `own` is {market, buys}: the last Market.json the game wrote (or null) and
+ *  the MarketBuy events seen since, as {system, station, symbol, count}.
+ *  That station's rows take the file's stock and price, marked `own` and
+ *  dated by the file; a commodity it no longer stocks drops out. Buys then
+ *  come off the stock, file or no file. Only rows already in the results are
+ *  touched (a new commodity has no sell price to score), and a file older
+ *  than the station's newest row is ignored. */
+export function applyOwn(rows, own, hold) {
+  const m = own?.market;
+  const buys = own?.buys ?? [];
+  if (!m && !buys.length) return rows;
+  const date = String(m?.timestamp ?? "").slice(0, 10);
+  const goods = new Map((m?.Items ?? []).filter((i) => i.Stock > 0 && i.BuyPrice > 0)
+    .map((i) => [normName(i.Name), i]));
+  const mine = (r) => m && r.system === m.StarSystem && r.station === m.StationName;
+  const newest = rows.filter(mine).map((r) => r.updated || "").sort().pop() || "";
+  const fresh = !!date && date >= newest;
+  return rows.flatMap((r) => {
+    let x = r;
+    if (fresh && mine(r)) {
+      const it = goods.get(symbolFor(r.commodity));
+      if (!it) return [];
+      const { edsm, pending, other, ...rest } = r;
+      x = { ...rest, supply: it.Stock, buy: it.BuyPrice, updated: date, src: "M", own: true };
+    }
+    const bought = buys.filter((b) => b.system === r.system && b.station === r.station
+      && b.symbol === symbolFor(r.commodity)).reduce((n, b) => n + b.count, 0);
+    if (!bought && x === r) return [r];
+    const supply = x.supply - bought, profit = x.sell - x.buy;
+    if (supply <= 0 || profit <= 0) return [];
+    const load = Math.min(supply, hold);
+    return [{ ...x, supply, profit_per_t: profit, load, loads_available: Math.round(supply / hold * 10) / 10,
+      trip_profit: load * profit, cr_per_min: Math.round(load * profit / x.trip_minutes),
+      t_per_min: Math.round(load / x.trip_minutes * 10) / 10 }];
+  });
 }

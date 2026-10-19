@@ -8,7 +8,7 @@ import { DESKTOP, DesktopDir, desktopStore, journalDir, tauriFetchJson } from ".
 import { initSettings } from "./src/settings.js";
 import { VIEWS, colWidths, fitWidth, moveCol, placeCol, toggleCol } from "./src/columns.js";
 import { wireHeaders } from "./src/headers.js";
-import { Sender } from "./src/eddn.js";
+import { Sender, normName } from "./src/eddn.js";
 import { JournalState, runMinutes, timingReport } from "./src/journal.js";
 import { clearLog, formatLog, getLog, formatLine, log, onLog } from "./src/log.js";
 import { SOURCES, searchSources } from "./src/merge.js";
@@ -20,7 +20,7 @@ import { edsmGate } from "./src/edsm.js";
 import { WANT, widen } from "./src/widen.js";
 import { VERSION } from "./src/version.js";
 import { checkForUpdate } from "./src/update.js";
-import { MAX_AGE_DEFAULT, tripParts, ageTag, ageText, buildMixed, compareValues, hiddenBy, mixedSortValue, padForShip,
+import { MAX_AGE_DEFAULT, tripParts, applyOwn, ageTag, ageText, buildMixed, compareValues, hiddenBy, mixedSortValue, padForShip,
   viewRows, whereItIs } from "./src/model.js";
 
 const $ = (id) => document.getElementById(id);
@@ -148,7 +148,8 @@ function viewOpts() {
   const { carriers, odyssey, pad } = S.settings;
   return { carriers, odyssey, pad: shipFigures()?.pad ?? pad, penalty: ui.prefs.surface_penalty };
 }
-const viewed = (r = S.result) => (r ? viewRows(r.rows, viewOpts()) : []);
+// The commander's own Market.json and purchases overlay the results, never replace them.
+const viewed = (r = S.result) => (r ? viewRows(applyOwn(r.rows, S.own, r.p.hold), viewOpts()) : []);
 const rankRow = (r) => viewRows([r], viewOpts())[0]?.cr_per_min ?? null;
 
 function renderControls() {
@@ -758,14 +759,16 @@ function dropBody(ev) {
   const row = ev.target.closest?.("tr[data-system]");
   if (row && !row.contains(ev.relatedTarget)) bodies.unwant(row.dataset.system);
 }
-const SRC_NAME = { A: "Ardent", S: "Spansh" };
-const srcCell = (x) => h("td", { class: "src", title: x.other
+const SRC_NAME = { A: "Ardent", S: "Spansh", M: "Your game" };
+const srcCell = (x) => h("td", { class: "src", title: x.own ? "your own Market.json, read when you opened this market"
+  : x.other
   ? `${SRC_NAME[x.other.src === "A" ? "S" : "A"]} read ${ageText(x.updated)}; ${SRC_NAME[x.other.src]} read ${ageText(x.other.updated)}` : null }, x.src || "");
 // A small mark after the age: confirmed by EDSM, or Spansh data still waiting for its check.
 const ageCell = (x) => h("td", { class: `num ${ageTag(x.updated)}`,
   title: x.edsm ? `confirmed by EDSM, market read ${ageText(x.updated)}`
-    : x.pending ? "unconfirmed - Spansh data, EDSM check pending" : null },
-  ageText(x.updated), x.edsm ? h("span", { class: "ok" }, " ✓") : x.pending ? h("span", { class: "dim" }, " ?") : null);
+    : x.pending ? "unconfirmed - Spansh data, EDSM check pending"
+    : x.own ? `your own reading of this market (Market.json), ${ageText(x.updated)}` : null },
+  ageText(x.updated), x.own ? h("span", { class: "ok" }, " ◆") : x.edsm ? h("span", { class: "ok" }, " ✓") : x.pending ? h("span", { class: "dim" }, " ?") : null);
 
 const penaltyTip = (c, x, m) => (c.id === "trip_minutes" && !m && x.penalty ? `+${x.penalty} min surface penalty` : null);
 
@@ -794,6 +797,7 @@ function renderLegend(plans, key) {
     plans.some((x) => S.alert?.keys.has(key(x))) && [mark("lg-moved", "▌"), "moved (see alert)"],
     plans.some((x) => key(x) === S.watch.target?.key) && [mark("copied-tag", "◂"), "copied"],
     plans.some((x) => x.confirmed) && [mark("ok", "✓"), "EDSM-confirmed"],
+    plans.some((x) => x.own) && [mark("ok", "◆"), "your own market reading"],
     plans.some((x) => x.pending) && [mark("dim", "?"), "awaiting EDSM"],
     plans.some((x) => x.planetary) && [mark("surface", "⏚"), "surface station"],
     plans.some(beyond) && [mark("beyond", "⤢"), "beyond your radius (added to find 5 stations)"],
@@ -976,6 +980,30 @@ function renderJournal() {
 // only one this page reads back; the other two are given.
 const EDDN_KINDS = ["Market", "Outfitting", "Shipyard"];
 
+/** One of the station files the game last wrote, or null. */
+async function readStation(kind) {
+  try {
+    return S.tail ? await S.tail.stationFile(kind)
+      : S.snapshotFiles ? await readStationFile(S.snapshotFiles, kind) : null;
+  } catch { return null; }      // never used that service, or the game is mid-write
+}
+
+/** Take the Market.json the game just wrote as the truth about that station.
+ *
+ *  The file outlives the station it was written at, so it must be the one the
+ *  journal event named (`marketId`), or, for a folder snapshot with no event,
+ *  the station the journal ends docked at. Needs no EDDN and no search. */
+async function takeOwnMarket(marketId = null) {
+  const data = await readStation("Market");
+  const j = S.journal;
+  if (!data || !j) return;
+  if (marketId != null ? data.MarketID !== marketId
+    : !(j.docked && data.StationName === j.station && data.StarSystem === j.system)) return;
+  S.own = { market: data, buys: [] };      // a fresh reading already has every earlier buy in it
+  log("journal", `own market reading: ${data.StationName}`);
+  if (S.result) render();
+}
+
 /** Send one of the station files the game last wrote, if sharing is on.
 
  Everything that could make this a bad idea - a repeat, a stale reading, a
@@ -983,11 +1011,7 @@ const EDDN_KINDS = ["Market", "Outfitting", "Shipyard"];
  refuse rather than this function's to guess at. */
 async function shareStation(kind, marketId = null) {
   if (!S.eddn || !S.journal) return;
-  let data = null;
-  try {
-    data = S.tail ? await S.tail.stationFile(kind)
-      : S.snapshotFiles ? await readStationFile(S.snapshotFiles, kind) : null;
-  } catch { /* never used that service, or the game is mid-write */ }
+  const data = await readStation(kind);
   if (!data) return;
   const j = S.journal;
   const common = {
@@ -1056,6 +1080,7 @@ function adoptOdyssey(state) {
 /** Make a freshly read journal the one the page uses. */
 function adoptJournal({ state, lines }) {
   S.journal = state;
+  S.own = null;
   S.cgLines = lines;
   S.shipKey = shipKey();
   adoptOdyssey(state);
@@ -1076,6 +1101,12 @@ function adoptJournal({ state, lines }) {
   state.onCalibration = () => { if (S.view === "info") renderInfo(); };
   state.onEvent = (e) => {
     if (EDDN_KINDS.includes(e.event)) shareStation(e.event, e.MarketID ?? null);
+    if (e.event === "Market") takeOwnMarket(e.MarketID ?? null);
+    if (e.event === "MarketBuy" && e.Count > 0 && state.station) {
+      (S.own ??= { market: null, buys: [] }).buys.push({ system: state.system, station: state.station,
+        symbol: normName(e.Type), count: e.Count });
+      if (S.result) render();
+    }
   };
   renderControls();
   renderJournal();
@@ -1083,7 +1114,10 @@ function adoptJournal({ state, lines }) {
   // A snapshot has no live events, so the files it holds get their only
   // chance here. The Sender refuses anything too old to be worth sending,
   // which these usually are - hence no market ID to check them against.
-  if (!CAN_TAIL) for (const k of EDDN_KINDS) shareStation(k);
+  if (!CAN_TAIL) {
+    for (const k of EDDN_KINDS) shareStation(k);
+    takeOwnMarket();
+  }
   if (resolveDest() || S.result) search();
 }
 
