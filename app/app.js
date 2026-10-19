@@ -5,7 +5,8 @@ import { dist3, onTheWay, wantsPanel } from "./src/corridor.js";
 import { BodyLookup } from "./src/bodies.js";
 import { folderTooltip } from "./src/browser.js";
 import { FRONTIER_URL, bandOutlook, finishEstimate, hoursLeft, totalPoints, historyFromLines, parseLive, standing, standingChanges, standingText, suggestDestination } from "./src/cg.js";
-import { DESKTOP, DesktopDir, desktopStore, journalDir, tauriFetchJson } from "./src/desktop.js";
+import { DESKTOP, DesktopDir, desktopStore, journalDir, setMiniWindow, tauriFetchJson } from "./src/desktop.js";
+import { miniCard } from "./src/mini.js";
 import { initSettings } from "./src/settings.js";
 import { VIEWS, colWidths, fitWidth, moveCol, placeCol, toggleCol } from "./src/columns.js";
 import { wireHeaders } from "./src/headers.js";
@@ -73,6 +74,9 @@ const S = {
   watch: new Watcher({ shown: TOP_STATIONS }),
   watchGen: 0,      // the search whose first results are the baseline
   alert: null,
+  mini: null,       // "window" while the desktop window is the card
+  pip: null,        // the website's Picture-in-Picture window, while open
+  standingText: "",
   gen: 0,           // bumped per search; older ones' background EDSM work goes quiet
   searching: false,
   noticeDismissed: false,
@@ -324,6 +328,8 @@ function renderStanding() {
     fx = { finish, now, outlook: bandOutlook(st, pts, finish, run, now) };
   }
   const [text, tip, mark, kind] = standingText(st, run, fx);
+  S.standingText = text;
+  renderMini();
   line.replaceChildren(...(mark
     ? [text.slice(0, text.indexOf(mark)), h("span", { class: { safe: "ok", tight: "warn", haul: "bad" }[kind] }, mark), text.slice(text.indexOf(mark) + mark.length)]
     : [text || ""]));
@@ -420,6 +426,7 @@ const plansNow = () => (S.result ? buildMixed(viewed(), S.result.p.hold) : []);
 /** Show (or clear) the one banner; sound and notify only when the watcher says so. */
 function showAlert(a) {
   S.alert = a;
+  renderMini();
   $("alert").hidden = !a;
   if (!a) return;
   $("alert-text").textContent = a.text;
@@ -1030,6 +1037,7 @@ function renderCols() {
 }
 
 function render() {
+  renderMini();
   $("wrap-mixed").hidden = S.view !== "mixed";
   $("wrap-single").hidden = S.view !== "single";
   $("wrap-log").hidden = S.view !== "log";
@@ -1075,6 +1083,65 @@ function render() {
   const errs = r.errors?.length ? `  ·  failed: ${r.errors.join("; ")}` : "";
   setStatus(`${r.note ? `${r.note}  ·  ` : ""}${stations} stations, ${fmt(shown)} sources for ${r.p.dest.station}${stale ? " (for a previous destination — search again)" : ""}${errs}`, !!errs);
   paintSel();
+}
+
+// -- mini card ------------------------------------------------------------------
+// The same state as the table, as one small card: in this window (desktop) or in
+// a Picture-in-Picture window (website). Closing the PiP window is "expand".
+
+const MINI_SIZE = [300, 170];     // px at the default font size; scaled with it
+const PIP = !DESKTOP && "documentPictureInPicture" in window;
+
+function renderMini() {
+  const roots = [S.mini === "window" && $("mini"), S.pip?.document.getElementById("mini")].filter(Boolean);
+  if (!roots.length) return;
+  const c = miniCard({ plans: plansNow(), target: S.watch.target, alert: S.alert, standing: S.standingText });
+  const p = c.plan;
+  const copy = (win) => {
+    if (c.alert) return $("alert-copy").onclick();
+    if (!p) return;
+    win.navigator.clipboard?.writeText(p.system).then(() => { toast(`Copied ${p.system}`); setTarget(p.station, p.system); }, () => toast("Clipboard blocked"));
+  };
+  for (const root of roots) {
+    const win = root.ownerDocument.defaultView;
+    const line = (cls, ...kids) => h("div", { class: `m-line ${cls}` }, ...kids);
+    root.replaceChildren(h("div", { class: "mini-card", onclick: () => copy(win), title: "Click to copy the system" },
+      h("div", { class: "m-head" }, h("b", {}, "cgbuy · target"),
+        h("button", { type: "button", title: "Copy the system", onclick: (e) => { e.stopPropagation(); copy(win); } }, "COPY"),
+        h("button", { type: "button", title: "Back to the full window (Ctrl+M)", onclick: (e) => { e.stopPropagation(); toggleMini(); } }, "EXPAND")),
+      c.alert && h("div", { class: "m-alert" }, h("span", {}, c.alert),
+        h("button", { type: "button", onclick: (e) => { e.stopPropagation(); $("alert-ack").onclick(); } }, "GOT IT")),
+      p ? [line("m-station", p.station, h("span", { class: "dim" }, ` · ${p.ls}`), p.copied && h("span", { class: "copied-tag" }, " ◂")),
+           line("", p.system, h("span", { class: "dim" }, ` · ${p.ly}`)),
+           line("m-load", p.load),
+           line("", h("b", {}, p.crpm), "  ", h("span", { class: p.ageClass }, p.age), p.mark && h("span", { class: p.mark === "✓" ? "ok" : "dim" }, ` ${p.mark}`))]
+        : line("dim", "No results yet."),
+      c.standing && line("dim m-standing", c.standing)));
+    if (win !== window) win.document.documentElement.style.zoom = document.documentElement.style.zoom;
+  }
+}
+
+/** MINI / EXPAND: desktop shrinks this window and floats it on top; the website opens a PiP window. */
+async function toggleMini() {
+  if (DESKTOP) {
+    const on = !S.mini;
+    S.mini = on ? "window" : null;
+    document.body.classList.toggle("mini", on);
+    const pos = await setMiniWindow(on, Number(document.documentElement.style.zoom) || 1, MINI_SIZE, store.get("cgbuy.miniPos", null)).catch(() => null);
+    if (pos) store.set("cgbuy.miniPos", pos);
+    return renderMini();
+  }
+  if (S.pip) return S.pip.close();
+  if (!PIP) return;
+  const z = Number(document.documentElement.style.zoom) || 1;
+  const win = await documentPictureInPicture.requestWindow({ width: Math.round(MINI_SIZE[0] * z), height: Math.round(MINI_SIZE[1] * z) });
+  for (const l of document.querySelectorAll("link[rel=stylesheet]")) win.document.head.append(h("link", { rel: "stylesheet", href: l.href }));
+  win.document.body.className = "mini";
+  win.document.body.append(h("div", { id: "mini" }));
+  win.addEventListener("keydown", (e) => { if (e.ctrlKey && e.key === "m") toggleMini(); });
+  win.addEventListener("pagehide", () => { S.pip = null; });
+  S.pip = win;
+  renderMini();
 }
 
 /** "Markets come from" names the source(s) the last search actually used. */
@@ -1468,7 +1535,10 @@ function bind() {
   };
   window.addEventListener("keydown", (e) => {
     if (e.key === "Escape") { $("dest-panel").open = false; S.sel.clear(); paintSel(); closeMenu(); }
+    if (e.ctrlKey && e.key === "m" && (DESKTOP || PIP)) { e.preventDefault(); toggleMini(); }
   });
+  $("mini-btn").hidden = !DESKTOP && !PIP;
+  $("mini-btn").onclick = toggleMini;
   setInterval(() => renderDest(), 30000);
   setInterval(checkStall, 5000);
   setInterval(renderStanding, 60000);          // ticks the countdown

@@ -14,6 +14,28 @@ export async function tauriFetchJson(url, init) {
   return res.json();
 }
 
+let beforeMini;
+
+/** Shrink this window to the card and float it on top (`on`), or put it back.
+ *  Returns where the card was when it was put away, to open it there next time. */
+export async function setMiniWindow(on, zoom, [w, h], at) {
+  const { getCurrentWindow } = window.__TAURI__.window;
+  const { LogicalSize, PhysicalPosition } = window.__TAURI__.dpi;
+  const win = getCurrentWindow();
+  if (on) {
+    if (await win.isMaximized()) await win.unmaximize();
+    beforeMini = { size: await win.outerSize(), pos: await win.outerPosition() };
+    await win.setSize(new LogicalSize(Math.round(w * zoom), Math.round(h * zoom)));
+    if (at) await win.setPosition(new PhysicalPosition(at.x, at.y));
+    await win.setAlwaysOnTop(true);
+    return null;
+  }
+  const { x, y } = await win.outerPosition();
+  await win.setAlwaysOnTop(false);
+  if (beforeMini) { await win.setSize(beforeMini.size); await win.setPosition(beforeMini.pos); }
+  return { x, y };
+}
+
 /** target=_blank links would otherwise open inside the app window, which has
  *  no address bar and no way back. Hand them to the default browser instead.
  *  Delegated on the document so links built later (credits, the update link)

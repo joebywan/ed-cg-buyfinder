@@ -249,3 +249,20 @@ main[data-view="info"] #empty, main[data-view="info"] #age-line { display: none 
 .why-dialog::backdrop { background: rgba(0, 0, 0, .6); }
 .why-dialog h2 { margin: 0 0 8px; color: var(--or); font-size: 15px; letter-spacing: .08em; text-transform: uppercase; }
 .why-dialog p { margin: 0 0 8px; }
+
+/* mini card: one small window; everything else steps aside */
+#mini { display: none; }
+body.mini { padding: 0; }
+body.mini > :not(#mini):not(#toast) { display: none !important; }
+body.mini > #mini { display: block; flex: 1 1 0; min-height: 0; }
+.mini-card { height: 100%; padding: 6px 8px; font-size: 12px; line-height: 1.35; cursor: copy; overflow: hidden; border: 1px solid var(--or-dim); }
+.mini-card:hover { background: var(--sel); }
+.m-head { display: flex; align-items: center; gap: 4px; margin-bottom: 4px; color: var(--or); letter-spacing: .08em; }
+.m-head b { flex: 1; font-weight: normal; }
+.m-head button { padding: 0 6px; font-size: 11px; }
+.m-line { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.m-station { color: var(--or); font-weight: bold; }
+.m-alert { display: flex; gap: 6px; align-items: center; margin-bottom: 4px; padding: 2px 6px; background: var(--warn); color: #1a1100; font-weight: bold; }
+.m-alert span { flex: 1; min-width: 0; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.m-alert button { padding: 0 6px; background: #1a1100; color: var(--warn); border-color: #1a1100; }
+.m-line.m-standing { white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
