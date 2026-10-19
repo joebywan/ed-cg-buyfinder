@@ -35,7 +35,7 @@ def call(path_or_url, key, data=None, content_type=None):
 
 def multipart(path):
     """Build a multipart/form-data body without pulling in requests."""
-    boundary = "----cgbuy" + hashlib.sha256(path.encode()).hexdigest()[:16]
+    boundary = "----edcgbuyfinder" + hashlib.sha256(path.encode()).hexdigest()[:16]
     name = os.path.basename(path)
     head = (
         f"--{boundary}\r\n"

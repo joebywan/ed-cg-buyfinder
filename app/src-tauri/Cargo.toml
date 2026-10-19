@@ -1,5 +1,5 @@
 [package]
-name = "cgbuy"
+name = "ed-cg-buyfinder"
 version = "2.0.0"
 edition = "2021"
 

@@ -62,16 +62,16 @@ jobs:
       - name: Package
         run: |
           B=app/src-tauri/target/release
-          PFX="cgbuy-$(echo "${{ github.sha }}" | cut -c1-7)"
-          cp "$B/cgbuy" "$PFX-linux"
+          PFX="ed-cg-buyfinder-$(echo "${{ github.sha }}" | cut -c1-7)"
+          cp "$B/ed-cg-buyfinder" "$PFX-linux"
           chmod +x "$PFX-linux"
           cp "$B"/bundle/appimage/*.AppImage "$PFX-linux.AppImage"
           cp "$B"/bundle/deb/*.deb "$PFX-linux.deb"
           ls -lh "$PFX"-linux*
       - uses: actions/upload-artifact@v4
         with:
-          name: cgbuy-linux
-          path: cgbuy-*-linux*
+          name: ed-cg-buyfinder-linux
+          path: ed-cg-buyfinder-*-linux*
 
   build-windows:
     runs-on: windows-latest
@@ -108,10 +108,10 @@ jobs:
         shell: bash
         run: |
           B=app/src-tauri/target/release
-          PFX="cgbuy-$(echo "${{ github.sha }}" | cut -c1-7)"
+          PFX="ed-cg-buyfinder-$(echo "${{ github.sha }}" | cut -c1-7)"
           DIR="$PFX-windows"
           mkdir "$DIR"
-          cp "$B/cgbuy.exe" "$DIR/cgbuy.exe"
+          cp "$B/ed-cg-buyfinder.exe" "$DIR/ed-cg-buyfinder.exe"
           # Notepad is the default handler and the .gitattributes eol=crlf rule
           # cannot be trusted to have survived checkout, so force CRLF here
           # (the \r* makes it idempotent whichever way the checkout landed).
@@ -121,9 +121,9 @@ jobs:
           ls -lh "$DIR.zip"
       - uses: actions/upload-artifact@v4
         with:
-          name: cgbuy-windows
+          name: ed-cg-buyfinder-windows
           path: |
-            cgbuy-*-windows.zip
+            ed-cg-buyfinder-*-windows.zip
 
   # Preview of the VirusTotal verdict for the Windows zip, so a
   # change that makes engines unhappy shows up on the PR instead of only after
@@ -144,12 +144,12 @@ jobs:
         if: env.VT_API_KEY != ''
       - uses: actions/download-artifact@v4
         if: env.VT_API_KEY != ''
-        with: { name: cgbuy-windows }
+        with: { name: ed-cg-buyfinder-windows }
       - name: Scan and write the result to the job summary
         if: env.VT_API_KEY != ''
         # tee: the table goes to the run summary AND the job log, so it can be
         # read with `gh run view --log` as well as on the run page.
-        run: python .github/scripts/vt_scan.py --when="for this pull request build" cgbuy-*-windows.zip | tee -a "$GITHUB_STEP_SUMMARY"
+        run: python .github/scripts/vt_scan.py --when="for this pull request build" ed-cg-buyfinder-*-windows.zip | tee -a "$GITHUB_STEP_SUMMARY"
       - name: No VT_API_KEY here
         if: env.VT_API_KEY == ''
         run: echo "VT_API_KEY is not available (fork PR?), skipping the VirusTotal preview." >> "$GITHUB_STEP_SUMMARY"
@@ -189,15 +189,15 @@ jobs:
 
             Commit `${{ github.sha }}`
 
-            * `cgbuy-${{ env.SHORT }}-windows.zip` — Windows x86-64, extract the folder and run `cgbuy.exe` (needs WebView2, which Windows 10/11 include)
-            * `cgbuy-${{ env.SHORT }}-linux.AppImage` — Linux x86-64 (needs `chmod +x`)
-            * `cgbuy-${{ env.SHORT }}-linux.deb` — Debian/Ubuntu package
-            * `cgbuy-${{ env.SHORT }}-linux` — the bare binary (needs `chmod +x` and libwebkit2gtk-4.1)
+            * `ed-cg-buyfinder-${{ env.SHORT }}-windows.zip` — Windows x86-64, extract the folder and run `ed-cg-buyfinder.exe` (needs WebView2, which Windows 10/11 include)
+            * `ed-cg-buyfinder-${{ env.SHORT }}-linux.AppImage` — Linux x86-64 (needs `chmod +x`)
+            * `ed-cg-buyfinder-${{ env.SHORT }}-linux.deb` — Debian/Ubuntu package
+            * `ed-cg-buyfinder-${{ env.SHORT }}-linux` — the bare binary (needs `chmod +x` and libwebkit2gtk-4.1)
 
             Nothing here is signed; Windows SmartScreen will warn on first run.
             See [Antivirus](../../#antivirus).
           files: |
-            cgbuy-${{ env.SHORT }}-windows.zip
-            cgbuy-${{ env.SHORT }}-linux.AppImage
-            cgbuy-${{ env.SHORT }}-linux.deb
-            cgbuy-${{ env.SHORT }}-linux
+            ed-cg-buyfinder-${{ env.SHORT }}-windows.zip
+            ed-cg-buyfinder-${{ env.SHORT }}-linux.AppImage
+            ed-cg-buyfinder-${{ env.SHORT }}-linux.deb
+            ed-cg-buyfinder-${{ env.SHORT }}-linux

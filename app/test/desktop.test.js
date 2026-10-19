@@ -84,3 +84,12 @@ test("external links go to the opener; other clicks are left alone", () => {
   assert.deepEqual(opened, ["https://ardent-insight.com/"]);
   assert.equal(prevented, 1);
 });
+
+test("loadStore prefers the new store, else maps the old Python config", async () => {
+  const s = await loadStore(async () => ({ store: { "cgbuy.eddn": true }, legacy: { eddn_enabled: false } }));
+  assert.equal(s.get("cgbuy.eddn"), true);
+  const l = await loadStore(async () => ({ store: null, legacy: { eddn_enabled: true } }));
+  assert.equal(l.get("cgbuy.eddn"), true);
+  const e = await loadStore(async () => ({ store: null, legacy: null }));
+  assert.equal(e.get("cgbuy.eddn", "x"), "x");
+});

@@ -55,6 +55,7 @@ const store = desktopStore ?? {
 };
 
 const S = {
+  // Store keys keep the old "cgbuy." prefix on purpose: renaming would drop users' saved state.
   settings: { ...DEFAULTS, ...store.get("cgbuy.settings", {}) },
   manualDest: store.get("cgbuy.dest", null),
   live: [],
@@ -360,7 +361,7 @@ function renderDest() {
   const line = $("dest-line");
   if (!d) {
     line.replaceChildren("No destination yet — ", h("a", { href: "#", onclick: (e) => { e.preventDefault(); $("dest-panel").open = true; } }, "set one"));
-    document.title = "cgbuy";
+    document.title = "ED CG Buyfinder";
   } else {
     const prices = S.result && sameDest(S.result.p.dest, d)
       ? Object.entries(S.result.cg).map(([c, v]) => `${c}: ${fmt(v.sell)} cr/t`).join("\n") : "";
@@ -369,7 +370,7 @@ function renderDest() {
       h("span", { class: "sub" }, `  ${d.title ? `· ${d.title} ` : ""}· ${d.source}`),
       S.result ? h("span", { class: "sub" }, `  · data ${ageShort(S.result.at)} old`) : "");
     line.title = prices ? `What the destination pays:\n${prices}` : "";
-    document.title = `cgbuy — ${d.station}`;
+    document.title = `ED CG Buyfinder — ${d.station}`;
   }
   renderStanding();
   const notJoined = d?.source === "live CG (not joined)";

@@ -28,7 +28,7 @@ function targets(v) {
     ["src/version.js", /^(export const VERSION = ")[^"]*(")/m, v],
     ["src-tauri/tauri.conf.json", /^(  "version": ")[^"]*(")/m, semver],
     ["src-tauri/Cargo.toml", /^(version = ")[^"]*(")/m, semver],
-    ["src-tauri/Cargo.lock", /(name = "cgbuy"\r?\nversion = ")[^"]*(")/, semver],
+    ["src-tauri/Cargo.lock", /(name = "ed-cg-buyfinder"\r?\nversion = ")[^"]*(")/, semver],
   ];
 }
 
