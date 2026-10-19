@@ -292,4 +292,12 @@ test("applyOwn: own Market.json replaces that station's rows, buys come off the 
   const buy = (count) => ({ market: null, buys: [{ system: "Y", station: "X", symbol: "gold", count }] });
   assert.equal(m.applyOwn(rows, buy(100), 100)[0].supply, 400);
   assert.deepEqual(m.applyOwn(rows, buy(500), 100).map((x) => `${x.station}/${x.commodity}`), ["X/Silver", "Z/Gold"]);
+
+test("hidden stations are a view filter, keyed by station and system", () => {
+  const row = (station, system) => ({ station, system, commodity: "X", pad: "L", load: 10, profit_per_t: 5, trip_minutes: 10, cr_per_min: 5, t_per_min: 1 });
+  const rows = [row("A", "S1"), row("A", "S2"), row("B", "S1")];
+  const hide = [m.stationKey(rows[0])];
+  assert.equal(m.hiddenBy(rows[0], { hide }), "hidden");
+  assert.deepEqual(m.viewRows(rows, { hide }).map(m.stationKey), [m.stationKey(rows[1]), m.stationKey(rows[2])]);
+  assert.equal(m.viewRows(rows).length, 3);               // un-hiding needs no new rows
 });

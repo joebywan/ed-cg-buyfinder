@@ -124,9 +124,9 @@ export function tripMinutes(distLy, srcLs, cgLs, jumpEmpty, jumpLaden, cal = nul
  extra minutes on its (unpenalised, stored) round trip and its rates are
  re-derived from that, so changing the penalty re-scores from the cache too.
  A blank pad (unknown) never fits, as before. */
-export function viewRows(rows, { carriers = false, odyssey = false, pad = "L", penalty = 0 } = {}) {
+export function viewRows(rows, { carriers = false, odyssey = false, pad = "L", penalty = 0, hide = [] } = {}) {
   return rows.flatMap((r) => {
-    if (hiddenBy(r, { carriers, odyssey, pad })) return [];
+    if (hiddenBy(r, { carriers, odyssey, pad, hide })) return [];
     if (!r.planetary || !(penalty > 0)) return [r];
     const mins = r.trip_minutes + penalty;
     return [{ ...r, trip_minutes: Math.round(mins * 10) / 10, penalty,
@@ -134,8 +134,13 @@ export function viewRows(rows, { carriers = false, odyssey = false, pad = "L", p
   }).sort((a, b) => b.cr_per_min - a.cr_per_min);
 }
 
-/** Which view filter hides this row: "carriers", "odyssey" or "pad", else "". */
-export function hiddenBy(r, { carriers = false, odyssey = false, pad = "L" } = {}) {
+/** A station's identity in the hidden list. Rows carry no market id, so system and name. */
+export const stationKey = (x) => `${x.station}\0${x.system}`;
+
+/** Which view filter hides this row: "hidden" (stations the user hid, `hide` is
+ *  their stationKeys), "carriers", "odyssey" or "pad", else "". */
+export function hiddenBy(r, { carriers = false, odyssey = false, pad = "L", hide = [] } = {}) {
+  if (hide.includes(stationKey(r))) return "hidden";
   if (r.carrier && !carriers) return "carriers";
   if (r.planetary && !odyssey) return "odyssey";
   return PAD_ORDER[r.pad] >= PAD_ORDER[pad] ? "" : "pad";

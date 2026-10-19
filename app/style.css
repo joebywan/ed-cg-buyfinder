@@ -219,6 +219,10 @@ footer { padding-block: 8px 10px; border-top: 1px solid var(--or-dim); backgroun
   pointer-events: none;
   font-size: 12px;
 }
+.row-menu { position: fixed; z-index: 10; display: grid; background: var(--bg); border: 1px solid var(--or-dim); }
+.row-menu button { border: 0; text-align: left; padding: 4px 12px; }
+.hidden-list { list-style: none; margin: 0; padding: 0; }
+.hidden-list button { margin-right: 8px; }
 td.src { width: 3em; text-align: center; color: var(--dim); }
 
 .settings h2 { margin: 16px 0 4px; color: var(--or); font-size: 13px; letter-spacing: .08em; font-weight: normal; }

@@ -285,6 +285,14 @@ Inputs across the top: hold size, radius (120 ly), jump range empty and laden,
 minimum supply (200), landing pad, how old a source may be, the SOURCE, and
 toggles for fleet carriers and Odyssey. Enter or SEARCH runs it.
 
+Right-click a station in either table and choose **Hide this station** when
+you can't or won't use it - wanted there, a hostile faction, an awful approach.
+Like CARRIERS and ODYSSEY it only decides what is shown, so nothing is
+searched again, and it counts against the 5-station minimum the same way. The
+SETTINGS tab lists hidden stations with an **UN-HIDE** button each, and the line
+under the table says how many are hidden. If you hide the station you last
+copied, the banner says so.
+
 If fewer than 5 stations are in range, the app keeps going: every selected source
 is asked again 1.5x further out (180, 270, ... up to 500 ly), the results merged,
 and the decision made only once all of them have answered. Spansh is asked for

@@ -22,7 +22,7 @@ import { WANT, widen } from "./src/widen.js";
 import { VERSION } from "./src/version.js";
 import { drain, drainText, record, trendKey } from "./src/trend.js";
 import { checkForUpdate } from "./src/update.js";
-import { MAX_AGE_DEFAULT, tripParts, applyOwn, ageTag, ageText, buildMixed, compareValues, hiddenBy, mixedSortValue, padForShip,
+import { MAX_AGE_DEFAULT, tripParts, applyOwn, ageTag, ageText, buildMixed, compareValues, hiddenBy, mixedSortValue, padForShip, stationKey,
   viewRows, whereItIs } from "./src/model.js";
 
 const $ = (id) => document.getElementById(id);
@@ -149,7 +149,8 @@ function params() {
  *  station; these only decide what is shown, so changing them needs no network. */
 function viewOpts() {
   const { carriers, odyssey, pad } = S.settings;
-  return { carriers, odyssey, pad: shipFigures()?.pad ?? pad, penalty: ui.prefs.surface_penalty };
+  return { carriers, odyssey, pad: shipFigures()?.pad ?? pad, penalty: ui.prefs.surface_penalty,
+           hide: ui.prefs.hidden_stations };
 }
 // The commander's own Market.json and purchases overlay the results, never replace them.
 const viewed = (r = S.result) => (r ? viewRows(applyOwn(r.rows, S.own, r.p.hold), viewOpts()) : []);
@@ -461,7 +462,7 @@ const sameDest = (a, b) => !!a && !!b && a.system === b.system && a.station === 
 
 // -- view filters ------------------------------------------------------------------
 
-const FILTER_NAME = { odyssey: "ODYSSEY filter (surface station)", carriers: "CARRIERS filter (fleet carrier)" };
+const FILTER_NAME = { hidden: "list of hidden stations (SETTINGS)", odyssey: "ODYSSEY filter (surface station)", carriers: "CARRIERS filter (fleet carrier)" };
 
 /** ODYSSEY, CARRIERS, PAD or the surface penalty changed: re-show the cached rows.
  *
@@ -723,6 +724,30 @@ function copySystem(ev) {
     () => toast("Clipboard blocked", ev));
 }
 
+// Right-click a station row: a small menu. Add an item by pushing {label, run} in
+// `items` below; each `run` gets the clicked row's {station, system}.
+function rowMenu(ev) {
+  const tr = ev.target.closest("tr[data-system]");
+  const station = tr?.querySelector("td.station[data-station]")?.dataset.station;
+  if (!station) return;
+  ev.preventDefault();
+  const x = { station, system: tr.dataset.system };
+  const items = [
+    { label: "Hide this station", run: () => {
+      ui.prefs.hidden_stations.push(stationKey(x));
+      ui.save();
+      viewChanged();
+    } },
+  ];
+  const menu = $("row-menu");
+  menu.replaceChildren(...items.map((it) => h("button", { type: "button", onclick: () => { menu.hidden = true; it.run(x); } }, it.label)));
+  menu.style.left = `${Math.min(ev.clientX, window.innerWidth - 160)}px`;
+  menu.style.top = `${ev.clientY}px`;
+  menu.hidden = false;
+}
+addEventListener("click", () => { $("row-menu").hidden = true; }, true);
+addEventListener("keydown", (e) => { if (e.key === "Escape") $("row-menu").hidden = true; });
+
 // The browser already knows how to show a tooltip: it waits for the pointer
 // to settle, follows it, and never flickers. Nothing here needs to be built.
 //
@@ -837,7 +862,7 @@ function renderMixed(r) {
   const key = (x) => `${x.station}\0${x.system}`;
   const best = plans[0] && key(plans[0]);
   S.expanded ??= new Set();
-  const body = h("tbody", { onclick: copySystem, onmouseover: wantBody, onmouseout: dropBody });
+  const body = h("tbody", { onclick: copySystem, oncontextmenu: rowMenu, onmouseover: wantBody, onmouseout: dropBody });
   const cols = colsFor("mixed");
   for (const plan of sorted(plans, S.sort.mixed)) {
     const k = key(plan);
@@ -911,7 +936,7 @@ function singleCell(c, x) {
 }
 
 function renderSingle(r) {
-  const body = h("tbody", { onclick: copySystem, onmouseover: wantBody, onmouseout: dropBody });
+  const body = h("tbody", { onclick: copySystem, oncontextmenu: rowMenu, onmouseover: wantBody, onmouseout: dropBody });
   const cols = colsFor("single");
   for (const x of sorted(viewed(r), S.sort.single)) {
     body.append(h("tr", { class: "row", "data-system": x.system }, ...cols.map((c) => singleCell(c, x))));
@@ -998,6 +1023,8 @@ function render() {
     : r.allStale ? `Every source is older than ${maxAge} days — showing them anyway.`
     : r.hiddenStale ? `Hid ${fmt(r.hiddenStale)} of ${fmt(r.hiddenStale + shown)} sources older than ${maxAge} days.`
     : `Nothing hidden: every source is within ${maxAge} days.`;
+  const mine = new Set(r.rows.map(stationKey).filter((k) => ui.prefs.hidden_stations.includes(k))).size;
+  if (mine) $("age-line").textContent += ` ${mine} station${mine === 1 ? "" : "s"} hidden by you (SETTINGS).`;
   const errs = r.errors?.length ? `  ·  failed: ${r.errors.join("; ")}` : "";
   setStatus(`${r.note ? `${r.note}  ·  ` : ""}${stations} stations, ${fmt(shown)} sources for ${r.p.dest.station}${stale ? " (for a previous destination — search again)" : ""}${errs}`, !!errs);
 }

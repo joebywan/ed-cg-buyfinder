@@ -28,3 +28,9 @@ test("RESET TIMINGS: events at or before calAfter teach nothing", () => {
   assert.equal(run(Date.UTC(2026, 0, 1, 0, 0, 30) / 1000), 0);
   assert.equal(run(Date.UTC(2026, 0, 1, 0, 0, 10) / 1000), 1);
 });
+
+test("hidden_stations survives load, drops junk and duplicates", () => {
+  assert.deepEqual(loadPrefs(null).hidden_stations, []);
+  assert.deepEqual(loadPrefs({ hidden_stations: ["a\0b", "a\0b", 3] }).hidden_stations, ["a\0b"]);
+  assert.deepEqual(loadPrefs({ hidden_stations: "x" }).hidden_stations, []);
+});

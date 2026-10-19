@@ -111,6 +111,15 @@ export function initSettings(ctx) {
     $("s-sound").checked = prefs.alert_sound;
     $("s-update").checked = prefs.update_check;
     $("s-notify").checked = prefs.notifications;
+    $("s-hidden").replaceChildren(...(prefs.hidden_stations.length ? prefs.hidden_stations : [""]).map((k) => {
+      const li = document.createElement("li");
+      if (!k) { li.className = "dim"; li.textContent = "none"; return li; }
+      const b = document.createElement("button");
+      b.type = "button"; b.textContent = "UN-HIDE";
+      b.onclick = () => { prefs.hidden_stations = prefs.hidden_stations.filter((x) => x !== k); save(); refresh(); ctx.onPenalty(); };
+      li.append(b, k.split("\0").join(" · "));
+      return li;
+    }));
     const j = ctx.journal();
     $("s-cal").textContent = j ? j.cal.summary() : "no journal data";
     $("s-reset").disabled = !j;

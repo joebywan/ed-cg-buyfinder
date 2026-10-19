@@ -21,6 +21,7 @@ export const PREF_DEFAULTS = {
   surface_penalty: 0,        // minutes added to a planetary station's round trip before cr/min
   widen: true,               // search further out until 5 stations are in range
   widen_max: 500,            // ly: the furthest widening goes
+  hidden_stations: [],       // stationKeys the user hid from the tables
   calAfter: 0,               // epoch secs, set by RESET TIMINGS
 };
 
@@ -41,6 +42,7 @@ export function loadPrefs(saved) {
   if (p.widen_max < 10) p.widen_max = PREF_DEFAULTS.widen_max;
   p.alert_sound = p.alert_sound !== false;
   p.update_check = p.update_check !== false;
+  p.hidden_stations = Array.isArray(p.hidden_stations) ? [...new Set(p.hidden_stations.filter((k) => typeof k === "string"))] : [];
   for (const v of ["mixed", "single"]) {
     p[`cols_${v}`] = cleanCols(p[`cols_${v}`], v);
     p[`colw_${v}`] = cleanWidths(p[`colw_${v}`], v);
