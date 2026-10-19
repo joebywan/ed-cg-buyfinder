@@ -1,4 +1,4 @@
-# <img src="icon.png" width="28" alt=""> cgbuy
+# <img src="icon.png" width="28" alt=""> ED CG Buyfinder
 
 [![build](https://github.com/joebywan/ed-cg-buyfinder/actions/workflows/build.yml/badge.svg)](https://github.com/joebywan/ed-cg-buyfinder/actions/workflows/build.yml)
 [![virustotal](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fjoebywan%2Fed-cg-buyfinder%2Fmain%2F.github%2Fbadges%2Fvirustotal.json)](#antivirus)
@@ -35,21 +35,21 @@ re-check, desktop notifications and finds your journal folder by itself.
 | [Latest release](https://github.com/joebywan/ed-cg-buyfinder/releases/latest) | stable, version-tagged |
 | [Snapshot](https://github.com/joebywan/ed-cg-buyfinder/releases/tag/snapshot) | rebuilt on every push to `main` |
 
-**Windows** — take `cgbuy-v<ver>-windows.zip`, extract it somewhere you will
-find it again (not from inside the zip), and run `cgbuy.exe`. That is the whole
+**Windows** — take `ed-cg-buyfinder-v<ver>-windows.zip`, extract it somewhere you will
+find it again (not from inside the zip), and run `ed-cg-buyfinder.exe`. That is the whole
 install: one file, nothing written to the registry, nothing set to run at
 startup. The window is drawn by Microsoft's WebView2 runtime, which comes with
-Windows 11 and up-to-date Windows 10; if `cgbuy.exe` will not open, install
+Windows 11 and up-to-date Windows 10; if `ed-cg-buyfinder.exe` will not open, install
 the "Evergreen Bootstrapper" from
 [Microsoft](https://developer.microsoft.com/microsoft-edge/webview2/).
 `README-FIRST.txt` in the zip says the same for anyone who skips this page.
 
 **Linux** — pick one:
 
-- `cgbuy-v<ver>-linux.AppImage` — `chmod +x` it and run it. Carries its own
+- `ed-cg-buyfinder-v<ver>-linux.AppImage` — `chmod +x` it and run it. Carries its own
   WebKitGTK.
-- `cgbuy-v<ver>-linux.deb` — `sudo apt install ./cgbuy-v<ver>-linux.deb`.
-- `cgbuy-v<ver>-linux` — the bare binary (`chmod +x` first). It needs
+- `ed-cg-buyfinder-v<ver>-linux.deb` — `sudo apt install ./ed-cg-buyfinder-v<ver>-linux.deb`.
+- `ed-cg-buyfinder-v<ver>-linux` — the bare binary (`chmod +x` first). It needs
   `libwebkit2gtk-4.1` installed.
 
 A GitHub release asset cannot record the execute bit, which is why the
@@ -60,8 +60,12 @@ Neither build is code-signed, so Windows SmartScreen will warn on first run
 
 **Coming from the old Python/tkinter cgbuy?** This is a new app and replaces
 it. Your settings carry over: on first run it reads the old `cgbuy.json` and
-keeps its own in `cgbuy-desktop.json` beside it. The old app is gone from this
+keeps its own in `ed-cg-buyfinder.json` beside it. The old app is gone from this
 repository; its last release stays on the releases page.
+
+**Used to be called cgbuy?** This app was renamed from `cgbuy` (`cgbuy.exe`,
+`cgbuy-desktop.json`) to ED CG Buyfinder (`ed-cg-buyfinder.exe`). Your settings
+carry over automatically on first run, and the old `cgbuy.exe` can be deleted.
 
 **Run it from source** — Node 22+, Rust and `tauri-cli`; the full steps are in
 [DEVELOPMENT.md](DEVELOPMENT.md):
@@ -105,7 +109,7 @@ how old the oldest of those markets is, in plain text that reads fine in
 Discord:
 
 ```
-cgbuy · Jameson Memorial · 790t hold · data 2d old
+ED CG Buyfinder · Jameson Memorial · 790t hold · data 2d old
 Ackerman Market (1,240 ls) · Eravate (14.2 ly) · Gold 600t + Silver 190t · 41.2k cr/min
 ```
 
@@ -283,7 +287,7 @@ trip ahead of you), an **ON THE WAY IN** panel appears under the mixed table. Si
 same dock, so arriving with a full hold means the first run is already done. It goes away once you are inside
 the radius.
 
-Press **FIND LOADS ON THE WAY** and cgbuy asks Ardent for the goal's commodities within 200 ly of where you are
+Press **FIND LOADS ON THE WAY** and ED CG Buyfinder asks Ardent for the goal's commodities within 200 ly of where you are
 (your position comes from the journal's last jump), then lists the five best holds that cost little extra
 flying. A station qualifies when going via it adds no more than 15% of the direct trip, or two laden jumps,
 whichever is larger; `DETOUR LY` is that extra distance. They are ranked by what a full hold earns
@@ -365,7 +369,7 @@ current trip timings with a reset.
 On startup the last results are shown straight away; if they are older than
 the freshness window a new search runs behind them without asking.
 
-**Config** lives in `cgbuy-desktop.json` in your config folder (see
+**Config** lives in `ed-cg-buyfinder.json` in your config folder (see
 [Windows and macOS](#windows-and-macos)) and holds font size, journal path,
 search parameters, columns, the Odyssey toggle, the integration toggles, EDSM
 verification settings and accumulated calibration samples. The old app's
@@ -521,13 +525,13 @@ What adapts automatically:
 - **Journals** — `%USERPROFILE%\Saved Games\Frontier Developments\Elite Dangerous`,
   including the OneDrive-redirected variant, plus Steam libraries on other
   drive letters. Override it in Settings if detection misses.
-- **Config** — `%APPDATA%\cgbuy-desktop.json` on Windows,
+- **Config** — `%APPDATA%\ed-cg-buyfinder.json` on Windows,
   `~/Library/Application Support` on macOS, `~/.config` elsewhere.
   `XDG_CONFIG_HOME` always wins if set.
 
 ## Antivirus
 
-**The Windows download is a single `cgbuy.exe` in a zip, and it scans clean on
+**The Windows download is a single `ed-cg-buyfinder.exe` in a zip, and it scans clean on
 VirusTotal: 0 detections of 75 engines** when this build was previewed on its
 pull request. Every release scans itself: after a version is published CI
 submits the Windows zip and the Linux binary and appends the counts, hashes and
@@ -578,7 +582,7 @@ tell at a glance whether docking at the destination actually refreshed it.
 ## Mini mode
 
 In game you mostly need "where next, and did it change?", not the whole table.
-**MINI** (or Ctrl+M) shrinks cgbuy to a small card: the station you last copied,
+**MINI** (or Ctrl+M) shrinks ED CG Buyfinder to a small card: the station you last copied,
 or the best cr/min one if you have not copied any, with its system, load,
 cr/min and data age, plus a short line of where you stand in the goal. If the
 station you copied moves or drains, the card turns amber and says so; **GOT

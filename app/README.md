@@ -1,4 +1,4 @@
-# <img src="icon.png" width="28" alt=""> cgbuy web
+# <img src="icon.png" width="28" alt=""> ED CG Buyfinder web
 
 **[knowhowit.com.au/ed-cg-buyfinder-web](https://knowhowit.com.au/ed-cg-buyfinder-web/)**
 
@@ -7,7 +7,7 @@ by credits per minute of round trip — not by profit per tonne, because a rich
 station 40 minutes away loses to a decent one 15 minutes away.
 
 This is the browser version of
-[cgbuy](https://github.com/joebywan/ed-cg-buyfinder). Nothing to download or
+[ED CG Buyfinder](https://github.com/joebywan/ed-cg-buyfinder). Nothing to download or
 install: open the page.
 
 ## Using it

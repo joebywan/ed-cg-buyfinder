@@ -467,22 +467,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f079e83a288787bcd14a6aea84cee5c87a67c5a3e660c30f557a3d24761b3527"
 
 [[package]]
-name = "cgbuy"
-version = "2.0.0"
-dependencies = [
- "glob",
- "serde",
- "serde_json",
- "tauri",
- "tauri-build",
- "tauri-plugin-dialog",
- "tauri-plugin-http",
- "tauri-plugin-notification",
- "tauri-plugin-opener",
- "tempfile",
-]
-
-[[package]]
 name = "chacha20"
 version = "0.10.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -938,6 +922,22 @@ name = "dyn-clone"
 version = "1.0.20"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d0881ea181b1df73ff77ffaaf9c7544ecc11e82fba9b5f27b262a3c73a332555"
+
+[[package]]
+name = "ed-cg-buyfinder"
+version = "2.0.0"
+dependencies = [
+ "glob",
+ "serde",
+ "serde_json",
+ "tauri",
+ "tauri-build",
+ "tauri-plugin-dialog",
+ "tauri-plugin-http",
+ "tauri-plugin-notification",
+ "tauri-plugin-opener",
+ "tempfile",
+]
 
 [[package]]
 name = "embed-resource"

@@ -1,9 +1,9 @@
-# Developing cgbuy
+# Developing ED CG Buyfinder
 
-Everything here is for working *on* cgbuy. If you only want to use it, the
+Everything here is for working *on* ED CG Buyfinder. If you only want to use it, the
 [README](README.md) is the whole story.
 
-cgbuy is a web page (`app/`) that runs two ways: as the website, served as-is
+ED CG Buyfinder is a web page (`app/`) that runs two ways: as the website, served as-is
 by GitHub Pages, and inside a native window built with Tauri v2, which is the
 downloadable desktop app. (It used to be a Python/tkinter program; that was
 retired and its code removed once the desktop app replaced it.)
@@ -37,7 +37,7 @@ npm test                        # web tests
 node src-tauri/prep.mjs         # once, so cargo can see dist/
 (cd src-tauri && cargo test)    # Rust tests
 cargo tauri dev                 # run it
-cargo tauri build --no-bundle   # just the binary: src-tauri/target/release/cgbuy
+cargo tauri build --no-bundle   # just the binary: src-tauri/target/release/ed-cg-buyfinder
 ```
 
 Opening `app/index.html` through any static server also works, as the website:
@@ -47,7 +47,7 @@ anything that needs the app is behind `DESKTOP` in `desktop.js`.
 
 `VERSION` is the only place a version is typed (two parts, `1.9`). The app's
 copies — `src/version.js` (`"1.9"`), and `tauri.conf.json`, `Cargo.toml` and
-the `cgbuy` entry in `Cargo.lock` (`"1.9.0"`; Tauri insists on three parts) —
+the `ed-cg-buyfinder` entry in `Cargo.lock` (`"1.9.0"`; Tauri insists on three parts) —
 are written by `node app/stamp-version.mjs`. `node app/stamp-version.mjs
 --check` and `app/test/version.test.js` fail if any has drifted, so after
 changing `VERSION` by hand, run the stamp. The release workflow does that
@@ -58,14 +58,14 @@ the update check compares against.
 
 Built by `cargo tauri build` (not `tauri-action`, which would want to own the
 release and the file names that this repo's workflows already own). Release
-assets carry their version, so a second download never lands as `cgbuy(1)`:
+assets carry their version, so a second download never lands as `ed-cg-buyfinder(1)`:
 
-- `cgbuy-v<ver>-windows.zip` — a folder with the single `cgbuy.exe` and
+- `ed-cg-buyfinder-v<ver>-windows.zip` — a folder with the single `ed-cg-buyfinder.exe` and
   `README-FIRST.txt` (`packaging/README-FIRST.txt`). Needs WebView2, which
   Windows 10/11 ship with. Built with `--no-bundle`: no installer, because the
   NSIS setup.exe drew 3/75 heuristic VirusTotal hits (APEX, Cylance,
   DeepInstinct) while the same exe zipped scored 0/75.
-- `cgbuy-v<ver>-linux.AppImage`, `-linux.deb`, and `-linux`, the bare binary,
+- `ed-cg-buyfinder-v<ver>-linux.AppImage`, `-linux.deb`, and `-linux`, the bare binary,
   which needs libwebkit2gtk-4.1 installed.
 
 Snapshots use the short commit instead of `v<ver>`. A GitHub release asset

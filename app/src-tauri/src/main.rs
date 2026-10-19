@@ -41,6 +41,20 @@ fn read_json(p: &Path) -> Option<Value> {
     serde_json::from_slice(&std::fs::read(p).ok()?).ok()
 }
 
+const STORE: &str = "ed-cg-buyfinder.json";
+// Pre-rename name (the app was "cgbuy"); read-only, kept so settings carry over.
+const OLD_STORE: &str = "cgbuy-desktop.json";
+
+/// The page's store: the new file, else the old-named one, which is copied to
+/// the new name (the old file is left alone).
+fn read_store(d: &Path) -> Option<Value> {
+    read_json(&d.join(STORE)).or_else(|| {
+        let v = read_json(&d.join(OLD_STORE))?;
+        let _ = std::fs::write(d.join(STORE), serde_json::to_vec(&v).ok()?);
+        Some(v)
+    })
+}
+
 fn journal_patterns() -> Vec<String> {
     let h = home();
     let mut v = vec![
@@ -100,7 +114,7 @@ fn journal_path(state: &AppState) -> Option<PathBuf> {
         let d = config_dir();
         let o = override_dir(
             state.pinned.lock().unwrap().clone(),
-            read_json(&d.join("cgbuy-desktop.json")).as_ref(),
+            read_store(&d).as_ref(),
             read_json(&d.join("cgbuy.json")).as_ref(),
         );
         find_journal_dir(o.as_deref(), &journal_patterns())
@@ -179,7 +193,7 @@ fn journal_read(state: State<AppState>, name: String, offset: u64) -> Result<Res
 fn config_load() -> Value {
     let d = config_dir();
     serde_json::json!({
-        "store": read_json(&d.join("cgbuy-desktop.json")),
+        "store": read_store(&d),
         "legacy": read_json(&d.join("cgbuy.json")),
     })
 }
@@ -188,9 +202,9 @@ fn config_load() -> Value {
 fn config_save(store: Value) -> Result<(), String> {
     let d = config_dir();
     std::fs::create_dir_all(&d).map_err(|e| e.to_string())?;
-    let tmp = d.join("cgbuy-desktop.json.tmp");
+    let tmp = d.join("ed-cg-buyfinder.json.tmp");
     std::fs::write(&tmp, serde_json::to_vec(&store).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
-    std::fs::rename(&tmp, d.join("cgbuy-desktop.json")).map_err(|e| e.to_string())
+    std::fs::rename(&tmp, d.join(STORE)).map_err(|e| e.to_string())
 }
 
 fn main() {
@@ -204,7 +218,7 @@ fn main() {
             journal_dir, set_journal_dir, journal_list, journal_read, config_load, config_save
         ])
         .run(tauri::generate_context!())
-        .expect("error while running cgbuy");
+        .expect("error while running ed-cg-buyfinder");
 }
 
 #[cfg(test)]
@@ -224,6 +238,20 @@ mod tests {
         assert_eq!(o(None, None, None), None);
         let cleared = serde_json::json!({ "cgbuy.journalDir": "" });
         assert_eq!(o(None, Some(&cleared), Some(&legacy)), None);
+    }
+
+    #[test]
+    fn store_migration() {
+        let d = std::env::temp_dir().join(format!("edcgb-mig-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        assert_eq!(read_store(&d), None);
+        std::fs::write(d.join(OLD_STORE), r#"{"a":1}"#).unwrap();
+        assert_eq!(read_store(&d), Some(serde_json::json!({"a": 1})));
+        assert!(d.join(STORE).exists() && d.join(OLD_STORE).exists());
+        std::fs::write(d.join(STORE), r#"{"a":2}"#).unwrap();
+        assert_eq!(read_store(&d), Some(serde_json::json!({"a": 2})));
+        let _ = std::fs::remove_dir_all(&d);
     }
 
     #[test]

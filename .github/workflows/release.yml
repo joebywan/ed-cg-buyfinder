@@ -117,16 +117,16 @@ jobs:
       - name: Package
         run: |
           B=app/src-tauri/target/release
-          PFX="cgbuy-v${{ needs.tag.outputs.version }}"
-          cp "$B/cgbuy" "$PFX-linux"
+          PFX="ed-cg-buyfinder-v${{ needs.tag.outputs.version }}"
+          cp "$B/ed-cg-buyfinder" "$PFX-linux"
           chmod +x "$PFX-linux"
           cp "$B"/bundle/appimage/*.AppImage "$PFX-linux.AppImage"
           cp "$B"/bundle/deb/*.deb "$PFX-linux.deb"
           ls -lh "$PFX"-linux*
       - uses: actions/upload-artifact@v4
         with:
-          name: cgbuy-linux
-          path: cgbuy-v*-linux*
+          name: ed-cg-buyfinder-linux
+          path: ed-cg-buyfinder-v*-linux*
 
   build-windows:
     needs: tag
@@ -166,10 +166,10 @@ jobs:
         shell: bash
         run: |
           B=app/src-tauri/target/release
-          PFX="cgbuy-v${{ needs.tag.outputs.version }}"
+          PFX="ed-cg-buyfinder-v${{ needs.tag.outputs.version }}"
           DIR="$PFX-windows"
           mkdir "$DIR"
-          cp "$B/cgbuy.exe" "$DIR/cgbuy.exe"
+          cp "$B/ed-cg-buyfinder.exe" "$DIR/ed-cg-buyfinder.exe"
           # Notepad is the default handler and the .gitattributes eol=crlf rule
           # cannot be trusted to have survived checkout, so force CRLF here
           # (the \r* makes it idempotent whichever way the checkout landed).
@@ -179,8 +179,8 @@ jobs:
           ls -lh "$DIR.zip"
       - uses: actions/upload-artifact@v4
         with:
-          name: cgbuy-windows
-          path: cgbuy-v*-windows.zip
+          name: ed-cg-buyfinder-windows
+          path: ed-cg-buyfinder-v*-windows.zip
 
   publish:
     needs: [tag, build-linux, build-windows, build-linux, build-windows]
@@ -196,26 +196,26 @@ jobs:
           body: |
             ${{ inputs.notes }}
 
-            cgbuy is now a new app (a web UI in a native window, also available
+            ED CG Buyfinder (formerly cgbuy) is now a new app (a web UI in a native window, also available
             as a website) replacing the old Python one. Your settings carry
             over: it reads the old `cgbuy.json` on first run. The old app's
             update check only opens this page, so just download the new one.
 
-            * `cgbuy-v${{ needs.tag.outputs.version }}-windows.zip` — Windows x86-64, a folder with a
-              single `cgbuy.exe` and a `README-FIRST.txt`; extract it and run
+            * `ed-cg-buyfinder-v${{ needs.tag.outputs.version }}-windows.zip` — Windows x86-64, a folder with a
+              single `ed-cg-buyfinder.exe` and a `README-FIRST.txt`; extract it and run
               the exe. Needs the WebView2 runtime, which Windows 10/11 already have
-            * `cgbuy-v${{ needs.tag.outputs.version }}-linux.AppImage` — Linux x86-64 (needs `chmod +x`)
-            * `cgbuy-v${{ needs.tag.outputs.version }}-linux.deb` — Debian/Ubuntu package
-            * `cgbuy-v${{ needs.tag.outputs.version }}-linux` — the bare binary (needs `chmod +x` and libwebkit2gtk-4.1)
+            * `ed-cg-buyfinder-v${{ needs.tag.outputs.version }}-linux.AppImage` — Linux x86-64 (needs `chmod +x`)
+            * `ed-cg-buyfinder-v${{ needs.tag.outputs.version }}-linux.deb` — Debian/Ubuntu package
+            * `ed-cg-buyfinder-v${{ needs.tag.outputs.version }}-linux` — the bare binary (needs `chmod +x` and libwebkit2gtk-4.1)
 
             Nothing here is signed and nothing will be; Windows SmartScreen
             will warn on first run — see [Antivirus](../../#antivirus).
             No install at all: https://knowhowit.com.au/ed-cg-buyfinder/
           files: |
-            cgbuy-v${{ needs.tag.outputs.version }}-windows.zip
-            cgbuy-v${{ needs.tag.outputs.version }}-linux.AppImage
-            cgbuy-v${{ needs.tag.outputs.version }}-linux.deb
-            cgbuy-v${{ needs.tag.outputs.version }}-linux
+            ed-cg-buyfinder-v${{ needs.tag.outputs.version }}-windows.zip
+            ed-cg-buyfinder-v${{ needs.tag.outputs.version }}-linux.AppImage
+            ed-cg-buyfinder-v${{ needs.tag.outputs.version }}-linux.deb
+            ed-cg-buyfinder-v${{ needs.tag.outputs.version }}-linux
 
   virustotal:
     # Scans what was actually published and appends the verdict to the release,
@@ -242,7 +242,7 @@ jobs:
           # The badge follows the Windows zip (see vt_scan.py); the Linux binary
           # is scanned and listed too. The AppImage and deb wrap the same
           # binary, so scanning them would only spend quota.
-          SUMMARY=$(python3 .github/scripts/vt_scan.py --badge=.github/badges/virustotal.json "cgbuy-v$V-windows.zip" "cgbuy-v$V-linux")
+          SUMMARY=$(python3 .github/scripts/vt_scan.py --badge=.github/badges/virustotal.json "ed-cg-buyfinder-v$V-windows.zip" "ed-cg-buyfinder-v$V-linux")
           # Empty means no VT_API_KEY configured; nothing to append.
           [ -n "$SUMMARY" ] || exit 0
           gh release view "$TAG" --json body --jq .body > body.md

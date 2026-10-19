@@ -18,7 +18,7 @@ export function copySummary({ dest, hold, lines, now = new Date() }) {
       updated: (daysOld(l.updated, now) ?? 0) > (daysOld(was.updated, now) ?? 0) ? l.updated : was.updated } : l);
   }
   const days = Math.max(0, ...[...by.values()].map((l) => daysOld(l.updated, now) ?? 0));
-  return [`cgbuy · ${dest} · ${num(hold)}t hold · data ${days < 1 ? "<1d" : `${days}d`} old`,
+  return [`ED CG Buyfinder · ${dest} · ${num(hold)}t hold · data ${days < 1 ? "<1d" : `${days}d`} old`,
     ...[...by.values()].map((l) => [`${l.station} (${num(l.ls)} ls)`, `${l.system} (${l.ly} ly)`,
       l.parts.map((p) => `${p.commodity} ${num(p.tonnes)}t`).join(" + "), `${k(l.cr_per_min)} cr/min`].join(" · "))].join("\n");
 }

@@ -22,7 +22,7 @@ export const EDDN_URL = "https://eddn.edcd.io:4430/upload/";
 export const SCHEMA = "https://eddn.edcd.io/schemas/commodity/3";
 export const OUTFITTING_SCHEMA = "https://eddn.edcd.io/schemas/outfitting/2";
 export const SHIPYARD_SCHEMA = "https://eddn.edcd.io/schemas/shipyard/2";
-export const SOFTWARE = "cgbuy-web";
+export const SOFTWARE = "ed-cg-buyfinder";
 
 // Fitted to every hull ever built, so its presence says nothing about the
 // station. EDMC drops it, and a list that disagrees with EDMC's for the same
