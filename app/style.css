@@ -191,6 +191,12 @@ tr.head td { color: var(--txt); }
 tr.head td.station { color: var(--or); font-weight: bold; }
 tr.top { background: var(--top) !important; }
 tr.top td:first-child { box-shadow: inset 3px 0 var(--or); }
+/* Selected for copying: a blue wash and a bar on the right edge, clear of the orange/amber bars on the left. */
+tr.sel { background: #1a2836 !important; }
+tr.sel td:last-child { box-shadow: inset -3px 0 #5aa0d8; }
+.menu { position: fixed; z-index: 20; background: var(--panel); border: 1px solid var(--line); min-width: 160px; }
+.menu button { display: block; width: 100%; text-align: left; padding: 6px 12px; background: none; border: 0; color: var(--txt); }
+.menu button:hover { background: var(--sel); }
 tr.child td { color: var(--dim); }
 tr.child td.station { padding-left: 34px; color: var(--txt); }
 td.short { color: var(--warn); }

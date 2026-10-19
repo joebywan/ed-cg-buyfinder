@@ -97,6 +97,21 @@ Click any row to copy its system to the clipboard. A note saying so appears
 next to the pointer and clears itself after a second and a half — nothing to
 dismiss, since you do this every run.
 
+To share a few stations, **Ctrl-click** rows to pick them (or **Shift-click** to
+pick a run of them; a station's expanded commodity lines pick the station),
+then right-click and choose **Copy N stations**. You get one line per station,
+in the order on screen, under a header naming the destination, your hold and
+how old the oldest of those markets is, in plain text that reads fine in
+Discord:
+
+```
+cgbuy · Jameson Memorial · 790t hold · data 2d old
+Ackerman Market (1,240 ls) · Eravate (14.2 ly) · Gold 600t + Silver 190t · 41.2k cr/min
+```
+
+In **ALL SOURCES**, selected rows from the same station become one line. A plain
+click or **Esc** clears the selection.
+
 
 ## Destination
 

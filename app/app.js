@@ -18,6 +18,7 @@ import { JournalTail, readJournalFiles, readStationFile } from "./src/tail.js";
 import { Watcher, keyOf, stallAlert } from "./src/watch.js";
 import { edsmGate } from "./src/edsm.js";
 import { WANT, widen } from "./src/widen.js";
+import { copySummary } from "./src/summary.js";
 import { VERSION } from "./src/version.js";
 import { checkForUpdate } from "./src/update.js";
 import { MAX_AGE_DEFAULT, tripParts, ageTag, ageText, buildMixed, compareValues, hiddenBy, mixedSortValue, padForShip,
@@ -54,6 +55,8 @@ const S = {
   settings: { ...DEFAULTS, ...store.get("cgbuy.settings", {}) },
   manualDest: store.get("cgbuy.dest", null),
   live: [],
+  lines: {},                                   // per table: row key -> its summary line
+  sel: new Set(),                              // selected row keys
   snaps: store.get("cgbuy.cgSnaps", {}),      // {goal id: [[ms, qty], ...]} feed snapshots
   cgLines: [],
   dest: null,
@@ -696,10 +699,63 @@ function putTable(view, cols, head, body) {
 function copySystem(ev) {
   const tr = ev.target.closest("tr[data-system]");
   if (!tr || ev.target.closest("button")) return;
+  if (ev.ctrlKey || ev.metaKey || ev.shiftKey) return select(tr.dataset.key, ev.shiftKey && !ev.ctrlKey && !ev.metaKey);
+  if (S.sel.size) { S.sel.clear(); paintSel(); }
   const station = tr.querySelector("td.station[data-station]")?.dataset.station;
   navigator.clipboard?.writeText(tr.dataset.system).then(
     () => { toast(`Copied ${tr.dataset.system}`, ev); if (station) setTarget(station, tr.dataset.system); },
     () => toast("Clipboard blocked", ev));
+}
+
+// -- selecting rows and copying them as a summary -------------------------------------
+// S.lines[view] holds what is on screen, in order: row key -> the line it adds to the
+// summary. Expanded child rows carry their parent's key, so they select the station.
+
+/** Ctrl-click toggles one row; Shift-click selects from the last one clicked. */
+function select(key, range) {
+  const keys = [...S.lines[S.view].keys()];
+  if (range && keys.includes(S.anchor)) {
+    const [a, b] = [keys.indexOf(S.anchor), keys.indexOf(key)].sort((x, y) => x - y);
+    keys.slice(a, b + 1).forEach((k) => S.sel.add(k));
+  } else {
+    S.sel.has(key) ? S.sel.delete(key) : S.sel.add(key);
+    S.anchor = key;
+  }
+  paintSel();
+}
+
+function paintSel() {
+  for (const tr of document.querySelectorAll("tbody tr[data-key]")) tr.classList.toggle("sel", S.sel.has(tr.dataset.key));
+}
+
+function copySelected(ev) {
+  const lines = [...S.lines[S.view].values()].filter((l) => S.sel.has(l.key));
+  const text = copySummary({ dest: S.result.p.dest.station, hold: S.result.p.hold, lines });
+  const n = text.split("\n").length - 1;
+  navigator.clipboard?.writeText(text).then(
+    () => toast(`copied ${n} station${n === 1 ? "" : "s"}`, ev), () => toast("Clipboard blocked", ev));
+}
+
+// The row menu is a list of { label, run(ev) }; add an item here to add a command.
+const rowMenuItems = (n) => [
+  { label: `Copy ${n} station${n === 1 ? "" : "s"}`, run: copySelected },
+];
+
+document.addEventListener("click", () => closeMenu());
+function closeMenu() { $("row-menu")?.remove(); }
+
+function rowMenu(ev) {
+  const tr = ev.target.closest("tr[data-key]");
+  if (!tr || !S.result) return;
+  ev.preventDefault();
+  closeMenu();
+  if (!S.sel.has(tr.dataset.key)) { S.sel = new Set([tr.dataset.key]); S.anchor = tr.dataset.key; paintSel(); }
+  const stations = new Set([...S.lines[S.view].values()].filter((l) => S.sel.has(l.key)).map((l) => `${l.station}\0${l.system}`));
+  const menu = h("div", { id: "row-menu", class: "menu" },
+    ...rowMenuItems(stations.size).map((it) => h("button", { type: "button", onclick: () => { closeMenu(); it.run(ev); } }, it.label)));
+  menu.style.left = `${Math.min(ev.clientX, window.innerWidth - 180)}px`;
+  menu.style.top = `${ev.clientY}px`;
+  document.body.append(menu);
 }
 
 // The browser already knows how to show a tooltip: it waits for the pointer
@@ -805,21 +861,24 @@ function renderLegend(plans, key) {
 function renderMixed(r) {
   const hold = r.p.hold;
   const plans = buildMixed(viewed(r), hold).slice(0, TOP_STATIONS);
+  const lines = S.lines.mixed = new Map();
   const key = (x) => `${x.station}\0${x.system}`;
   const best = plans[0] && key(plans[0]);
   S.expanded ??= new Set();
-  const body = h("tbody", { onclick: copySystem, onmouseover: wantBody, onmouseout: dropBody });
+  const body = h("tbody", { onclick: copySystem, oncontextmenu: rowMenu, onmousedown: (e) => { if (e.shiftKey) e.preventDefault(); }, onmouseover: wantBody, onmouseout: dropBody });
   const cols = colsFor("mixed");
   for (const plan of sorted(plans, S.sort.mixed)) {
     const k = key(plan);
     const open = plan.mix.length > 1 && S.expanded.has(k);
     const moved = S.alert?.keys.has(k);
-    body.append(h("tr", { class: `row head${k === best ? " top" : ""}${moved ? " moved" : ""}`, "data-system": plan.system,
+    lines.set(k, { key: k, station: plan.station, system: plan.system, ls: plan.ls, ly: plan.ly, updated: plan.updated,
+      cr_per_min: plan.cr_per_min, parts: plan.mix.map((m) => ({ commodity: m.commodity, tonnes: m.tonnes })) });
+    body.append(h("tr", { class: `row head${k === best ? " top" : ""}${moved ? " moved" : ""}`, "data-system": plan.system, "data-key": k,
       title: [k === best && "Best credits per minute", moved && "Moved since you last pressed GOT IT - see the banner above"].filter(Boolean).join(". ") || null },
       ...cols.map((c) => mixedCell(c, plan, null, open, k))));
     if (!open) continue;
     for (const m of plan.mix) {
-      body.append(h("tr", { class: "child", "data-system": plan.system },
+      body.append(h("tr", { class: "child", "data-system": plan.system, "data-key": k },
         ...cols.map((c) => mixedCell(c, plan, m))));
     }
   }
@@ -837,10 +896,14 @@ function singleCell(c, x) {
 }
 
 function renderSingle(r) {
-  const body = h("tbody", { onclick: copySystem, onmouseover: wantBody, onmouseout: dropBody });
+  const body = h("tbody", { onclick: copySystem, oncontextmenu: rowMenu, onmousedown: (e) => { if (e.shiftKey) e.preventDefault(); }, onmouseover: wantBody, onmouseout: dropBody });
   const cols = colsFor("single");
+  const lines = S.lines.single = new Map();
   for (const x of sorted(viewed(r), S.sort.single)) {
-    body.append(h("tr", { class: "row", "data-system": x.system }, ...cols.map((c) => singleCell(c, x))));
+    const k = `${x.station}\0${x.system}\0${x.commodity}`;
+    lines.set(k, { key: k, station: x.station, system: x.system, ls: x.ls, ly: x.ly, updated: x.updated,
+      cr_per_min: x.cr_per_min, parts: [{ commodity: x.commodity, tonnes: x.load }] });
+    body.append(h("tr", { class: "row", "data-system": x.system, "data-key": k }, ...cols.map((c) => singleCell(c, x))));
   }
   putTable("single", cols, headRow("single", cols), body);
 }
@@ -925,6 +988,7 @@ function render() {
     : `Nothing hidden: every source is within ${maxAge} days.`;
   const errs = r.errors?.length ? `  ·  failed: ${r.errors.join("; ")}` : "";
   setStatus(`${r.note ? `${r.note}  ·  ` : ""}${stations} stations, ${fmt(shown)} sources for ${r.p.dest.station}${stale ? " (for a previous destination — search again)" : ""}${errs}`, !!errs);
+  paintSel();
 }
 
 /** "Markets come from" names the source(s) the last search actually used. */
@@ -1286,7 +1350,7 @@ function bind() {
     search();
   };
   window.addEventListener("keydown", (e) => {
-    if (e.key === "Escape") $("dest-panel").open = false;
+    if (e.key === "Escape") { $("dest-panel").open = false; S.sel.clear(); paintSel(); closeMenu(); }
   });
   setInterval(() => renderDest(), 30000);
   setInterval(checkStall, 5000);
