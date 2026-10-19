@@ -219,6 +219,17 @@ adds a chime to those.
 | `T/MIN` | tonnes per minute — use this if you care about CG rank rather than credits |
 | `AGE` | how long ago a commander last reported this market; green ≤2 days, amber ≤7, red beyond — a CG drains supply fast |
 
+A small **↓** beside `SUPPLY` (and `BUY AMOUNT` in the mixed loads) means that
+station's stock has been falling between your searches. The app keeps the last
+six supply readings of each station and commodity, keyed by when the market
+itself was last updated, so searching twice on an unchanged market counts
+once; readings older than two weeks are forgotten. Hover the row for the
+numbers: how far it fell, over how many hours, and about how much is left now
+at that rate. Amber means that is less than your hold or the minimum supply,
+so the load may be gone before you arrive. It is a hint only and never
+changes the ranking, and it needs two different readings before it says
+anything.
+
 Hover the destination at the top to see what the CG pays per tonne for each
 commodity (the CG multiplier is already baked into the EDSM price — the tool
 does not apply it). It is a hover rather than a row of its own because every
