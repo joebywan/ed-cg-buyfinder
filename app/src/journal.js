@@ -147,6 +147,9 @@ export function ladenJumpRange(maxRange, unladenMass, fuel, cargo, observed = nu
   return est;
 }
 
+const starPos = (e) => (Array.isArray(e.StarPos) && e.StarPos.length === 3 && e.StarPos.every(Number.isFinite)
+  ? e.StarPos : null);
+
 /** Turns journal lines into position, ship identity and timing samples. */
 export class JournalState {
   constructor(cal = null) {
@@ -155,6 +158,7 @@ export class JournalState {
     this.system = null;
     this.station = null;
     this.docked = false;
+    this.pos = null;              // [x, y, z] ly, from FSDJump and Location
     this.commander = null;
     // Which game this is, for the ODYSSEY box and for EDDN, which uses them
     // to keep Live and Legacy data apart. Null until a LoadGame says.
@@ -220,6 +224,7 @@ export class JournalState {
 
     if (ev === "FSDJump") {
       this.system = e.StarSystem ?? null;
+      this.pos = starPos(e) ?? this.pos;
       this.station = null;
       this.docked = false;
       if (this.lastFsdJump && t && t > this.lastFsdJump) {
@@ -279,6 +284,7 @@ export class JournalState {
       this.cargo = e.Count;
     } else if (ev === "Location") {
       this.system = e.StarSystem ?? this.system;
+      this.pos = starPos(e) ?? this.pos;
       this.station = e.StationName ?? null;
       this.docked = !!e.Docked;
     }

@@ -238,6 +238,24 @@ body a starport orbits is asked of EDSM, once per system, only for a row you
 actually pointed at, and it fills itself in a moment later. A system the search
 already re-checked against EDSM costs nothing, because it is the same response.
 
+## On the way in
+
+If you are further from the goal station than your search radius (you have just heard about the CG and have a
+trip ahead of you), an **ON THE WAY IN** panel appears under the mixed table. Sign-up and hand-in happen at the
+same dock, so arriving with a full hold means the first run is already done. It goes away once you are inside
+the radius.
+
+Press **FIND LOADS ON THE WAY** and cgbuy asks Ardent for the goal's commodities within 200 ly of where you are
+(your position comes from the journal's last jump), then lists the five best holds that cost little extra
+flying. A station qualifies when going via it adds no more than 15% of the direct trip, or two laden jumps,
+whichever is larger; `DETOUR LY` is that extra distance. They are ranked by what a full hold earns
+(`VALUE`, tonnes × profit/t), and clicking a row copies its system as usual. Nothing is fetched until you press the
+button, and it is not repeated as you jump; press **REFRESH** after you have moved a long way.
+
+It needs Ardent: the panel only appears when the main search used it (the default), because Spansh does not
+give the goal's coordinates. Since Ardent searches around a system, the 200 ly circle is centred on you, not on
+the middle of the route, so on a very long trip it finds loads near the start rather than along the whole way.
+
 ## Interface
 
 Inputs across the top: hold size, radius (120 ly), jump range empty and laden,

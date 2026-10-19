@@ -48,7 +48,7 @@ function sourceRows(records, { commodity, sell, cgLs, origin, p, cal }) {
       // ones, which is the whole answer - the desktop app has to ask a
       // second service for half of it.
       planetary, stype: e.stationType ?? "", body: e.bodyName ?? "", pad: padLetter(e.maxLandingPadSize),
-      ly: round1(dist), ls: Math.round(ls), supply: stock, buy, sell, profit_per_t: profit,
+      pos: [e.systemX, e.systemY, e.systemZ], ly: round1(dist), ls: Math.round(ls), supply: stock, buy, sell, profit_per_t: profit,
       load, loads_available: round1(stock / p.hold), trip_minutes: round1(mins),
       trip_profit: load * profit, cr_per_min: Math.round(load * profit / mins),
       t_per_min: round1(load / mins), updated: String(e.updatedAt || "").slice(0, 10),
@@ -135,5 +135,29 @@ export async function buildRows(p, { fetchJson = defaultFetchJson, cal = null,
   const aged = ageFilter(rows, maxAge, now);
   rows = aged.rows;
   emit("done", total, `${rows.length} sources`);
-  return { rows, cg, cgLs, hiddenStale: aged.hidden, allStale: aged.allStale, errors };
+  return { rows, cg, cgLs, origin, hiddenStale: aged.hidden, allStale: aged.allStale, errors };
+}
+
+/**
+ * Sources around the commander rather than the destination, for the "on the
+ * way in" panel. `from` is {system, pos}; `cg` holds the goal station's
+ * prices (the main search's). Rows are scored from `from`.
+ */
+export async function corridorRows(p, from, cg, { fetchJson = defaultFetchJson, range = 200 } = {}) {
+  fetchJson = loggedFetch(fetchJson);
+  const maxAge = p.max_age_days ?? MAX_AGE_DEFAULT;
+  const q = new URLSearchParams({ maxDistance: String(Math.ceil(range)),
+    minVolume: String(Math.max(1, p.min_supply)), maxDaysAgo: String(Math.max(MIN_DAYS_QUERIED, maxAge)) });
+  const rows = [];
+  await mapLimit(Object.keys(cg), PARALLEL, async (name) => {
+    const path = `${ARDENT}/system/name/${encodeURIComponent(from.system)}/commodity/name/${encodeURIComponent(symbolFor(name))}`;
+    try {
+      const [here, nearby] = await Promise.all([fetchJson(path), fetchJson(`${path}/nearby/exports?${q}`)]);
+      rows.push(...sourceRows([...(nearby || []), ...(here || [])],
+        { commodity: name, sell: cg[name].sell, cgLs: 0, origin: from.pos, p: { ...p, range }, cal: null }));
+    } catch (err) {
+      log("ardent", `corridor ${name}: ${err.message}`);
+    }
+  });
+  return ageFilter(rows, maxAge).rows;
 }
