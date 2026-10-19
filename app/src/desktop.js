@@ -24,7 +24,8 @@ export async function setMiniWindow(on, zoom, [w, h], at) {
   const win = getCurrentWindow();
   if (on) {
     if (await win.isMaximized()) await win.unmaximize();
-    beforeMini = { size: await win.outerSize(), pos: await win.outerPosition() };
+    // setSize sets the inner size, so save the inner one or each round trip grows by the frame.
+    beforeMini = { size: await win.innerSize(), pos: await win.outerPosition() };
     await win.setSize(new LogicalSize(Math.round(w * zoom), Math.round(h * zoom)));
     if (at) await win.setPosition(new PhysicalPosition(at.x, at.y));
     await win.setAlwaysOnTop(true);
@@ -32,7 +33,8 @@ export async function setMiniWindow(on, zoom, [w, h], at) {
   }
   const { x, y } = await win.outerPosition();
   await win.setAlwaysOnTop(false);
-  if (beforeMini) { await win.setSize(beforeMini.size); await win.setPosition(beforeMini.pos); }
+  if (beforeMini?.size.width > 0) await win.setSize(beforeMini.size);   // 0 without a window manager
+  if (beforeMini) await win.setPosition(beforeMini.pos);
   return { x, y };
 }
 

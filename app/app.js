@@ -790,8 +790,10 @@ function rowMenu(ev) {
   const stations = new Set([...S.lines[S.view].values()].filter((l) => S.sel.has(l.key)).map(stationKey));
   const menu = h("div", { id: "row-menu", class: "menu" },
     ...rowMenuItems([...stations]).map((it) => h("button", { type: "button", onclick: () => { closeMenu(); it.run(ev); } }, it.label)));
-  menu.style.left = `${Math.min(ev.clientX, window.innerWidth - 180)}px`;
-  menu.style.top = `${ev.clientY}px`;
+  // The page is zoomed for font scaling; the pointer's coordinates are not.
+  const z = Number(document.documentElement.style.zoom) || 1;
+  menu.style.left = `${Math.min(ev.clientX, window.innerWidth - 180) / z}px`;
+  menu.style.top = `${ev.clientY / z}px`;
   document.body.append(menu);
 }
 
@@ -1109,7 +1111,7 @@ function renderMini() {
       h("div", { class: "m-head" }, h("b", {}, "cgbuy · target"),
         h("button", { type: "button", title: "Copy the system", onclick: (e) => { e.stopPropagation(); copy(win); } }, "COPY"),
         h("button", { type: "button", title: "Back to the full window (Ctrl+M)", onclick: (e) => { e.stopPropagation(); toggleMini(); } }, "EXPAND")),
-      c.alert && h("div", { class: "m-alert" }, h("span", {}, c.alert),
+      c.alert && h("div", { class: "m-alert" }, h("span", { title: c.alert }, c.alert),
         h("button", { type: "button", onclick: (e) => { e.stopPropagation(); $("alert-ack").onclick(); } }, "GOT IT")),
       p ? [line("m-station", p.station, h("span", { class: "dim" }, ` · ${p.ls}`), p.copied && h("span", { class: "copied-tag" }, " ◂")),
            line("", p.system, h("span", { class: "dim" }, ` · ${p.ly}`)),

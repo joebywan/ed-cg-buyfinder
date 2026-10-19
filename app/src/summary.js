@@ -2,7 +2,7 @@
 import { daysOld } from "./model.js";
 
 const num = (n) => Number(n).toLocaleString("en-US");
-const k = (n) => `${(n / 1000).toFixed(1)}k`;
+const k = (n) => (n >= 1e6 ? `${(n / 1e6).toFixed(2)}M` : `${(n / 1000).toFixed(1)}k`);
 
 /**
  * lines: [{ station, system, ls, ly, parts: [{ commodity, tonnes }], cr_per_min, updated }] in screen order.
