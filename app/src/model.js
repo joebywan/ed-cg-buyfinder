@@ -226,7 +226,7 @@ export function ageText(dateStr, now = new Date()) {
 /** Lay the commander's own station data over cached rows.
  *
  *  `own` is {market, buys}: the last Market.json the game wrote (or null) and
- *  the MarketBuy events seen since, as {system, station, symbol, count}.
+ *  the MarketBuy events seen since, as {system, station, symbol, count, at}.
  *  That station's rows take the file's stock and price, marked `own` and
  *  dated by the file; a commodity it no longer stocks drops out. Buys then
  *  come off the stock, file or no file. Only rows already in the results are
@@ -240,18 +240,23 @@ export function applyOwn(rows, own, hold) {
   const goods = new Map((m?.Items ?? []).filter((i) => i.Stock > 0 && i.BuyPrice > 0)
     .map((i) => [normName(i.Name), i]));
   const mine = (r) => m && r.system === m.StarSystem && r.station === m.StationName;
-  const newest = rows.filter(mine).map((r) => r.updated || "").sort().pop() || "";
-  const fresh = !!date && date >= newest;
+  // When a row's market was read: the full time where the source gives one, else its date.
+  const read = (r) => Date.parse(r.at || r.updated) || 0;
+  const fileAt = Date.parse(m?.timestamp) || 0;
+  const fresh = !!fileAt && rows.filter(mine).every((r) => read(r) <= fileAt);
   return rows.flatMap((r) => {
     let x = r;
     if (fresh && mine(r)) {
       const it = goods.get(symbolFor(r.commodity));
       if (!it) return [];
       const { edsm, pending, other, ...rest } = r;
-      x = { ...rest, supply: it.Stock, buy: it.BuyPrice, updated: date, src: "M", own: true };
+      x = { ...rest, supply: it.Stock, buy: it.BuyPrice, updated: date, at: m.timestamp, src: "M", own: true };
     }
+    // A buy is already in any reading taken after it (yours or another commander's
+    // upload of the same market), so it only comes off older ones.
     const bought = buys.filter((b) => b.system === r.system && b.station === r.station
-      && b.symbol === symbolFor(r.commodity)).reduce((n, b) => n + b.count, 0);
+      && b.symbol === symbolFor(r.commodity) && !(read(x) >= (Date.parse(b.at) || Infinity)))
+      .reduce((n, b) => n + b.count, 0);
     if (!bought && x === r) return [r];
     const supply = x.supply - bought, profit = x.sell - x.buy;
     if (supply <= 0 || profit <= 0) return [];

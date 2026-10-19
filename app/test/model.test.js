@@ -292,6 +292,11 @@ test("applyOwn: own Market.json replaces that station's rows, buys come off the 
   const buy = (count) => ({ market: null, buys: [{ system: "Y", station: "X", symbol: "gold", count }] });
   assert.equal(m.applyOwn(rows, buy(100), 100)[0].supply, 400);
   assert.deepEqual(m.applyOwn(rows, buy(500), 100).map((x) => `${x.station}/${x.commodity}`), ["X/Silver", "Z/Gold"]);
+  // a reading taken after the buy already has it in
+  const later = { market: null, buys: [{ system: "Y", station: "X", symbol: "gold", count: 100, at: "2026-10-01T10:00:00Z" }] };
+  assert.equal(m.applyOwn([r({ at: "2026-10-01T11:00:00Z" })], later, 100)[0].supply, 500);
+  assert.equal(m.applyOwn([r({ at: "2026-10-01T09:00:00Z" })], later, 100)[0].supply, 400);
+});
 
 test("hidden stations are a view filter, keyed by station and system", () => {
   const row = (station, system) => ({ station, system, commodity: "X", pad: "L", load: 10, profit_per_t: 5, trip_minutes: 10, cr_per_min: 5, t_per_min: 1 });

@@ -1317,7 +1317,7 @@ function adoptJournal({ state, lines }) {
     if (e.event === "Market") takeOwnMarket(e.MarketID ?? null);
     if (e.event === "MarketBuy" && e.Count > 0 && state.station) {
       (S.own ??= { market: null, buys: [] }).buys.push({ system: state.system, station: state.station,
-        symbol: normName(e.Type), count: e.Count });
+        symbol: normName(e.Type), count: e.Count, at: e.timestamp });
       if (S.result) render();
     }
     if (e.event === "FSDJump" || e.event === "Location") renderWay();
