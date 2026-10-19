@@ -1,6 +1,6 @@
 # Developing ED CG Buyfinder
 
-Everything here is for working *on* cgbuy. If you only want to use it, the
+Everything here is for working *on* ED CG Buyfinder. If you only want to use it, the
 [README](README.md) is the whole story.
 
 ED CG Buyfinder is a web page (`app/`) that runs two ways: as the website, served as-is
