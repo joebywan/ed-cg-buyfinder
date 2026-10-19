@@ -14,7 +14,7 @@ retired and its code removed once the desktop app replaced it.)
 |---|---|
 | `VERSION` | the one place the version number is typed, e.g. `1.9` |
 | `app/index.html`, `app.js`, `style.css`, `src/` | the page; runs in a plain browser too |
-| `app/src/desktop.js` | everything that only exists inside the Tauri window: settings file, journal folder, no-CORS fetch, external links |
+| `app/src/desktop.js` | everything that only exists inside the Tauri window: settings file, journal folder, no-CORS fetch, external links, the mini-mode window |
 | `app/src/update.js` | "a newer version exists" check against GitHub releases |
 | `app/src-tauri/` | the Rust shell: `src/main.rs`, `tauri.conf.json` (CSP), `capabilities/` (what the page may call, including the allowed HTTP hosts) |
 | `app/src-tauri/prep.mjs` | copies the page files into `src-tauri/dist`, which is what gets embedded |

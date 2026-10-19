@@ -511,6 +511,25 @@ The status bar also shows how long ago the shown data was fetched, ticking
 live and turning amber once it passes the auto-refresh threshold — so you can
 tell at a glance whether docking at the destination actually refreshed it.
 
+## Mini mode
+
+In game you mostly need "where next, and did it change?", not the whole table.
+**MINI** (or Ctrl+M) shrinks cgbuy to a small card: the station you last copied,
+or the best cr/min one if you have not copied any, with its system, load,
+cr/min and data age, plus a short line of where you stand in the goal. If the
+station you copied moves or drains, the card turns amber and says so; **GOT
+IT** accepts it and shows the new best station. Click the card to copy its
+system. It only ever opens when you press the button.
+
+- **Desktop app:** the window becomes the card and stays on top of other
+  windows. **EXPAND** puts it back where it was, and the card remembers where
+  you left it.
+- **Website:** the card opens in a small floating window (Chrome or Edge 116+;
+  other browsers do not show the button). Closing it is expanding.
+
+It cannot draw over a game running in exclusive fullscreen, or in VR. Use
+borderless or windowed mode, or put the card on a second monitor.
+
 ## Ship detection
 
 Hold size, jump ranges and landing-pad class are read from the game's
