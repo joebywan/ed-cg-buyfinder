@@ -1,6 +1,7 @@
 // The page: wires the pure modules in src/ to the DOM, localStorage and the
 // journal folder. Everything worth testing lives in src/.
-import { buildRows, defaultFetchJson } from "./src/ardent.js";
+import { buildRows, corridorRows, defaultFetchJson } from "./src/ardent.js";
+import { dist3, onTheWay, wantsPanel } from "./src/corridor.js";
 import { BodyLookup } from "./src/bodies.js";
 import { folderTooltip } from "./src/browser.js";
 import { FRONTIER_URL, bandOutlook, finishEstimate, hoursLeft, totalPoints, historyFromLines, parseLive, standing, standingChanges, standingText, suggestDestination } from "./src/cg.js";
@@ -856,6 +857,50 @@ function renderMixed(r) {
   return plans.length;
 }
 
+/** "On the way in": shown when you are outside the radius; loads come from a search around you. */
+function renderWay() {
+  const el = $("way"), r = S.result, you = S.journal?.pos;
+  const dest = r?.origin;
+  el.hidden = S.view !== "mixed" || !wantsPanel(you, dest, r?.p.range);
+  if (el.hidden) return;
+  const direct = dist3(you, dest);
+  const rows = S.way?.dest === r.p.dest.station && S.way.rows;
+  const go = h("button", { type: "button", disabled: S.way?.busy || null, onclick: findWay },
+    rows ? "REFRESH" : "FIND LOADS ON THE WAY");
+  const head = h("div", { class: "dim small" }, go,
+    `ON THE WAY IN: you are ${fmt(Math.round(direct))} ly out. Loading here saves a run, since sign-up and hand-in share the CG dock.`,
+    S.way?.err ? ` ${S.way.err}` : "");
+  if (!rows) return el.replaceChildren(head);
+  const plans = onTheWay(viewRows(rows, viewOpts()), { you, dest, hold: r.p.hold, jumpLaden: r.p.jump_laden });
+  const th = (t, num) => h("th", { class: num ? "num" : null }, t);
+  const body = h("tbody", { onclick: copySystem });
+  for (const x of plans) {
+    body.append(h("tr", { class: "row head", "data-system": x.system },
+      h("td", {}, x.system), stationCell(x),
+      h("td", { class: "num" }, `+${fmt(Math.round(x.detour))}`),
+      h("td", { class: "num" }, fmt(x.tonnes)),
+      h("td", { class: "num" }, fmt(x.total)),
+      h("td", { title: x.mix.map((m) => `${fmt(m.tonnes)} t ${m.commodity}`).join("\n") },
+        x.mix.map((m) => m.commodity).join(", "))));
+  }
+  const table = h("table", { title: HINT }, h("thead", {}, h("tr", {},
+    th("SYSTEM"), th("STATION"), th("DETOUR LY", true), th("TONNES", true), th("VALUE", true), th("LOAD"))), body);
+  el.replaceChildren(head, plans.length ? table : h("div", { class: "dim" }, "No station near your route sells these."));
+}
+
+async function findWay() {
+  const r = S.result, you = S.journal?.pos;
+  S.way = { dest: r.p.dest.station, busy: true };
+  renderWay();
+  try {
+    const rows = await corridorRows(r.p, { system: S.journal.system, pos: you }, r.cg);
+    S.way = { dest: r.p.dest.station, rows };
+  } catch (err) {
+    S.way = { dest: r.p.dest.station, err: err.message };
+  }
+  renderWay();
+}
+
 function singleCell(c, x) {
   if (c.id === "station") return stationCell(x);
   if (c.id === "updated") return ageCell(x);
@@ -944,6 +989,7 @@ function render() {
   const stations = renderMixed(r);
   if (S.view !== "mixed") $("legend").hidden = true;   // the markers are the table's
   renderSingle(r);
+  renderWay();
   const shown = viewed(r).length;
   $("empty").hidden = shown > 0;
   $("empty").textContent = "Nothing within range makes a profit. Try a wider radius, a lower minimum supply, or carriers.";
@@ -1132,6 +1178,7 @@ function adoptJournal({ state, lines }) {
         symbol: normName(e.Type), count: e.Count });
       if (S.result) render();
     }
+    if (e.event === "FSDJump" || e.event === "Location") renderWay();
   };
   renderControls();
   renderJournal();
