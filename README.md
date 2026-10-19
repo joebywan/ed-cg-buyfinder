@@ -109,7 +109,7 @@ how old the oldest of those markets is, in plain text that reads fine in
 Discord:
 
 ```
-cgbuy · Jameson Memorial · 790t hold · data 2d old
+ED CG Buyfinder · Jameson Memorial · 790t hold · data 2d old
 Ackerman Market (1,240 ls) · Eravate (14.2 ly) · Gold 600t + Silver 190t · 41.2k cr/min
 ```
 
@@ -287,7 +287,7 @@ trip ahead of you), an **ON THE WAY IN** panel appears under the mixed table. Si
 same dock, so arriving with a full hold means the first run is already done. It goes away once you are inside
 the radius.
 
-Press **FIND LOADS ON THE WAY** and cgbuy asks Ardent for the goal's commodities within 200 ly of where you are
+Press **FIND LOADS ON THE WAY** and ED CG Buyfinder asks Ardent for the goal's commodities within 200 ly of where you are
 (your position comes from the journal's last jump), then lists the five best holds that cost little extra
 flying. A station qualifies when going via it adds no more than 15% of the direct trip, or two laden jumps,
 whichever is larger; `DETOUR LY` is that extra distance. They are ranked by what a full hold earns
@@ -582,7 +582,7 @@ tell at a glance whether docking at the destination actually refreshed it.
 ## Mini mode
 
 In game you mostly need "where next, and did it change?", not the whole table.
-**MINI** (or Ctrl+M) shrinks cgbuy to a small card: the station you last copied,
+**MINI** (or Ctrl+M) shrinks ED CG Buyfinder to a small card: the station you last copied,
 or the best cr/min one if you have not copied any, with its system, load,
 cr/min and data age, plus a short line of where you stand in the goal. If the
 station you copied moves or drains, the card turns amber and says so; **GOT

@@ -1109,7 +1109,7 @@ function renderMini() {
     const win = root.ownerDocument.defaultView;
     const line = (cls, ...kids) => h("div", { class: `m-line ${cls}` }, ...kids);
     root.replaceChildren(h("div", { class: "mini-card", onclick: () => copy(win), title: "Click to copy the system" },
-      h("div", { class: "m-head" }, h("b", {}, "cgbuy · target"),
+      h("div", { class: "m-head" }, h("b", {}, "ED CG Buyfinder · target"),
         h("button", { type: "button", title: "Copy the system", onclick: (e) => { e.stopPropagation(); copy(win); } }, "COPY"),
         h("button", { type: "button", title: "Back to the full window (Ctrl+M)", onclick: (e) => { e.stopPropagation(); toggleMini(); } }, "EXPAND")),
       c.alert && h("div", { class: "m-alert" }, h("span", { title: c.alert }, c.alert),
