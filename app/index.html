@@ -101,6 +101,9 @@
     <h2>RANKING</h2>
     <label class="row">Surface penalty (min) <input id="s-surface" type="number" min="0" step="1"></label>
     <p class="dim small">Extra minutes a planetary landing costs you - glide, risk, hassle - so surface markets only rank high when they're clearly worth it. Added to the round trip of surface stations before credits per minute is worked out; 0 treats them like any other. Changes re-rank straight away.</p>
+    <h2>HIDDEN STATIONS</h2>
+    <p class="dim small">Right-click a station in either table to hide it. It is only hidden from view: un-hiding brings it back at once, with no new search.</p>
+    <ul id="s-hidden" class="hidden-list"></ul>
     <div class="desktop-only">
       <h2>ELITE DANGEROUS</h2>
       <div class="row">Journal folder <input id="s-dir" size="50" placeholder="auto-detect" autocomplete="off">
@@ -154,5 +157,6 @@
 </dialog>
 
 <div id="toast" class="toast" hidden></div>
+<div id="row-menu" class="row-menu" hidden></div>
 </body>
 </html>

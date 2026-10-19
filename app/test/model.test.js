@@ -272,3 +272,12 @@ test("tripParts sums to tripMinutes", () => {
   assert.equal(m.tripMinutes(...args, cal), t.jumps + t.arrive + (t.dock + t.depart));
   near(t.dock, 4);
 });
+
+test("hidden stations are a view filter, keyed by station and system", () => {
+  const row = (station, system) => ({ station, system, commodity: "X", pad: "L", load: 10, profit_per_t: 5, trip_minutes: 10, cr_per_min: 5, t_per_min: 1 });
+  const rows = [row("A", "S1"), row("A", "S2"), row("B", "S1")];
+  const hide = [m.stationKey(rows[0])];
+  assert.equal(m.hiddenBy(rows[0], { hide }), "hidden");
+  assert.deepEqual(m.viewRows(rows, { hide }).map(m.stationKey), [m.stationKey(rows[1]), m.stationKey(rows[2])]);
+  assert.equal(m.viewRows(rows).length, 3);               // un-hiding needs no new rows
+});
