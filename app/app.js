@@ -19,6 +19,7 @@ import { Watcher, keyOf, stallAlert } from "./src/watch.js";
 import { edsmGate } from "./src/edsm.js";
 import { WANT, widen } from "./src/widen.js";
 import { VERSION } from "./src/version.js";
+import { drain, drainText, record, trendKey } from "./src/trend.js";
 import { checkForUpdate } from "./src/update.js";
 import { MAX_AGE_DEFAULT, tripParts, applyOwn, ageTag, ageText, buildMixed, compareValues, hiddenBy, mixedSortValue, padForShip,
   viewRows, whereItIs } from "./src/model.js";
@@ -55,6 +56,7 @@ const S = {
   manualDest: store.get("cgbuy.dest", null),
   live: [],
   snaps: store.get("cgbuy.cgSnaps", {}),      // {goal id: [[ms, qty], ...]} feed snapshots
+  trends: store.get("cgbuy.supplyTrend", {}),   // {system\0station\0commodity: [[market ms, supply], ...]}
   cgLines: [],
   dest: null,
   journal: null,
@@ -224,6 +226,21 @@ function snapshotFeed() {
   S.snaps = next;
   store.set("cgbuy.cgSnaps", next);
 }
+
+/** Remember the supply of every row a search produced (see src/trend.js). */
+function recordTrend(rows) {
+  S.trends = record(S.trends, rows);
+  store.set("cgbuy.supplyTrend", S.trends);
+}
+
+/** Is this commodity at this station draining? {text, empty} or null. Display only. */
+function drainOf(x, commodity = x.commodity) {
+  const d = drain(S.trends[trendKey({ ...x, commodity })]);
+  if (!d) return null;
+  const { hold, min_supply } = S.result.p;
+  return { text: drainText(d, fmt), empty: d.left < Math.max(hold, min_supply) };
+}
+const drainMark = (t) => t && h("span", { class: t.empty ? "drain empty" : "drain" }, " ↓");
 
 /** Work out where we're selling. Returns true when it changed. */
 function resolveDest() {
@@ -582,6 +599,7 @@ async function search({ more = false } = {}) {
         if (stale()) return;
         S.held = r.held;
         S.result = { ...r, p, at: Date.now(), eff: range };      // the table grows with each step
+        recordTrend(r.rows);
         renderCredit();
         render();
       },
@@ -589,6 +607,7 @@ async function search({ more = false } = {}) {
     const res = out.res ?? last;
     if (!res || stale()) return;
     S.result = { ...res, p, at: Date.now(), eff: out.range, note: out.note };
+    recordTrend(res.rows);
     if (res.startVerify) res.verifying = res.startVerify();
     S.verifyMore = res.verifyMore;
     renderCredit();
@@ -785,8 +804,12 @@ function mixedCell(c, plan, m, open, k) {
   const v = m ? c.ch?.(m, plan) : c.st ? c.st(plan) : one && c.ch?.(one, plan);
   const text = typeof v === "number" && !c.raw ? fmt(v) : v;
   const short = c.id === "tonnes" && !m && plan.short > 0;
+  // The station row shows the worst drain among the commodities in its load.
+  const dr = c.id === "tonnes" && (m ? drainOf(plan, m.commodity)
+    : plan.mix.map((i) => drainOf(plan, i.commodity)).filter(Boolean).sort((a, b) => b.empty - a.empty)[0]);
   return h("td", { class: c.num ? `num${short ? " short" : ""}` : null,
-    title: short ? `${fmt(plan.short)} t short of your hold` : penaltyTip(c, plan, m) ?? (c.num ? null : text || null) }, text ?? "");
+    title: [short && `${fmt(plan.short)} t short of your hold`, dr && dr.text].filter(Boolean).join(". ")
+      || (penaltyTip(c, plan, m) ?? (c.num ? null : text || null)) }, text ?? "", drainMark(dr));
 }
 
 /** One footer line explaining the row markers, only the ones on screen. */
@@ -800,6 +823,7 @@ function renderLegend(plans, key) {
     plans.some((x) => x.own) && [mark("ok", "◆"), "your own market reading"],
     plans.some((x) => x.pending) && [mark("dim", "?"), "awaiting EDSM"],
     plans.some((x) => x.planetary) && [mark("surface", "⏚"), "surface station"],
+    plans.some((x) => x.mix.some((m) => drainOf(x, m.commodity))) && [mark("drain", "↓"), "supply draining (hover for the estimate; amber: likely gone before you arrive)"],
     plans.some(beyond) && [mark("beyond", "⤢"), "beyond your radius (added to find 5 stations)"],
   ].filter(Boolean);
   $("legend").replaceChildren(...items.flatMap(([m, t], i) => [i ? "   " : "", m, ` ${t}`]));
@@ -837,7 +861,8 @@ function singleCell(c, x) {
   if (c.id === "updated") return ageCell(x);
   if (c.id === "src") return srcCell(x);
   const v = c.st(x);
-  return h("td", { class: c.num ? "num" : null, title: penaltyTip(c, x) ?? (c.num ? null : v || null) }, typeof v === "number" && !c.raw ? fmt(v) : v ?? "");
+  const dr = c.id === "supply" && drainOf(x);
+  return h("td", { class: c.num ? "num" : null, title: dr ? dr.text : penaltyTip(c, x) ?? (c.num ? null : v || null) }, typeof v === "number" && !c.raw ? fmt(v) : v ?? "", drainMark(dr));
 }
 
 function renderSingle(r) {

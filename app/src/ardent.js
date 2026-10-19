@@ -51,7 +51,7 @@ function sourceRows(records, { commodity, sell, cgLs, origin, p, cal }) {
       ly: round1(dist), ls: Math.round(ls), supply: stock, buy, sell, profit_per_t: profit,
       load, loads_available: round1(stock / p.hold), trip_minutes: round1(mins),
       trip_profit: load * profit, cr_per_min: Math.round(load * profit / mins),
-      t_per_min: round1(load / mins), updated: String(e.updatedAt || "").slice(0, 10),
+      t_per_min: round1(load / mins), updated: String(e.updatedAt || "").slice(0, 10), at: e.updatedAt || "",
     });
   }
   return out;
