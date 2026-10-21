@@ -123,18 +123,23 @@ click or **Esc** clears the selection.
 
 The tool works out where you are selling rather than asking:
 
-1. **The community goal you joined**, or **the construction site you docked
-   at** (see below), whichever you docked at most recently. Your journal
-   records the goal — station, system and expiry — and Frontier's feed
-   supplies its commodity list.
-2. **A live trade goal you have not joined.** If one is running it is used
-   anyway — routes are never withheld — with a dismissible notice explaining
-   that you need to sign up at the goal board first, since deliveries made
-   before you register do not count. Dock at that station while still
-   unregistered and it reminds you again, which is the one moment the
-   reminder is worth anything. Everything clears the moment the journal shows
-   you joining.
-3. **Whatever you set by hand**, which always wins and is never overwritten.
+1. **The goal station you docked at most recently**: a live trade community
+   goal's station (joined or not) or a construction site (see below). Fly from
+   the goal to a site and dock, and the site becomes the destination; dock back
+   at the goal and it is the goal again. Frontier's feed supplies a goal's
+   commodity list. Joining a goal does not make it the destination or start a
+   search; docking there does. Until you have docked at one, there is no
+   destination yet, and **Live trade goals** (below) lists the running goals so
+   you can pick one.
+2. **Whatever you set by hand**, which always wins and is never overwritten
+   until `BACK TO AUTOMATIC`.
+
+Dock at a goal station you have not joined and a dismissible notice explains
+that you need to sign up at the goal board first, since deliveries made before
+you register do not count. A trading goal running that you have not joined also
+raises a desktop notification, but never changes the destination. Everything
+clears the moment the journal shows you joining. An expired goal or a finished
+or failed site stops being automatic.
 
 The **DESTINATION** panel under the search controls is where you set it by
 hand. Everything it suggests comes from Ardent, so it works on the website too.

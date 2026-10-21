@@ -57,24 +57,23 @@ test("remaining and destination: only what is still needed, at the depot's payme
   assert.equal(left.reduce((n, r) => n + r.left, 0), 36829 - sum(d, "provided"));
 });
 
-test("a finished or failed depot stops being a destination", () => {
-  const depots = {};
-  for (const l of lines) takeLine(depots, l);
-  assert.ok(open(depots[MID]));
-  assert.equal(chooseAuto(null, depots, 0).station, depots[MID].station);
-  depots[MID].complete = true;
-  assert.equal(chooseAuto(null, depots, 0), null);
-  depots[MID].complete = false;
-  depots[MID].failed = true;
-  assert.equal(chooseAuto({ station: "CG" }, depots, 0).station, "CG");
-});
-
-test("the most recently docked goal wins between a CG and a depot", () => {
+test("the automatic destination is the goal station you docked at last", () => {
   const depots = {};
   for (const l of lines) takeLine(depots, l);
   const at = depots[MID].dockedAt;
-  assert.equal(chooseAuto({ station: "CG" }, depots, at - 1).depot, true);
-  assert.equal(chooseAuto({ station: "CG" }, depots, at + 1).station, "CG");
+  const cg = { station: "CG", source: "joined CG" }, other = { station: "Other", source: "live CG (not joined)" };
+  const dock = (station, t) => ["dock", station, t];
+  assert.equal(chooseAuto([cg, other], {}, []), null);                        // joined, never docked: nothing
+  assert.equal(chooseAuto([cg], depots, [dock("CG", at - 5)]).station, depots[MID].station);   // depot docked later
+  assert.equal(chooseAuto([cg], depots, [dock("CG", at - 5), dock("CG", at + 5)]).station, "CG");  // back at the CG
+  assert.equal(chooseAuto([cg, other], {}, [dock("Other", 7)]).source, "live CG (not joined)");   // unjoined counts
+  assert.equal(chooseAuto([], {}, [dock("CG", 7)]), null);                    // CG gone from the feed
+  depots[MID].complete = true;
+  assert.equal(chooseAuto([cg], depots, [dock("CG", 1)]).station, "CG");      // finished depot ignored
+  assert.equal(chooseAuto([cg], depots, []), null);
+  depots[MID].complete = false;
+  depots[MID].failed = true;
+  assert.equal(chooseAuto([], depots, []), null);
 });
 
 test("typed-in depot gets its prices and needs for the goods chosen", () => {

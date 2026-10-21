@@ -71,12 +71,16 @@ export function depotExtras(depots, dest) {
 }
 
 /**
- * The automatic destination: the joined CG or the depot you docked at most recently.
- * `cgDockedAt` is when you last docked at the CG's station (epoch secs, 0 for never).
+ * The automatic destination: the goal station you most recently docked at, an open
+ * depot or one of the live trade goals `cgs`; null if you never have.
+ * `dockLog` is the journal's [kind, station, time] list.
  */
-export function chooseAuto(cg, depots, cgDockedAt = 0) {
-  const d = Object.values(depots || {}).filter(open).sort((a, b) => (b.dockedAt || 0) - (a.dockedAt || 0))[0];
-  return d && (!cg || (d.dockedAt || 0) > cgDockedAt) ? depotDest(d) : cg;
+export function chooseAuto(cgs, depots, dockLog = []) {
+  let best = null, at = 0;
+  const see = (dest, t) => { if (t > at) { best = dest; at = t; } };
+  for (const g of cgs || []) see(g, dockLog.findLast(([k, s]) => k === "dock" && s === g.station)?.[2] ?? 0);
+  for (const d of Object.values(depots || {})) if (open(d)) see(depotDest(d), d.dockedAt || 0);
+  return best;
 }
 
 /** The progress line: "Bray Venture: 23.2% built · 28,296 t to go · ~26 loads of your hold · ~5 h at your pace". */
