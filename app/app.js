@@ -6,6 +6,8 @@ import { BodyLookup } from "./src/bodies.js";
 import { folderTooltip } from "./src/browser.js";
 import { FRONTIER_URL, bandOutlook, finishEstimate, hoursLeft, totalPoints, historyFromLines, parseLive, standing, standingChanges, standingText, suggestDestination } from "./src/cg.js";
 import { DESKTOP, DesktopDir, desktopStore, journalDir, setMiniWindow, tauriFetchJson } from "./src/desktop.js";
+import { completions, dockedDestination, marketGoods, marketUrl, stationList, stationsUrl, systemNames, systemSearchUrl, withAdded, tokens } from "./src/destination.js";
+import { commodityNames } from "./src/commodities.js";
 import { miniCard } from "./src/mini.js";
 import { initSettings } from "./src/settings.js";
 import { VIEWS, colWidths, fitWidth, moveCol, placeCol, toggleCol } from "./src/columns.js";
@@ -378,8 +380,67 @@ function renderDest() {
   if (notJoined) {
     $("notice-text").textContent = `You haven't joined "${d.title}". Sign up at the goal board at ${d.station} first — deliveries made before you register don't count.`;
   }
-  $("d-system").placeholder = d?.system || "Ega";
+  const j = S.journal;
+  $("d-system").placeholder = j?.system || d?.system || "Ega";
   $("d-station").placeholder = d?.station || "Metz Enterprise";
+  const here = j?.docked && j.station;
+  $("d-here").hidden = $("d-derive").hidden = !here;
+  $("d-here").textContent = "USE WHERE I'M DOCKED";
+  $("d-here").title = here ? j.station : "";
+}
+
+// -- destination helpers: completion and pickers, all through Ardent ----------
+
+const debounce = (fn, ms = 250) => { let t; return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); }; };
+const fillList = (id, opts) => $(id).replaceChildren(...opts.map(([value, label]) => h("option", { value }, label)));
+let stationsOf = [];             // [{name, marketId, label}] for the system in the box
+
+const suggestSystems = debounce(async () => {
+  const q = $("d-system").value.trim();
+  if (q.length < 3) return fillList("d-systems", []);
+  try { fillList("d-systems", systemNames(await defaultFetchJson(systemSearchUrl(q))).map((n) => [n])); } catch { /* typing goes on */ }
+});
+
+async function loadStations() {
+  const system = $("d-system").value.trim();
+  stationsOf = [];
+  if (system) try { stationsOf = stationList(await defaultFetchJson(stationsUrl(system))); } catch { /* unknown system */ }
+  fillList("d-stations", stationsOf.map((s) => [s.name, s.label]));
+}
+
+const suggestGoods = () => fillList("d-goods", completions($("d-commodities").value).map((v) => [v]));
+
+/** What the destination station buys, else every commodity there is. */
+async function pickableGoods() {
+  const st = stationsOf.find((s) => s.name === $("d-station").value.trim());
+  if (st) try { const g = marketGoods(await defaultFetchJson(marketUrl(st.marketId))); if (g.length) return g; } catch { /* use them all */ }
+  return commodityNames();
+}
+
+async function openPick() {
+  const pick = $("d-pick");
+  if (!pick.hidden) { pick.hidden = true; return; }
+  const have = new Set(tokens($("d-commodities").value).map((t) => t.toLowerCase()));
+  $("d-filter").value = "";
+  $("d-list").replaceChildren(...(await pickableGoods()).map((n) => h("label", {},
+    h("input", { type: "checkbox", checked: have.has(n.toLowerCase()), onchange: (e) => {
+      const rest = tokens($("d-commodities").value).filter((t) => t.toLowerCase() !== n.toLowerCase());
+      $("d-commodities").value = (e.target.checked ? [...rest, n] : rest).join(", ");
+    } }), n)));
+  pick.hidden = false;
+}
+
+const shown = () => [...$("d-list").children].filter((l) => !l.hidden);
+
+/** Fill the boxes from where the commander is docked. Market.json says what it pays a premium for. */
+async function useDocked() {
+  const d = dockedDestination(S.journal, await readStation("Market"));
+  if (!d) return;
+  $("d-system").value = d.system;
+  $("d-station").value = d.station;
+  if (d.commodities.length) $("d-commodities").value = d.commodities.join(", ");
+  else setStatus(`Nothing at ${d.station} pays a premium (or its market has not been opened). Pick the commodities by hand.`, true);
+  loadStations();
 }
 
 /** Tell the user when the top target changes: the window usually sits behind the game. */
@@ -1513,6 +1574,25 @@ function bind() {
     $("d-system").value = g.system;
     $("d-station").value = g.station;
     $("d-commodities").value = g.commodities.join(", ");
+    loadStations();
+  };
+  $("d-system").oninput = suggestSystems;
+  $("d-system").onchange = loadStations;
+  $("d-commodities").oninput = suggestGoods;
+  $("d-choose").onclick = openPick;
+  $("d-filter").oninput = () => {
+    const q = $("d-filter").value.trim().toLowerCase();
+    for (const l of $("d-list").children) l.hidden = !l.textContent.toLowerCase().includes(q);
+  };
+  $("d-add").onclick = () => {
+    $("d-commodities").value = withAdded($("d-commodities").value, shown().map((l) => l.textContent));
+    for (const l of shown()) l.firstChild.checked = true;
+  };
+  $("d-here").onclick = useDocked;
+  $("d-derive").onclick = async () => {
+    const d = dockedDestination(S.journal, await readStation("Market"));
+    if (d?.commodities.length) $("d-commodities").value = d.commodities.join(", ");
+    else setStatus("No premium-priced goods found: dock, open the station's market, and try again.", true);
   };
   $("d-use").onclick = () => {
     const system = $("d-system").value.trim();

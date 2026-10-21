@@ -135,15 +135,26 @@ The tool works out where you are selling rather than asking:
    you joining.
 3. **Whatever you set by hand**, which always wins and is never overwritten.
 
-The **DESTINATION** panel under the search controls takes a system (with name completion), then
-`LOAD STATIONS` lists that system's markets, nearest arrival star first.
-`CHOOSE FROM LIST` opens a filterable checklist of everything the destination
-trades — type to narrow it, click to tick, `ADD SHOWN` to take every match at
-once — so the commodity list never has to be typed out. `PREFILL FROM LIVE CG`
-lists the running trade goals; `DERIVE FROM MARKET`
-reads the market of the station you are docked at and picks out whatever it
-pays a premium for — at a goal station that recovers the list exactly, and at
-an ordinary station it finds what that place is short of.
+The **DESTINATION** panel under the search controls is where you set it by
+hand. Everything it suggests comes from Ardent, so it works on the website too.
+
+- **System** completes as you type (from three characters). Once a system is
+  entered, **station** completes from that system's markets, nearest arrival
+  star first, each with its type and distance.
+- **Commodities** is a comma list; typing completes the item after the last
+  comma and leaves the rest alone. `CHOOSE FROM LIST` opens a filterable
+  checklist of what the chosen station buys (every commodity if Ardent has no
+  market for it); click to tick, or `ADD SHOWN` to take every match at once.
+- **Live trade goals** fills all three boxes from a running goal.
+- **When you are docked** (needs the journal folder) two more buttons appear.
+  `USE WHERE I'M DOCKED` fills system and station and the commodities from the
+  market the game last wrote; `DERIVE FROM MARKET` redoes just the
+  commodities. Both pick whatever the station pays at least 2.5 times the
+  galactic average for: at a goal station that recovers the list exactly, at an
+  ordinary station it usually finds nothing, and then you choose by hand. Open
+  the station's market in the game first, or the file is the previous
+  station's and is ignored. When you are not docked, the system box shows your
+  current system as its placeholder.
 
 No community goal anywhere? Set a station and it works as a plain hauling
 tool.

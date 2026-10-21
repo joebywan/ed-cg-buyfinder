@@ -55,10 +55,19 @@
   <summary>DESTINATION</summary>
   <div class="dest-grid">
     <label>LIVE TRADE GOALS <select id="d-live"></select></label>
-    <label>SYSTEM <input id="d-system" autocomplete="off"></label>
-    <label>STATION <input id="d-station" autocomplete="off"></label>
-    <label class="wide">COMMODITIES <input id="d-commodities" placeholder="Gold, Silver, Palladium" autocomplete="off"></label>
+    <label>SYSTEM <input id="d-system" list="d-systems" autocomplete="off"></label>
+    <label>STATION <input id="d-station" list="d-stations" autocomplete="off"></label>
+    <label class="wide">COMMODITIES <input id="d-commodities" list="d-goods" placeholder="Gold, Silver, Palladium" autocomplete="off"></label>
+    <datalist id="d-systems"></datalist><datalist id="d-stations"></datalist><datalist id="d-goods"></datalist>
+    <div id="d-pick" class="wide pick" hidden>
+      <input id="d-filter" type="search" placeholder="Filter" autocomplete="off">
+      <button id="d-add" type="button">ADD SHOWN</button>
+      <div id="d-list" class="pick-list"></div>
+    </div>
     <div class="dest-actions">
+      <button id="d-here" type="button" hidden></button>
+      <button id="d-choose" type="button">CHOOSE FROM LIST</button>
+      <button id="d-derive" type="button" hidden>DERIVE FROM MARKET</button>
       <button id="d-use" type="button" class="primary">USE THIS DESTINATION</button>
       <button id="d-auto" type="button">BACK TO AUTOMATIC</button>
     </div>
