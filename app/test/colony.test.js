@@ -128,3 +128,12 @@ test("caps hold single rows' load and re-rate them", () => {
   assert.equal(b.load, 100);
   assert.equal(capRows([a], null)[0], a);
 });
+
+test("a localised client's depot names map back to the English commodity", () => {
+  const depots = {};
+  takeLine(depots, JSON.stringify({ timestamp: "2026-10-21T03:50:54Z", event: "Docked", StationType: "PlanetaryConstructionDepot",
+    StationName: "Planetary Construction Site: X", StarSystem: "Y", MarketID: 1 }));
+  takeLine(depots, JSON.stringify({ timestamp: "2026-10-21T03:50:56Z", event: "ColonisationConstructionDepot", MarketID: 1,
+    ConstructionProgress: 0, ResourcesRequired: [{ Name: "$steel_name;", Name_Localised: "Stahl", RequiredAmount: 10, ProvidedAmount: 0, Payment: 5 }] }));
+  assert.equal(depots[1].resources[0].name, "Steel");
+});

@@ -3,6 +3,8 @@
 // exists only in the journal, so what we know is the last state we saw per
 // depot, kept by MarketID. Pure; app.js does the storage and the DOM.
 import { parseTs } from "./journal.js";
+import { nameFor, symbolFor } from "./commodities.js";
+import { normName } from "./eddn.js";
 
 const SITE = /^(?:Planetary|Orbital) Construction Site: /;
 const n0 = (n) => Math.round(n).toLocaleString("en-US");
@@ -36,12 +38,19 @@ export function takeLine(depots, line) {
   }
   const d = e?.event === "ColonisationConstructionDepot" && depots[e.MarketID];
   if (!d) return false;
-  const resources = (e.ResourcesRequired || []).map((r) => ({ name: r.Name_Localised || r.Name,
+  const resources = (e.ResourcesRequired || []).map((r) => ({ name: commodityName(r),
     required: r.RequiredAmount, provided: r.ProvidedAmount, payment: r.Payment }));
   const next = { progress: e.ConstructionProgress, complete: !!e.ConstructionComplete, failed: !!e.ConstructionFailed, resources };
   if (JSON.stringify(next) === JSON.stringify({ progress: d.progress, complete: d.complete, failed: d.failed, resources: d.resources })) return false;
   Object.assign(d, next, { at });
   return true;
+}
+
+/** The English name the market sources use. Name_Localised is in the client's language
+ *  ("Stahl" on a German client), so it is kept only when it is the same commodity. */
+function commodityName(r) {
+  const sym = normName(r.Name || "");
+  return r.Name_Localised && symbolFor(r.Name_Localised) === sym ? r.Name_Localised : nameFor(sym);
 }
 
 /** An open depot as a destination: what is needed, what it pays, how much of each. */
