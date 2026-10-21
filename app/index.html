@@ -12,7 +12,7 @@
 <body>
 <header>
   <h1>ED CG Buyfinder</h1>
-  <div id="dest-line" class="dest-line">Finding the community goal…</div>
+  <div id="dest-line" class="dest-line">Finding your destination…</div>
   <div class="journal">
     <button id="mini-btn" type="button" title="A small always-on-top card: where next, and did it change? (Ctrl+M)" hidden>MINI</button>
     <span id="journal-status" class="dim"></span>
@@ -71,7 +71,7 @@
       <button id="d-use" type="button" class="primary">USE THIS DESTINATION</button>
       <button id="d-auto" type="button">BACK TO AUTOMATIC</button>
     </div>
-    <p class="dim small">Automatic picks the goal your journal says you joined, else a live trade goal. One you set here always wins until you go back to automatic.</p>
+    <p class="dim small">Automatic picks the goal your journal says you joined or the construction site you docked at most recently, else a live trade goal. One you set here always wins until you go back to automatic.</p>
   </div>
 </details>
 
@@ -98,7 +98,7 @@
     <div class="row">Font size <button id="s-font-minus" type="button" aria-label="Smaller">-</button> <b id="s-font"></b> <button id="s-font-plus" type="button" aria-label="Larger">+</button>
       <span class="dim small">Scales the whole window. Ctrl+plus, Ctrl+minus and Ctrl+0 do the same.</span></div>
     <h2>DATA ACCURACY</h2>
-    <label class="row" title="A CG drains supply fast, so a week-old report of 40,000t may be a wasted trip. Raising this shows the older rows rather than hiding them; the AGE column is coloured so you can judge each one. Changing it re-runs the search.">Hide sources older than (days) <input id="s-max_age" type="number" min="0" step="1"></label>
+    <label class="row" title="A goal drains supply fast, so a week-old report of 40,000t may be a wasted trip. Raising this shows the older rows rather than hiding them; the AGE column is coloured so you can judge each one. Changing it re-runs the search.">Hide sources older than (days) <input id="s-max_age" type="number" min="0" step="1"></label>
     <label class="row" title="On startup, a cached result newer than this is shown as-is; anything older starts a fresh search straight away, with the old numbers on screen while it runs.">Auto-refresh after (min) <input id="s-fresh" type="number" min="0" step="1"></label>
     <div class="desktop-only">
       <label class="row check"><input id="s-verify" type="checkbox"> Re-check top results against EDSM</label>

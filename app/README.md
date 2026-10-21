@@ -118,6 +118,7 @@ Plain HTML, CSS and ES modules. No dependencies and no build step.
 | `src/model.js` | trip time, mixed loads, pads, ages |
 | `src/journal.js` | trip-time calibration and ship identity from journal events |
 | `src/cg.js` | Frontier's goal feed and the goal you joined |
+| `src/colony.js` | construction sites: remembered state per depot, remaining demand, progress line |
 | `src/ardent.js` | market discovery through Ardent |
 | `src/commodities.js` | display name → FDev symbol, generated from [EDCD/FDevIDs](https://github.com/EDCD/FDevIDs) |
 | `src/tail.js` | reads the journal folder through the File System Access API |

@@ -146,8 +146,18 @@ export function hiddenBy(r, { carriers = false, odyssey = false, pad = "L", hide
   return PAD_ORDER[r.pad] >= PAD_ORDER[pad] ? "" : "pad";
 }
 
-/** Rank stations by the best hold they can fill, topping up greedily. */
-export function buildMixed(rows, hold) {
+/** Single rows' load held to what is still needed: `caps` is {commodity: tonnes}, a construction site's remaining demand. */
+export function capRows(rows, caps) {
+  if (!caps) return rows;
+  return rows.map((r) => {
+    const load = Math.min(r.load, caps[r.commodity] ?? Infinity);
+    return load === r.load ? r : { ...r, load, trip_profit: load * r.profit_per_t,
+      cr_per_min: Math.round(load * r.profit_per_t / r.trip_minutes), t_per_min: Math.round(load / r.trip_minutes * 10) / 10 };
+  });
+}
+
+/** Rank stations by the best hold they can fill, topping up greedily; `caps` as for capRows. */
+export function buildMixed(rows, hold, caps = null) {
   const stations = new Map();
   for (const r of rows) {
     const key = `${r.station}\0${r.system}`;
@@ -162,7 +172,7 @@ export function buildMixed(rows, hold) {
     const mix = [], used = [];
     for (const it of items) {
       if (remaining <= 0) break;
-      const take = Math.min(it.supply, remaining);
+      const take = Math.min(it.supply, remaining, caps?.[it.commodity] ?? Infinity);
       if (take <= 0) continue;
       mix.push({ commodity: it.commodity, tonnes: take, profit_per_t: it.profit_per_t,
                  buy: it.buy, supply: it.supply, value: take * it.profit_per_t });

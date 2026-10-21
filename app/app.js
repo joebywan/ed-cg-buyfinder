@@ -8,6 +8,7 @@ import { FRONTIER_URL, bandOutlook, finishEstimate, hoursLeft, totalPoints, hist
 import { DESKTOP, DesktopDir, desktopStore, journalDir, setMiniWindow, tauriFetchJson } from "./src/desktop.js";
 import { completions, dockedDestination, marketGoods, marketUrl, stationList, stationsUrl, systemNames, systemSearchUrl, withAdded, tokens } from "./src/destination.js";
 import { commodityNames } from "./src/commodities.js";
+import { chooseAuto, depotExtras, progressLine, takeLine } from "./src/colony.js";
 import { miniCard } from "./src/mini.js";
 import { initSettings } from "./src/settings.js";
 import { VIEWS, colWidths, fitWidth, moveCol, placeCol, toggleCol } from "./src/columns.js";
@@ -26,7 +27,7 @@ import { copySummary } from "./src/summary.js";
 import { VERSION } from "./src/version.js";
 import { drain, drainText, record, trendKey } from "./src/trend.js";
 import { checkForUpdate } from "./src/update.js";
-import { MAX_AGE_DEFAULT, tripParts, applyOwn, ageTag, ageText, buildMixed, compareValues, hiddenBy, mixedSortValue, padForShip, stationKey,
+import { MAX_AGE_DEFAULT, tripParts, applyOwn, ageTag, ageText, buildMixed, capRows, compareValues, hiddenBy, mixedSortValue, padForShip, stationKey,
   viewRows, whereItIs } from "./src/model.js";
 
 const $ = (id) => document.getElementById(id);
@@ -66,6 +67,7 @@ const S = {
   snaps: store.get("cgbuy.cgSnaps", {}),      // {goal id: [[ms, qty], ...]} feed snapshots
   trends: store.get("cgbuy.supplyTrend", {}),   // {system\0station\0commodity: [[market ms, supply], ...]}
   cgLines: [],
+  depots: store.get("cgbuy.depots", {}),      // {marketId: last state seen of each construction site}
   dest: null,
   journal: null,
   tail: null,
@@ -163,7 +165,7 @@ function viewOpts() {
            hide: ui.prefs.hidden_stations };
 }
 // The commander's own Market.json and purchases overlay the results, never replace them.
-const viewed = (r = S.result) => (r ? viewRows(applyOwn(r.rows, S.own, r.p.hold), viewOpts()) : []);
+const viewed = (r = S.result) => (r ? viewRows(capRows(applyOwn(r.rows, S.own, r.p.hold), r.p.dest?.needs), viewOpts()) : []);
 const rankRow = (r) => viewRows([r], viewOpts())[0]?.cr_per_min ?? null;
 
 function renderControls() {
@@ -256,8 +258,10 @@ const drainMark = (t) => t && h("span", { class: t.empty ? "drain empty" : "drai
 
 /** Work out where we're selling. Returns true when it changed. */
 function resolveDest() {
-  const [auto] = suggestDestination(historyFromLines(S.cgLines), S.live);
-  const next = S.manualDest ? { ...S.manualDest, source: "set by hand" } : auto;
+  const [cg] = suggestDestination(historyFromLines(S.cgLines), S.live);
+  const cgAt = S.journal?.dockLog.findLast(([k, s]) => k === "dock" && s === cg?.station)?.[2] ?? 0;
+  const auto = chooseAuto(cg, S.depots, cgAt);
+  const next = S.manualDest ? { ...S.manualDest, ...depotExtras(S.depots, S.manualDest), source: "set by hand" } : auto;
   const changed = JSON.stringify(next) !== JSON.stringify(S.dest);
   if (changed && !sameDest(next, S.dest)) { S.watch.clearTarget(); showAlert(null); }
   S.dest = next;
@@ -321,7 +325,10 @@ function renderStanding() {
   const hist = historyFromLines(S.cgLines);
   const cur = hist.at(-1);
   const live = S.live.find((g) => cur && String(g.id) === String(cur.cgid));
-  const st = standing(hist, live);
+  // A goal that has ended has no standing worth showing, and a construction site takes the line over.
+  const over = (live?.expiry || cur?.expiry) && hoursLeft(live?.expiry || cur.expiry) <= 0;
+  const depot = S.dest?.depot && Object.values(S.depots).find((d) => d.station === S.dest.station && d.system === S.dest.system);
+  const st = over || depot ? null : standing(hist, live);
   const run = runFigures();
   let fx = {};
   if (st) {
@@ -330,7 +337,9 @@ function renderStanding() {
     const finish = finishEstimate(pts, st.target, exp ? hoursLeft(exp, now) : null, now);
     fx = { finish, now, outlook: bandOutlook(st, pts, finish, run, now) };
   }
-  const [text, tip, mark, kind] = standingText(st, run, fx);
+  const [text, tip, mark, kind] = depot?.resources
+    ? [progressLine(depot, run.hold, run.mins), `Remaining demand is from your own journal, as of the last time you docked here.`]
+    : standingText(st, run, fx);
   S.standingText = text;
   renderMini();
   line.replaceChildren(...(mark
@@ -434,7 +443,7 @@ const shown = () => [...$("d-list").children].filter((l) => !l.hidden);
 
 /** Fill the boxes from where the commander is docked. Market.json says what it pays a premium for. */
 async function useDocked() {
-  const d = dockedDestination(S.journal, await readStation("Market"));
+  const d = dockedDestination(S.journal, await readStation("Market"), S.depots);
   if (!d) return;
   $("d-system").value = d.system;
   $("d-station").value = d.station;
@@ -483,7 +492,7 @@ function checkStall() {
   else if (a && !S.stallShown && !S.alert) { S.stallShown = true; showAlert(a); }
 }
 
-const plansNow = () => (S.result ? buildMixed(viewed(), S.result.p.hold) : []);
+const plansNow = () => (S.result ? buildMixed(viewed(), S.result.p.hold, S.result.p.dest?.needs) : []);
 
 /** Show (or clear) the one banner; sound and notify only when the watcher says so. */
 function showAlert(a) {
@@ -530,7 +539,7 @@ document.addEventListener("copy", () => {
 });
 
 const sameDest = (a, b) => !!a && !!b && a.system === b.system && a.station === b.station
-  && JSON.stringify(a.commodities) === JSON.stringify(b.commodities);
+  && JSON.stringify(a.commodities) === JSON.stringify(b.commodities) && JSON.stringify(a.needs) === JSON.stringify(b.needs);
 
 // -- view filters ------------------------------------------------------------------
 
@@ -969,7 +978,7 @@ function renderLegend(plans, key) {
 
 function renderMixed(r) {
   const hold = r.p.hold;
-  const plans = buildMixed(viewed(r), hold).slice(0, TOP_STATIONS);
+  const plans = buildMixed(viewed(r), hold, r.p.dest?.needs).slice(0, TOP_STATIONS);
   const lines = S.lines.mixed = new Map();
   const key = (x) => `${x.station}\0${x.system}`;
   const best = plans[0] && key(plans[0]);
@@ -1007,7 +1016,7 @@ function renderWay() {
   const go = h("button", { type: "button", disabled: S.way?.busy || null, onclick: findWay },
     rows ? "REFRESH" : "FIND LOADS ON THE WAY");
   const head = h("div", { class: "dim small" }, go,
-    `ON THE WAY IN: you are ${fmt(Math.round(direct))} ly out. Loading here saves a run, since sign-up and hand-in share the CG dock.`,
+    `ON THE WAY IN: you are ${fmt(Math.round(direct))} ly out. Loading here saves a run, since you hand in at the goal dock.`,
     S.way?.err ? ` ${S.way.err}` : "");
   if (!rows) return el.replaceChildren(head);
   const plans = onTheWay(viewRows(rows, viewOpts()), { you, dest, hold: r.p.hold, jumpLaden: r.p.jump_laden });
@@ -1338,6 +1347,7 @@ function newJournal() {
   const sink = (line, live) => {
     state.handle(line, live);
     if (line.includes('"CommunityGoal"')) lines.push(line);
+    if (takeLine(S.depots, line) && live) store.set("cgbuy.depots", S.depots);
   };
   return { state, lines, sink };
 }
@@ -1359,6 +1369,7 @@ function adoptJournal({ state, lines }) {
   S.journal = state;
   S.own = null;
   S.cgLines = lines;
+  store.set("cgbuy.depots", S.depots);
   S.shipKey = shipKey();
   adoptOdyssey(state);
   log("journal", `loaded: commander ${state.commander || "?"}, ${lines.length} lines`);
@@ -1590,7 +1601,7 @@ function bind() {
   };
   $("d-here").onclick = useDocked;
   $("d-derive").onclick = async () => {
-    const d = dockedDestination(S.journal, await readStation("Market"));
+    const d = dockedDestination(S.journal, await readStation("Market"), S.depots);
     if (d?.commodities.length) $("d-commodities").value = d.commodities.join(", ");
     else setStatus("No premium-priced goods found: dock, open the station's market, and try again.", true);
   };

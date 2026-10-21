@@ -2,6 +2,7 @@
 // pick, goods to tick. Pure; app.js does the fetching and the DOM.
 import { ARDENT } from "./ardent.js";
 import { commodityNames, nameFor } from "./commodities.js";
+import { depotDest, open } from "./colony.js";
 
 /** A CG sells at a fixed multiple of the galactic mean price, far above any ordinary spread. */
 export const PREMIUM_RATIO = 2.5;
@@ -52,9 +53,12 @@ export function premiumGoods(items) {
     .map((it) => it.Name_Localised || it.Name || "").filter(Boolean).sort();
 }
 
-/** Where the commander is docked, as a destination: the market's premium goods, or none to fill in. */
-export function dockedDestination(journal, market) {
+/** Where the commander is docked, as a destination: the market's premium goods (at a construction
+ *  site, what it still needs), or none to fill in. */
+export function dockedDestination(journal, market, depots = null) {
   if (!journal?.docked || !journal.station) return null;
+  const depot = Object.values(depots || {}).find((d) => open(d) && d.station === journal.station && d.system === journal.system);
+  if (depot) return { system: journal.system, station: journal.station, commodities: depotDest(depot).commodities };
   const mine = market && market.StationName === journal.station && market.StarSystem === journal.system;
   return { system: journal.system, station: journal.station, commodities: mine ? premiumGoods(market.Items) : [] };
 }
