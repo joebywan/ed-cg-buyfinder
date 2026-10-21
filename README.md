@@ -123,9 +123,10 @@ click or **Esc** clears the selection.
 
 The tool works out where you are selling rather than asking:
 
-1. **The community goal you joined.** Your journal records it — station,
-   system and expiry — and Frontier's feed supplies that goal's commodity
-   list.
+1. **The community goal you joined**, or **the construction site you docked
+   at** (see below), whichever you docked at most recently. Your journal
+   records the goal — station, system and expiry — and Frontier's feed
+   supplies its commodity list.
 2. **A live trade goal you have not joined.** If one is running it is used
    anyway — routes are never withheld — with a dismissible notice explaining
    that you need to sign up at the goal board first, since deliveries made
@@ -151,13 +152,44 @@ hand. Everything it suggests comes from Ardent, so it works on the website too.
   market the game last wrote; `DERIVE FROM MARKET` redoes just the
   commodities. Both pick whatever the station pays at least 2.5 times the
   galactic average for: at a goal station that recovers the list exactly, at an
-  ordinary station it usually finds nothing, and then you choose by hand. Open
+  ordinary station it usually finds nothing, and then you choose by hand (at a
+  construction site it fills in what the site still needs instead). Open
   the station's market in the game first, or the file is the previous
   station's and is ignored. When you are not docked, the system box shows your
   current system as its placeholder.
 
 No community goal anywhere? Set a station and it works as a plain hauling
 tool.
+
+## Construction sites
+
+A colonisation construction site is goal-shaped: one fixed station, a shopping
+list, a payment per tonne and many round trips, and any commander can deliver
+to it. Docking at one is all it takes. The next search sells to it, the same
+way as to a goal, and the destination line says "construction site".
+
+The site's public market lists its commodities with no demand, so what is still
+needed comes only from your own journal: the game writes the site's shopping
+list a couple of seconds after you dock, and again each time you deliver. It
+is therefore as fresh as the last time you docked there, and refreshes every
+time you do. The last state of each site you have seen is remembered between
+runs. A finished or failed site stops being a destination.
+
+- **Payment** is the site's own per-tonne figure, which is what a delivery
+  pays, give or take a few percent (about 97% in one commander's journal). It
+  stands in for the CG sell price, so rows are ranked by credits per minute
+  exactly as for a goal.
+- **Loads are capped** at what is still needed. A mixed load never carries more
+  of a commodity than the site has left to take, and the single rows' loads
+  likewise.
+- **Where a goal shows your standing**, a site shows its progress instead:
+  how much is built, tonnes to go, how many loads of your hold that is, and
+  how long at your own measured pace.
+- A destination you set by hand at a site you have docked at gets the same
+  prices and caps. No sign-up warning is ever sent for a site: there is
+  nothing to register.
+
+The standing line also goes away once a goal's expiry has passed.
 
 ## The idea
 

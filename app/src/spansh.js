@@ -296,10 +296,12 @@ export async function buildRows(p, { fetchJson = defaultFetchJson, cal = null, n
   let cg = {}, cgLs = 0;
   if (held) ({ cg, cgLs } = held);
   else {
-    const mkt = await edsm.market(dest.system, dest.station);
+    // A construction site brings its own prices; its public market has none worth reading.
+    const mkt = dest.prices ? null : await edsm.market(dest.system, dest.station);
     for (const c of mkt?.commodities ?? []) {
       if (dest.commodities.includes(c.name)) cg[c.name] = { sell: c.sellPrice, demand: c.demand };
     }
+    for (const [c, sell] of Object.entries(dest.prices ?? {})) cg[c] = { sell, demand: dest.needs?.[c] };
     if (!Object.keys(cg).length) {
       throw new Error(`EDSM returned no market for ${dest.station} - station renamed?`);
     }

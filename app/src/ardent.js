@@ -114,10 +114,12 @@ export async function buildRows(p, { fetchJson = defaultFetchJson, cal = null,
         fetchJson(`${path}/nearby/exports?${q}`),
       ]);
       const here = (inSystem || []).find((o) => o.stationName === dest.station && o.sellPrice > 0);
-      if (!here) return;                        // the destination doesn't buy it
-      cg[name] = { sell: here.sellPrice, demand: here.demand };
+      // A construction site's public market carries no real figures: it brings its own.
+      const sell = dest.prices?.[name] ?? here?.sellPrice;
+      if (!sell) return;                        // the destination doesn't buy it
+      cg[name] = { sell, demand: dest.needs?.[name] ?? here?.demand };
       rows.push(...sourceRows([...(nearby || []), ...(inSystem || [])],
-        { commodity: name, sell: here.sellPrice, cgLs, origin, p, cal }));
+        { commodity: name, sell, cgLs, origin, p, cal }));
     } catch (err) {
       errors.push(`${name}: ${err.message}`);
     } finally {
