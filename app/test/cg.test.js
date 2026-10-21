@@ -3,7 +3,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { POPULAR_K, overtakeCheck, bandBrackets, bandOutlook, countdown, finishEstimate, totalPoints, effort, standingChanges, hoursLeft, historyFromLines, joinedGoal, parseLive, ratePerHour, standing, standingText,
-  suggestDestination, timesAverage } from "../src/cg.js";
+  tradeGoals, timesAverage } from "../src/cg.js";
 
 const FEED = {
   activeInitiatives: [
@@ -57,23 +57,14 @@ test("the joined goal takes its commodity list from the feed", () => {
   assert.equal(joinedGoal([], live), null);
 });
 
-test("suggest: joined goal first, else a live trade goal flagged not joined, else none", () => {
+test("tradeGoals: every live trade goal, labelled joined or not; never picks one", () => {
   const live = parseLive(FEED);
   const joined = historyFromLines([cgLine({ SystemName: "Lave", MarketName: "Other Port" })]);
-  const [d1, others1] = suggestDestination(joined, live);
-  assert.equal(d1.station, "Other Port");
-  assert.deepEqual(others1.map((g) => g.station), ["Metz Enterprise"]);
-
-  const [d2, others2] = suggestDestination([], live);
-  assert.equal(d2.station, "Metz Enterprise");
-  assert.equal(d2.source, "live CG (not joined)");
-  assert.deepEqual(others2.map((g) => g.station), ["Other Port"]);
-
-  // joined a goal that is no longer in the feed: no commodity list, fall back
-  const gone = historyFromLines([cgLine({ SystemName: "Nowhere", MarketName: "Gone" })]);
-  assert.equal(suggestDestination(gone, live)[0].station, "Metz Enterprise");
-
-  assert.deepEqual(suggestDestination([], []), [null, []]);
+  const g = tradeGoals(joined, live);
+  assert.deepEqual(g.map((x) => [x.station, x.source]),
+    [["Metz Enterprise", "live CG (not joined)"], ["Other Port", "joined CG"]]);
+  assert.ok(tradeGoals([], live).every((x) => x.source === "live CG (not joined)"));
+  assert.deepEqual(tradeGoals([], []), []);
 });
 
 // -- standing (ported from test_cgbuy.py: band_brackets, standing, times_average) --

@@ -4,7 +4,7 @@ import { buildRows, corridorRows, defaultFetchJson } from "./src/ardent.js";
 import { dist3, onTheWay, wantsPanel } from "./src/corridor.js";
 import { BodyLookup } from "./src/bodies.js";
 import { folderTooltip } from "./src/browser.js";
-import { FRONTIER_URL, bandOutlook, finishEstimate, hoursLeft, totalPoints, historyFromLines, parseLive, standing, standingChanges, standingText, suggestDestination } from "./src/cg.js";
+import { FRONTIER_URL, bandOutlook, finishEstimate, hoursLeft, totalPoints, historyFromLines, parseLive, standing, standingChanges, standingText, tradeGoals } from "./src/cg.js";
 import { DESKTOP, DesktopDir, desktopStore, journalDir, setMiniWindow, tauriFetchJson } from "./src/desktop.js";
 import { completions, dockedDestination, marketGoods, marketUrl, stationList, stationsUrl, systemNames, systemSearchUrl, withAdded, tokens } from "./src/destination.js";
 import { commodityNames } from "./src/commodities.js";
@@ -258,23 +258,25 @@ const drainMark = (t) => t && h("span", { class: t.empty ? "drain empty" : "drai
 
 /** Work out where we're selling. Returns true when it changed. */
 function resolveDest() {
-  const [cg] = suggestDestination(historyFromLines(S.cgLines), S.live);
-  const cgAt = S.journal?.dockLog.findLast(([k, s]) => k === "dock" && s === cg?.station)?.[2] ?? 0;
-  const auto = chooseAuto(cg, S.depots, cgAt);
+  const goals = tradeGoals(historyFromLines(S.cgLines), S.live);
+  const auto = chooseAuto(goals, S.depots, S.journal?.dockLog);
   const next = S.manualDest ? { ...S.manualDest, ...depotExtras(S.depots, S.manualDest), source: "set by hand" } : auto;
   const changed = JSON.stringify(next) !== JSON.stringify(S.dest);
-  if (changed && !sameDest(next, S.dest)) { S.watch.clearTarget(); showAlert(null); }
+  const moved = changed && !sameDest(next, S.dest);     // joining a goal alone changes only its label
+  if (moved) { S.watch.clearTarget(); showAlert(null); }
   S.dest = next;
+  const loose = goals.find((g) => g.source !== "joined CG");   // told about, never selected
+  if (loose && S.looseCg !== loose.station && loose.station !== next?.station) {
+    S.looseCg = loose.station;
+    ui.notify("Trading community goal found",
+      `Register at ${loose.station} in ${loose.system} before hauling - deliveries made before you sign up don't count.`);
+  }
   if (changed) {
     S.noticeDismissed = false;
-    if (next?.source === "live CG (not joined)") {
-      ui.notify("Trading community goal found",
-        `Register at ${next.station} in ${next.system} before hauling - deliveries made before you sign up don't count.`);
-    }
     if (next) log("journal", `destination: ${next.station}, ${next.system} (${next.source})`);
   }
   renderDest();
-  return changed;
+  return moved;
 }
 
 /** Minutes per run and where that came from: what you have flown beats the route model. */

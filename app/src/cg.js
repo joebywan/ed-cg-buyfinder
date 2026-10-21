@@ -59,22 +59,13 @@ export function joinedGoal(history, live = []) {
   };
 }
 
-/**
- * [destination or null, other live trade goals]: the joined goal, else the
- * first live trade goal flagged as not joined, else nothing.
- */
-export function suggestDestination(history, live = []) {
-  const trade = (live || []).filter((g) => g.is_trade);
+/** Every live trade goal as a destination, "joined CG" when it is the one you joined. */
+export function tradeGoals(history, live = []) {
   const joined = joinedGoal(history, live);
-  if (joined?.commodities.length) {
-    return [joined, trade.filter((g) => g.station !== joined.station || g.system !== joined.system)];
-  }
-  if (trade.length) {
-    const g = trade[0];
-    return [{ station: g.station, system: g.system, commodities: [...g.commodities],
-              title: g.title, expiry: g.expiry, source: "live CG (not joined)" }, trade.slice(1)];
-  }
-  return [null, []];
+  return (live || []).filter((g) => g.is_trade).map((g) => ({
+    station: g.station, system: g.system, commodities: [...g.commodities], title: g.title, expiry: g.expiry,
+    source: joined?.station === g.station && joined.system === g.system ? "joined CG" : "live CG (not joined)",
+  }));
 }
 
 // -- standing -------------------------------------------------------------------
