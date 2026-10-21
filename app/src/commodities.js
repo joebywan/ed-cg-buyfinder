@@ -421,3 +421,16 @@ export function symbolFor(name) {
   const key = String(name || "").trim().toLowerCase();
   return SYMBOLS[key] || key.replace(/[^a-z0-9]/g, "");
 }
+
+let NAMES;
+/** Everything known by display name, for completion. Title-cased from the lowercase keys. */
+export function commodityNames() {
+  NAMES ??= Object.keys(SYMBOLS).map((k) => k.replace(/(^|[ -])([a-z])/g, (_, a, b) => a + b.toUpperCase()));
+  return NAMES;
+}
+
+/** The display name for an Ardent symbol ("agriculturalmedicines" -> "Agri-Medicines"). */
+export function nameFor(symbol) {
+  const i = Object.values(SYMBOLS).indexOf(String(symbol || "").toLowerCase());
+  return i >= 0 ? commodityNames()[i] : symbol;
+}
